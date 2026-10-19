@@ -49,7 +49,7 @@ This guide walks you through the download and setup process to dual-boot **Ubunt
 | :--- | :--- |
 | [erhai-TWRP.img](../downloads/erhai-TWRP.img) | Recovery to access the disk, partition it and flash the installer <!-- TODO link --> |
 | [erhai-setup_partitions.sh](../downloads/erhai-setup_partitions.sh) | Creates `esp` / `linux` / `data` partitions — and can put the disk back for Android only |
-| [erhai-ubuntu_installer.zip](../downloads/erhai-ubuntu_installer.zip) | Everything in one flashable zip: Ubuntu rootfs, ESP/boot files, dual-boot bootloader patch |
+| [erhai-ubuntu_installer.zip](https://github.com/TheMojoMan/oneplus-erhai-ubuntu/releases/download/installer-20261018/erhai-ubuntu_installer.zip) | Everything in one flashable zip: Ubuntu rootfs, ESP/boot files, dual-boot bootloader patch |
 | [erhai-bootpatch.zip](../downloads/erhai-bootpatch.zip) | **NOT NEEDED NOW!** Sideload when Ubuntu is already installed and whenever Android overwrites bootloader at update |
 
 
