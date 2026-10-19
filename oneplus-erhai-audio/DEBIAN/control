@@ -1,5 +1,5 @@
 Package: oneplus-erhai-audio
-Version: 1.2
+Version: 1.3
 Section: sound
 Priority: optional
 Architecture: all
@@ -10,9 +10,17 @@ Description: ALSA UCM profile and mixer routing for the OnePlus Pad 3 (erhai)
  OnePlus Pad 3 (card "OnePlus-Pad3-erhai-24976", driver sm8750).
  .
  The HiFi verb wires the MultiMedia front-ends to their back-ends
- (MM1 -> SECONDARY_MI2S_RX speaker TDM, MM2 -> DisplayPort, MM3 -> headset
- mic via TX_CODEC_DMA_TX_3, MM4 -> internal DMICs via VA_CODEC_DMA_TX_0) and
- un-mutes the six AW88261 speaker amps.
+ (MM1 -> SECONDARY_MI2S_RX speaker TDM, MM2 -> DisplayPort, MM3 -> the INTERNAL
+ MICROPHONES via TX_CODEC_DMA_TX_3, MM4 -> the VA/DMIC front-end) and un-mutes
+ the six AW88261 speaker amps.
+ .
+ Since 1.3 the Mic EnableSequence also keeps the wcd939x vendor lane labels at
+ ZERO ("ADC1 ChMap" / "ADC4 ChMap"): a restored non-zero label made the driver
+ put ADC4 on the wrong SoundWire channel (port mask 0x3/0xb instead of 0x9) and
+ the second capture channel stayed silent or the capture came out clipped.  It
+ also applies the measured microphone gain - ADC1/ADC4 Volume 20 = +5 dB analog
+ (before the ADC) and TX_DEC0/TX_DEC1 Volume 94 = +10 dB digital - which
+ captures voice at -9..-14 dBFS peaks with no clipping (TX_DEC 98 clipped).
  .
  Installing this package is all audio needs on the erhai image: PipeWire /
  WirePlumber's ACP layer resolves the profile through
