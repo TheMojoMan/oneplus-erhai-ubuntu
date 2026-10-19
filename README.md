@@ -22,6 +22,6 @@ A real Linux tablet PC that utilizes the full power of the Snapdragon 8 Elite!
 
 ## Community
 
-Linux on the OnePlus Pad 2+/3 — Telegram: <https://t.me/erhai-linux>
+Linux on the OnePlus Pad 2+/3 — Telegram: <https://t.me/erhai_linux>
 
 <p align="center">Made with ❤️  in Hamburg, Germany</p>
