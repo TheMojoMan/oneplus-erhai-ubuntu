@@ -106,11 +106,11 @@ fastboot reboot recovery
 ```bash
 adb sideload erhai-ubuntu_installer.zip
 ```
-First time will throw an error -> **Cancel** → **Advanced** → **ADB Sideload** → swipe, then on your PC:
+First time will throw an error -> **Cancel** → **Back** → **Advanced** → **ADB Sideload** → swipe, then on your PC:
 ```bash
 adb sideload erhai-ubuntu_installer.zip
 ```
-Second time should be OK. Image is fully flashed at ~48% (don't ask me why not 100%).
+Second time should be OK. Image is fully flashed at ~47% (don't ask me why not 100%).
 
 > ⚠️ Your stock boot image is backed up on the tablet to `/tmp/erhai-boot_a-stock.img` (or `/tmp/erhai-boot_b-stock.img`). This is in RAM only and will be deleted when tablet is rebooted!!!
 
@@ -118,7 +118,7 @@ Second time should be OK. Image is fully flashed at ~48% (don't ask me why not 1
 
 (You will need it to boot Android if you ever decide to delete Linux completely)
 ```bash
-adb pull /tmp/erhai-boot_a-stock.img (or: adb pull /tmp/erhai-boot_b-stock.img)
+adb pull /tmp/erhai-boot_a-stock.img # (or: adb pull /tmp/erhai-boot_b-stock.img)
 ```
 
 6. Only after backup of stock boot image: **Reboot** the tablet.
