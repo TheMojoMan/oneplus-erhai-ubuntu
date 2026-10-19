@@ -9,7 +9,7 @@ Do professional work with LibreOffice, Gimp, Blender, VSCode, ... and thousands 
 A real Linux tablet PC that utilizes the full power of the Snapdragon 8 Elite!
  
 * Device: **OnePlus Pad 3** (codename `erhai`, Snapdragon 8 Elite / SM8750).
-* Device: **OnePlus Pad 2+** (codename `erhai`, Snapdragon 8 Elite / SM8750) - not tested, yet.
+* Device: **OnePlus Pad 2+** (codename `erhai`, Snapdragon 8 Elite / SM8750) - !!!**NOT TESTED**, yet!!!
 
 > ⚠️ Installing **erases all Android data and apps** — Android only comes back as a factory-reset device. **Back up everything** before you proceed!
 
