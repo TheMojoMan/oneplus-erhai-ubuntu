@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+config CNSS_GENL
+	tristate "CNSS Generic Netlink Socket Driver"
+	help
+	  Creates the generic netlink family "CLD80211" used by the cld WLAN
+	  driver and userspace utilities to communicate over netlink sockets.

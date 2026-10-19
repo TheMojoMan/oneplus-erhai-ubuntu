@@ -1,0 +1,426 @@
+diff --git a/src/decode.c b/src/decode.c
+index a7af676..796cde0 100644
+--- a/src/decode.c
++++ b/src/decode.c
+@@ -1217,7 +1217,7 @@ ensure_decoder(struct iris_decode_ctx *ctx)
+ 			return 0;
+ 		}
+ 	}
+-	ret = v4l2_dec_open(&ctx->dec, "/dev/video0", ctx->width,
++	ret = v4l2_dec_open(&ctx->dec, NULL, ctx->width,
+ 			    ctx->height, ctx->out_pixfmt, ctx->cap_pixfmt);
+ 	if (ret)
+ 		return ret;
+@@ -1345,8 +1345,14 @@ assign_frame(struct iris_decode_ctx *ctx, const struct v4l2_dec_frame *frame)
+ 		uint64_t frame_seq, slot;
+ 
+ 		if (frame->timestamp < 1000000000ULL) {
++			/* Decode-order output: the firmware occasionally
++			 * completes a capture buffer with no input
++			 * timestamp (internal/dummy picture).  Recycle it
++			 * like an unknown picture -- treating it as fatal
++			 * starves the CAPTURE queue and wedges decoding. */
++			DBG("[assign] ts=0 recycle idx=%u\n", frame->index);
+ 			v4l2_dec_qcap_idx(&ctx->dec, frame->index);
+-			return -EIO;
++			return 0;
+ 		}
+ 		frame_seq = (frame->timestamp / 1000000000ULL) - 1000;
+ 		slot = frame_seq % ARRAY_SIZE(ctx->target_ring);
+@@ -1478,6 +1484,15 @@ wait_surface_ready(struct iris_decode_ctx *ctx, VASurfaceID id, int deadline)
+ 		if (s && s->decoded)
+ 			return 0;
+ 
++		/* After an EOS drain (flush, seek or stall recovery) the
++		 * firmware session is finished: no further CAPTURE work can
++		 * appear.  Treat an undecoded surface as ready (the usual
++		 * sync no-op) rather than touching the dead session, whose
++		 * DQBUF fails with EPIPE.  The next decode reopens a fresh
++		 * session via ensure_decoder(). */
++		if (ctx->eos_sent || !ctx->dec_started)
++			return 0;
++
+ 		ret = v4l2_dec_poll_cap(&ctx->dec, 20);
+ 		if (ret < 0)
+ 			return ret;
+@@ -1562,6 +1577,68 @@ iris_decode_flush_impl(struct iris_decode_ctx *ctx)
+ 	return -ETIMEDOUT;
+ }
+ 
++/* Recovery for a firmware stall: the stateful decoder occasionally holds a
++ * picture past the readiness-wait deadline (observed as a rare start-up race
++ * in Firefox's synchronous decode-sync-decode pattern, roughly every other
++ * session).  An EOS drain forces the firmware to release every held picture,
++ * which completes the stalled target; ctx->eos_sent then makes the next
++ * ensure_decoder() reopen a fresh session, exactly like looped playback.
++ * Returns 0 when @id became ready, -EAGAIN when it did not. */
++static int
++recover_stalled_target(struct iris_decode_ctx *ctx, VASurfaceID id)
++{
++	struct iris_surface *s;
++	int deadline = 150, changed, ret;
++
++	s = find_surface(ctx, id);
++	if (!s || s->decoded || ctx->eos_sent || ctx->fatal_error ||
++	    !ctx->dec_open || !ctx->dec_started)
++		return -EAGAIN;
++
++	DBG("[stall] target=%u: EOS-kicking stalled firmware\n", id);
++	ret = v4l2_dec_flush(&ctx->dec);
++	if (ret)
++		return ret;
++	ctx->eos_sent = 1;
++
++	while (deadline-- > 0) {
++		ret = v4l2_dec_poll_cap(&ctx->dec, 20);
++		if (ret < 0)
++			return ret;
++		if (!ret)
++			continue;
++		ret = v4l2_dec_handle_events(&ctx->dec, &changed);
++		if (ret)
++			return ret;
++		while (v4l2_dec_dqout(&ctx->dec) == 0)
++			;
++		{
++			struct v4l2_dec_frame frame;
++
++			ret = v4l2_dec_dqcap(&ctx->dec, &frame);
++			if (ret == -EAGAIN)
++				continue;
++			if (ret < 0)
++				return ret;
++			DBG("[stall] got ts=%llu flags=0x%x\n",
++			    (unsigned long long)frame.timestamp, frame.flags);
++			if (frame.bytesused && assign_frame(ctx, &frame) < 0)
++				return -EIO;
++			if (ret == 1)
++				break;	/* FLAG_LAST */
++		}
++		s = find_surface(ctx, id);
++		if (s && s->decoded)
++			break;
++	}
++	reap_vk_copies(ctx, 1);
++	s = find_surface(ctx, id);
++	if (s && s->decoded)
++		return 0;
++	DBG("[stall] target=%u still not ready after EOS kick\n", id);
++	return -EAGAIN;
++}
++
+ /* Establish a strict stream boundary for Chromium seeks.  Chromium does
+  * not forward Decoder::Reset() through VA-API, so the first post-seek key frame
+  * is the earliest point where the driver can act.  Finish the complete old
+@@ -2550,10 +2627,44 @@ iris_decode_end_impl(struct iris_decode_ctx *ctx)
+ 				ctx->stats_h264_wait_ns += monotonic_ns() - wait_start;
+ 				ctx->stats_h264_waits++;
+ 			}
++			if (ret &&
++			    recover_stalled_target(ctx,
++						   ctx->current_target) == 0) {
++				DBG("[end] target=%u recovered from firmware stall\n",
++				    ctx->current_target);
++				ret = 0;
++			}
+ 			if (ret) {
+-				DBG("[end] target=%u readiness wait failed: %d\n",
+-				    ctx->current_target, ret);
+-				return ret;
++				struct iris_surface *s =
++					find_surface(ctx, ctx->current_target);
++
++				/* Last resort: the firmware dropped the
++				 * picture entirely even after the EOS kick
++				 * (rare start-up race with Firefox's
++				 * synchronous decode-sync-decode pattern).
++				 * This must never be fatal: serve the
++				 * surface's previous contents for this one
++				 * frame.  ctx->eos_sent is already set, so
++				 * the next decode reopens a fresh session.
++				 * The surface may even belong to a previous
++				 * engine generation (display-level registry)
++				 * and be unfindable here — still fine. */
++				if (!ctx->fatal_error) {
++					fprintf(stderr,
++						"[end] target=%u not decoded after stall recovery; serving stale frame\n",
++						ctx->current_target);
++					if (s)
++						surface_finish_write(&ctx->dec, s);
++					if (s) {
++						s->decoded = 1;
++						s->queued = 1;
++					}
++					ret = 0;
++				} else {
++					DBG("[end] target=%u readiness wait failed: %d\n",
++					    ctx->current_target, ret);
++					return ret;
++				}
+ 			}
+ 			DBG("[end] exported target=%u ready\n",
+ 			    ctx->current_target);
+@@ -2606,16 +2717,13 @@ iris_decode_sync_impl(struct iris_decode_ctx *ctx, VASurfaceID id)
+ 	if (ctx->fatal_error)
+ 		return ctx->fatal_error;
+ 
+-	/* The stateful firmware holds the last queued picture until an EOS
+-	 * marker arrives.  If the client is syncing that final picture, feed
+-	 * EOS to force it out instead of spinning until the timeout. */
+-	if (id == ctx->last_target && !ctx->eos_sent) {
+-		DBG("[sync] last_target=%u: flushing\n", id);
+-		if (iris_decode_flush(ctx) == 0 &&
+-		    iris_decode_surface_ready(ctx, id))
+-			return 0;
+-	}
+-
++	/* Do NOT flush eagerly when the client syncs the most recently queued
++	 * target: synchronous clients (Firefox) sync right after submitting,
++	 * before the firmware has processed the AU, and a mid-stream EOS kick
++	 * (V4L2_DEC_CMD_STOP) tears down the session. Decode-order output
++	 * makes the target appear without needing another AU, so plain
++	 * waiting is sufficient; the flush below is only a last resort after
++	 * the wait really times out (genuine firmware hold / end of stream). */
+ 	while (deadline-- > 0) {
+ 		struct v4l2_dec_frame frame;
+ 		int changed, ret;
+@@ -2652,6 +2760,15 @@ iris_decode_sync_impl(struct iris_decode_ctx *ctx, VASurfaceID id)
+ 		if (iris_decode_surface_ready(ctx, id))
+ 			return 0;
+ 	}
++
++	/* Last resort after a genuine wait timeout: force the held target out
++	 * via EOS. The driver's reopen logic recovers the session afterwards. */
++	if (id == ctx->last_target && !ctx->eos_sent) {
++		DBG("[sync] timed out, flushing last_target=%u\n", id);
++		if (iris_decode_flush(ctx) == 0 &&
++		    iris_decode_surface_ready(ctx, id))
++			return 0;
++	}
+ 	return -ETIMEDOUT;
+ }
+ 
+diff --git a/src/dma_heap.h b/src/dma_heap.h
+new file mode 100644
+index 0000000..28b432b
+--- /dev/null
++++ b/src/dma_heap.h
+@@ -0,0 +1,39 @@
++#ifndef IRIS_DMA_HEAP_H
++#define IRIS_DMA_HEAP_H
++/* Minimal /dev/dma_heap/system allocator for test harnesses that need to
++ * mimic chromium's DMABUF CAPTURE import path. */
++#include <fcntl.h>
++#include <unistd.h>
++#include <errno.h>
++#include <sys/ioctl.h>
++#include <linux/dma-heap.h>
++
++static int dma_heap_alloc(size_t size, unsigned int count, int *fds)
++{
++	int heap = open("/dev/dma_heap/system", O_RDWR | O_CLOEXEC);
++	unsigned int i;
++
++	if (heap < 0)
++		return -errno;
++
++	for (i = 0; i < count; i++) {
++		struct dma_heap_allocation_data data;
++
++		memset(&data, 0, sizeof(data));
++		data.len = size;
++		data.fd_flags = O_RDWR | O_CLOEXEC;
++
++		if (ioctl(heap, DMA_HEAP_IOCTL_ALLOC, &data) < 0) {
++			int e = errno;
++
++			while (i--)
++				close(fds[i]);
++			close(heap);
++			return -e;
++		}
++		fds[i] = (int)data.fd;
++	}
++	close(heap);
++	return 0;
++}
++#endif
+\ No newline at end of file
+diff --git a/src/iris_vaapi.c b/src/iris_vaapi.c
+index baed5c4..803d4f6 100644
+--- a/src/iris_vaapi.c
++++ b/src/iris_vaapi.c
+@@ -154,8 +154,13 @@ iris_profile_fourcc(VAProfile profile)
+ static unsigned int
+ iris_profile_rt_format(VAProfile profile)
+ {
++	/* 10-bit profiles also expose the plain YUV420 RT format: Chromium's
++	 * vaapi_wrapper requires VA_RT_FORMAT_YUV420 for VAProfileHEVCMain10
++	 * (only VP9Profile2/3 ask for YUV420_10BPP) and drops the profile from
++	 * its supported list when the check fails. */
+ 	return iris_profile_is_10bit(profile) ?
+-		VA_RT_FORMAT_YUV420_10 : VA_RT_FORMAT_YUV420;
++		(VA_RT_FORMAT_YUV420 | VA_RT_FORMAT_YUV420_10) :
++		VA_RT_FORMAT_YUV420;
+ }
+ 
+ static unsigned int
+@@ -1443,7 +1448,7 @@ __vaDriverInit_1_23(VADriverContextP ctx, int major_version, int minor_version)
+ 		if (!dd)
+ 			return VA_STATUS_ERROR_ALLOCATION_FAILED;
+ 		dd->p010_supported = v4l2_dec_supports_capture_format(
+-			"/dev/video0", V4L2_PIX_FMT_P010);
++			NULL, V4L2_PIX_FMT_P010);
+ 		if (!dd->p010_supported)
+ 			fprintf(stderr,
+ 				"iris-vaapi: kernel does not advertise P010; hiding HEVC Main10 and VP9 Profile 2\n");
+diff --git a/src/v4l2_dec.c b/src/v4l2_dec.c
+index 3b34d97..3fb9ea5 100644
+--- a/src/v4l2_dec.c
++++ b/src/v4l2_dec.c
+@@ -8,6 +8,7 @@
+  */
+ 
+ #include <errno.h>
++#include <dirent.h>
+ #include <fcntl.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+@@ -48,13 +49,63 @@ static int xioctl(int fd, unsigned long req, void *arg)
+ 	return r;
+ }
+ 
++/* Resolve the Iris decoder V4L2 node: $IRIS_VAAPI_DEVICE if set, else scan
++ * /dev/video* for the M2M mplane node whose driver is "iris_driver". The
++ * node index is NOT stable across boots (camera VFE nodes may claim
++ * video0/video1 depending on bring-up order), so never hardcode it. */
++char *v4l2_dec_find_device(void)
++{
++	const char *env = getenv("IRIS_VAAPI_DEVICE");
++	char path[64];
++	struct v4l2_capability cap;
++	DIR *dir;
++	struct dirent *e;
++	int fd, best = -1;
++
++	if (env && *env)
++		return strdup(env);
++
++	dir = opendir("/dev");
++	if (!dir)
++		return NULL;
++
++	while ((e = readdir(dir))) {
++		if (strncmp(e->d_name, "video", 5) != 0)
++			continue;
++
++		snprintf(path, sizeof(path), "/dev/%s", e->d_name);
++		fd = open(path, O_RDWR | O_NONBLOCK);
++		if (fd < 0)
++			continue;
++
++		if (xioctl(fd, VIDIOC_QUERYCAP, &cap) == 0 &&
++		    (cap.capabilities & V4L2_CAP_VIDEO_M2M_MPLANE) &&
++		    strcmp((char *)cap.driver, "iris_driver") == 0 &&
++		    strcmp((char *)cap.card, "Iris Decoder") == 0)
++			best = atoi(e->d_name + 5);
++
++		close(fd);
++
++		if (best >= 0)
++			break;
++	}
++	closedir(dir);
++
++	if (best < 0)
++		return NULL;
++
++	snprintf(path, sizeof(path), "/dev/video%d", best);
++	printf("v4l2-dec: discovered iris decoder at %s\n", path);
++	return strdup(path);
++}
++
+ int v4l2_dec_supports_capture_format(const char *dev,
+ 				      unsigned int pixelformat)
+ {
+ 	struct v4l2_fmtdesc fmt;
+ 	int fd;
+ 
+-	fd = open(dev ? dev : "/dev/video0", O_RDWR | O_NONBLOCK);
++	fd = open(dev ? dev : (dev = v4l2_dec_find_device()), O_RDWR | O_NONBLOCK);
+ 	if (fd < 0)
+ 		return 0;
+ 
+@@ -102,6 +153,14 @@ static void v4l2_dec_enable_decode_order(struct v4l2_dec *d)
+ 		.id = V4L2_CID_MPEG_VIDEO_DEC_DISPLAY_DELAY,
+ 		.value = 0,
+ 	};
++	const char *env = getenv("IRIS_NO_DECODE_ORDER");
++
++	/* Debug/repro switch: run exactly like clients that never set the
++	 * display-delay controls (e.g. chromium's V4L2VideoDecoder). */
++	if (env && *env) {
++		printf("v4l2-dec: decode-order output DISABLED (IRIS_NO_DECODE_ORDER)\n");
++		return;
++	}
+ 
+ 	if (xioctl(d->fd, VIDIOC_S_CTRL, &ctrl) < 0)
+ 		goto unsupported;
+@@ -310,10 +369,11 @@ int v4l2_dec_open(struct v4l2_dec *d, const char *dev,
+ 	memset(d, 0, sizeof(*d));
+ 	d->cap_memory = V4L2_MEMORY_MMAP;
+ 	d->fd = -1;
+-	d->fd = open(dev ? dev : "/dev/video0", O_RDWR | O_NONBLOCK);
++	d->fd = open(dev ? dev : (dev = v4l2_dec_find_device()), O_RDWR | O_NONBLOCK);
+ 	if (d->fd < 0) {
+-		perror("open /dev/video0");
+-		return -errno;
++		perror(dev ? dev : "open iris decoder");
++		ret = d->fd < 0 ? -errno : -ENOENT;
++		goto error;
+ 	}
+ 
+ 	if (xioctl(d->fd, VIDIOC_QUERYCAP, &cap) < 0) {
+@@ -327,7 +387,7 @@ int v4l2_dec_open(struct v4l2_dec *d, const char *dev,
+ 		ret = -EINVAL;
+ 		goto error;
+ 	}
+-	printf("v4l2-dec: device %s driver '%s' card '%s'\n", dev ? dev : "/dev/video0",
++	printf("v4l2-dec: device %s driver '%s' card '%s'\n", dev,
+ 	       (char *)cap.driver, (char *)cap.card);
+ 
+ 	memset(&sub, 0, sizeof(sub));
+@@ -781,6 +841,15 @@ void v4l2_dec_close(struct v4l2_dec *d)
+ 
+ 	if (!d)
+ 		return;
++	/* IRIS_UNCLEAN_CLOSE=1: mimic SIGKILL teardown (no flush, no
++	 * STREAMOFF, bare close()) for firmware-wedge repro work. */
++	if (getenv("IRIS_UNCLEAN_CLOSE")) {
++		printf("v4l2-dec: UNCLEAN close (no flush/stop)\n");
++		if (d->fd >= 0)
++			close(d->fd);
++		d->fd = -1;
++		return;
++	}
+ 	/* Politely drain before tearing the queues down.  A stateful session
+ 	 * killed mid-flight (client error path, context destroyed between
+ 	 * pictures) is what wedges the firmware into SESSION_INIT timeouts
+diff --git a/src/v4l2_dec.h b/src/v4l2_dec.h
+index 610343f..e3f0c0d 100644
+--- a/src/v4l2_dec.h
++++ b/src/v4l2_dec.h
+@@ -59,7 +59,12 @@ struct v4l2_dec {
+ int v4l2_dec_supports_capture_format(const char *dev,
+ 				      unsigned int pixelformat);
+ 
+-/* Open /dev/video0 (or @dev) for decode of a @width x @height stream using
++/* Locate the Iris decoder node: $IRIS_VAAPI_DEVICE if set, else scan
++ * /dev/video* for the M2M mplane node with driver "iris_driver".  Caller
++ * frees the returned string; NULL when nothing matched. */
++char *v4l2_dec_find_device(void);
++
++/* Open the Iris decoder (or @dev) for decode of a @width x @height stream using
+  * the given bitstream pixel format (V4L2_PIX_FMT_H264/HEVC/VP9...) and
+  * uncompressed CAPTURE format (V4L2_PIX_FMT_NV12/P010). */
+ int v4l2_dec_open(struct v4l2_dec *d, const char *dev,

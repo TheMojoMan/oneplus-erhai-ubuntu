@@ -1,0 +1,457 @@
+{
+  "surface": "report",
+  "manifest": {
+    "version": 1,
+    "surface": "report",
+    "title": "Iris V4L2 与 VA-API 解码性能实测",
+    "description": "SM8150 上 4K60 H.264、HEVC Main/Main10 与 VP9 Profile 0/2 的解码吞吐、CPU 和峰值 RSS 对比。",
+    "generatedAt": "2026-08-27T10:55:55+08:00",
+    "filters": [],
+    "cards": [],
+    "charts": [
+      {
+        "id": "decode_throughput",
+        "title": "不同编码与接口的解码吞吐",
+        "subtitle": "完整码流均值；8/10-bit HEVC 与 H.264 三轮，VP9 Profile 0 五轮、Profile 2 三轮",
+        "showDescription": true,
+        "type": "bar",
+        "dataset": "aggregate_results",
+        "sourceId": "benchmark_results",
+        "valueFormat": "number",
+        "unit": "fps",
+        "layout": "full",
+        "encodings": {
+          "x": {
+            "field": "codec",
+            "type": "nominal",
+            "label": "编码"
+          },
+          "y": {
+            "field": "decode_fps",
+            "type": "quantitative",
+            "label": "解码速度",
+            "unit": "fps"
+          },
+          "color": {
+            "field": "decoder",
+            "type": "nominal",
+            "label": "接口"
+          },
+          "tooltip": [
+            {
+              "field": "realtime_speed_x",
+              "type": "quantitative",
+              "label": "实时倍速"
+            },
+            {
+              "field": "cpu_core_percent",
+              "type": "quantitative",
+              "label": "平均 CPU",
+              "unit": "% of one core"
+            },
+            {
+              "field": "max_rss_mib",
+              "type": "quantitative",
+              "label": "峰值 RSS",
+              "unit": "MiB"
+            },
+            {
+              "field": "repetitions",
+              "type": "quantitative",
+              "label": "重复次数"
+            }
+          ]
+        }
+      }
+    ],
+    "tables": [
+      {
+        "id": "resource_comparison",
+        "title": "速度、CPU 与进程峰值内存均值",
+        "subtitle": "每组 3–5 轮；CPU 以单核 100% 计，内存为进程 max RSS",
+        "showDescription": true,
+        "dataset": "aggregate_results",
+        "sourceId": "benchmark_results",
+        "density": "comfortable",
+        "layout": "full",
+        "defaultSort": {
+          "field": "decode_fps",
+          "direction": "desc"
+        },
+        "columns": [
+          {
+            "field": "codec",
+            "label": "编码",
+            "type": "text"
+          },
+          {
+            "field": "decoder",
+            "label": "接口",
+            "type": "text"
+          },
+          {
+            "field": "decode_fps",
+            "label": "解码速度",
+            "type": "number",
+            "format": "number",
+            "unit": "fps",
+            "align": "right"
+          },
+          {
+            "field": "realtime_speed_x",
+            "label": "实时倍速",
+            "type": "number",
+            "format": "number",
+            "unit": "x",
+            "align": "right"
+          },
+          {
+            "field": "cpu_core_percent",
+            "label": "平均 CPU",
+            "type": "number",
+            "format": "number",
+            "unit": "%",
+            "align": "right"
+          },
+          {
+            "field": "max_rss_mib",
+            "label": "峰值 RSS",
+            "type": "number",
+            "format": "number",
+            "unit": "MiB",
+            "align": "right"
+          },
+          {
+            "field": "fps_cv_percent",
+            "label": "速度 CV",
+            "type": "number",
+            "format": "number",
+            "unit": "%",
+            "align": "right"
+          }
+        ]
+      }
+    ],
+    "sources": [
+      {
+        "id": "benchmark_results",
+        "label": "基准测试汇总查询",
+        "path": "benchmark-results/v4l2-vaapi-summary.sql"
+      },
+      {
+        "id": "raw_benchmark_results",
+        "label": "完整基准测试原始结果",
+        "path": "benchmark-results/h264-hevc8-v4l2-vaapi.csv"
+      },
+      {
+        "id": "raw_vp9_results",
+        "label": "VP9 完整基准测试原始结果",
+        "path": "benchmark-results/vp9-profile0-v4l2-vaapi.csv"
+      },
+      {
+        "id": "raw_10bit_results",
+        "label": "10-bit P010 完整基准测试原始结果",
+        "path": "benchmark-results/p010-v4l2-vaapi.csv"
+      },
+      {
+        "id": "benchmark_10bit_script",
+        "label": "10-bit P010 可复现基准脚本",
+        "path": "benchmarks/compare_10bit_paths.py"
+      },
+      {
+        "id": "benchmark_script",
+        "label": "可复现基准测试脚本",
+        "path": "benchmarks/compare_decode_paths.py"
+      },
+      {
+        "id": "main10_smoke",
+        "label": "HEVC Main10 烟雾测试记录",
+        "path": "benchmark-results/hevc-main10-ffmpeg-smoke.md"
+      },
+      {
+        "id": "vp9_profile2_smoke",
+        "label": "VP9 Profile 2 烟雾测试记录",
+        "path": "benchmark-results/vp9-profile2-ffmpeg-smoke.md"
+      }
+    ],
+    "blocks": [
+      {
+        "id": "title",
+        "type": "markdown",
+        "body": "# Iris V4L2 与 VA-API 解码性能实测"
+      },
+      {
+        "id": "technical_summary",
+        "type": "markdown",
+        "sourceId": "benchmark_results",
+        "body": "## 结论先行\n\n**当前实现下，V4L2 直接解码整体更高效。** H.264 的 VA-API 吞吐低 60.9%；其余四种 HEVC/VP9 规格的速度差均在 2.2% 内。10-bit 中，HEVC Main10 为 148.3 对 148.5 fps，完全持平；VP9 Profile 2 为 116.3 对 113.8 fps，VA-API 慢 2.2%。\n\n速度接近并不代表资源相同：Main10 的 VA-API CPU 高 222.9%，Profile 2 高 105.2%；原始进程峰值 RSS 分别高 17.5% 和 8.0%。若客户端可以直接使用 V4L2 M2M，仍优先直连；VA-API 的价值主要是 Chromium/桌面栈兼容性。"
+      },
+      {
+        "id": "throughput_finding",
+        "type": "markdown",
+        "sourceId": "benchmark_results",
+        "body": "## 除 H.264 外，四种 HEVC/VP9 规格的吞吐都接近\n\n下图按规格对比两条接口的平均 fps。H.264 的 VA-API 从 167.5 fps 降到 65.5 fps；HEVC Main/Main10 与 VP9 Profile 0/2 的两组柱形都基本重合。这个分化说明 VA-API 的固定框架开销不是唯一原因，H.264 特有的逐帧同步/表面完成策略更可能主导差距。"
+      },
+      {
+        "id": "throughput_chart",
+        "type": "chart",
+        "chartId": "decode_throughput",
+        "layout": "full"
+      },
+      {
+        "id": "resource_finding",
+        "type": "markdown",
+        "sourceId": "benchmark_results",
+        "body": "## VA-API 在五种规格中都占用更多内存\n\n原始峰值 RSS 增量在 H.264、HEVC 8-bit、VP9 Profile 0、HEVC Main10、VP9 Profile 2 中分别为 129.1、263.9、40.0、139.5、59.5 MiB。10-bit VA-API 的 CPU 增幅尤其大：Main10 从 26.5% 升至 85.7%，Profile 2 从 20.5% 升至 42.1%。H.264 CPU 只增加 5.1% 却显著变慢，进一步说明其主要时间花在等待。"
+      },
+      {
+        "id": "resource_table",
+        "type": "table",
+        "tableId": "resource_comparison",
+        "layout": "full"
+      },
+      {
+        "id": "scope_definitions",
+        "type": "markdown",
+        "sourceId": "benchmark_results",
+        "body": "## 测试对象与指标定义\n\n- 平台：Qualcomm SM8150，8 核 Kryo，Linux 6.14.11-nabu-iris1+。\n- H.264、HEVC Main/Main10：4K60、约 59 Mb/s、各 1,797 帧。\n- VP9 Profile 0：4K60、约 22.1 Mb/s、600 帧；Profile 2：4K59.94 HDR、约 18.2 Mb/s、1,200 帧。\n- 不同编码/位深的内容与码率不同，只能在同一规格内比较 V4L2 与 VA-API，不能横向判断编解码器效率。\n- 解码速度：完整输出帧数 ÷ wall time；CPU 为 user+system CPU time ÷ wall time，单核满载记为 100%；内存为 wait4(2) 的进程峰值 RSS。"
+      },
+      {
+        "id": "methodology",
+        "type": "markdown",
+        "sourceId": "benchmark_script",
+        "body": "## 8-bit 使用同一 FFmpeg 前端，10-bit 使用显式 P010 直连\n\n8-bit/H.264 两条路径都用 FFmpeg、禁用音频并输出到 null；VA-API 保持 vaapi pixel format，避免 CPU readback。FFmpeg 8.0 的 `*_v4l2m2m` 无 P010 capture 选择项，因此 10-bit V4L2 改用仓库的 `test_hevc_au` / `test_v4l2_vp9` 显式请求 P010，VA-API 仍用 FFmpeg。每轮反转执行顺序并核对完整帧数与 corrupt=0。\n\n10-bit 的速度和 CPU 是两个真实客户端的端到端结果，但前端不同；直连程序还会一次性把压缩码流读入内存。其原始 RSS 已统一列出，Main10/VP9 Profile 2 的输入缓存分别约 210.9/43.7 MiB，解读接口内存时应扣除这部分。"
+      },
+      {
+        "id": "robustness",
+        "type": "markdown",
+        "sourceId": "benchmark_results",
+        "body": "## 十组速度结果稳定，但不是整机功耗测试\n\n十组速度的变异系数为 0.06%–1.07%，执行顺序反转后结论不变。VP9 Profile 0 CPU 的单轮波动高于速度与 RSS，因此其 CPU 结论置信度略低；10-bit 的速度、CPU 与 RSS 均稳定。这里不包含显示合成、渲染、应用缓存与整机功耗；RSS 也不完整覆盖固件和全部内核私有分配。"
+      },
+      {
+        "id": "main10_limit",
+        "type": "markdown",
+        "sourceId": "main10_smoke",
+        "body": "### FFmpeg 的 HEVC Main10 直接包装仍不兼容\n\n`hevc_v4l2m2m` 返回成功但输出 0 帧，这是 FFmpeg 前端没有选择 P010 capture；显式 P010 的 V4L2 直连程序已正常输出 1,797/1,797 帧且无 corrupt。因此 Main10 性能已纳入，但不能代表 FFmpeg 直接包装现状。"
+      },
+      {
+        "id": "vp9_profile2_limit",
+        "type": "markdown",
+        "sourceId": "vp9_profile2_smoke",
+        "body": "### FFmpeg 的 VP9 Profile 2 直接包装同样不兼容\n\n`vp9_v4l2m2m` 返回成功但输出 0 帧；显式 P010 的直连程序已正常输出 1,200/1,200 帧且无 corrupt。Profile 2 性能已纳入，但 FFmpeg 直接包装仍需修复。"
+      },
+      {
+        "id": "next_steps",
+        "type": "markdown",
+        "body": "## 建议优先优化 H.264，并修复 FFmpeg P010 协商\n\n- 检查 H.264 `vaEndPicture` 的逐帧完成等待，尝试恢复 fence 驱动的异步流水线。\n- 分析 10-bit VA-API 的参数解析、surface backing 与 P010 拷贝，Main10/VP9 Profile 2 的 CPU 分别比直连高 59.2/21.6 个百分点。\n- 为 FFmpeg `hevc_v4l2m2m` 与 `vp9_v4l2m2m` 增加 P010 capture 选择，避免当前退出码 0、输出 0 帧的假成功。"
+      },
+      {
+        "id": "further_questions",
+        "type": "markdown",
+        "body": "## 后续问题\n\n下一步最有价值的是把 H.264 VA 路径按 `vaBeginPicture`、参数重建、V4L2 queue、CAPTURE 等待、surface copy/fence 分段计时；这能把目前的接口级差距定位到具体阶段。若目标是播放器体验，还应另测 Chromium/Wayland 零拷贝播放时的丢帧、整机功耗和系统内存变化。"
+      }
+    ]
+  },
+  "snapshot": {
+    "version": 1,
+    "generatedAt": "2026-08-27T10:55:55+08:00",
+    "status": "ready",
+    "datasets": {
+      "aggregate_results": [
+        {
+          "codec": "H.264 High",
+          "decoder": "V4L2 直接",
+          "decode_fps": 167.485,
+          "realtime_speed_x": 2.7914,
+          "cpu_core_percent": 30.0567,
+          "max_rss_mib": 415.4467,
+          "wall_seconds": 10.7293,
+          "fps_cv_percent": 0.16,
+          "repetitions": 3,
+          "frames_per_run": 1797,
+          "speed_delta_vs_v4l2_percent": 0,
+          "cpu_delta_vs_v4l2_percent": 0,
+          "rss_delta_vs_v4l2_percent": 0
+        },
+        {
+          "codec": "H.264 High",
+          "decoder": "VA-API",
+          "decode_fps": 65.5453,
+          "realtime_speed_x": 1.0924,
+          "cpu_core_percent": 31.5933,
+          "max_rss_mib": 544.5667,
+          "wall_seconds": 27.4165,
+          "fps_cv_percent": 0.38,
+          "repetitions": 3,
+          "frames_per_run": 1797,
+          "speed_delta_vs_v4l2_percent": -60.86,
+          "cpu_delta_vs_v4l2_percent": 5.11,
+          "rss_delta_vs_v4l2_percent": 31.08
+        },
+        {
+          "codec": "HEVC Main 8-bit",
+          "decoder": "V4L2 直接",
+          "decode_fps": 176.3037,
+          "realtime_speed_x": 2.9384,
+          "cpu_core_percent": 31.71,
+          "max_rss_mib": 411.6287,
+          "wall_seconds": 10.1926,
+          "fps_cv_percent": 0.08,
+          "repetitions": 3,
+          "frames_per_run": 1797,
+          "speed_delta_vs_v4l2_percent": 0,
+          "cpu_delta_vs_v4l2_percent": 0,
+          "rss_delta_vs_v4l2_percent": 0
+        },
+        {
+          "codec": "HEVC Main 8-bit",
+          "decoder": "VA-API",
+          "decode_fps": 173.833,
+          "realtime_speed_x": 2.8972,
+          "cpu_core_percent": 52.2867,
+          "max_rss_mib": 675.4937,
+          "wall_seconds": 10.3375,
+          "fps_cv_percent": 0.25,
+          "repetitions": 3,
+          "frames_per_run": 1797,
+          "speed_delta_vs_v4l2_percent": -1.4,
+          "cpu_delta_vs_v4l2_percent": 64.89,
+          "rss_delta_vs_v4l2_percent": 64.1
+        },
+        {
+          "codec": "VP9 Profile 0",
+          "decoder": "V4L2 直接",
+          "decode_fps": 146.4462,
+          "realtime_speed_x": 2.4408,
+          "cpu_core_percent": 35.812,
+          "max_rss_mib": 516.8268,
+          "wall_seconds": 4.0971,
+          "fps_cv_percent": 0.16,
+          "repetitions": 5,
+          "frames_per_run": 600,
+          "speed_delta_vs_v4l2_percent": 0,
+          "cpu_delta_vs_v4l2_percent": 0,
+          "rss_delta_vs_v4l2_percent": 0
+        },
+        {
+          "codec": "VP9 Profile 0",
+          "decoder": "VA-API",
+          "decode_fps": 144.4896,
+          "realtime_speed_x": 2.4082,
+          "cpu_core_percent": 44.914,
+          "max_rss_mib": 556.7898,
+          "wall_seconds": 4.1529,
+          "fps_cv_percent": 1.07,
+          "repetitions": 5,
+          "frames_per_run": 600,
+          "speed_delta_vs_v4l2_percent": -1.34,
+          "cpu_delta_vs_v4l2_percent": 25.42,
+          "rss_delta_vs_v4l2_percent": 7.73
+        },
+        {
+          "codec": "HEVC Main10",
+          "decoder": "V4L2 直接 P010",
+          "decode_fps": 148.2877,
+          "realtime_speed_x": 2.4715,
+          "cpu_core_percent": 26.54,
+          "max_rss_mib": 798.3517,
+          "wall_seconds": 12.1183,
+          "fps_cv_percent": 0.06,
+          "repetitions": 3,
+          "frames_per_run": 1797,
+          "speed_delta_vs_v4l2_percent": 0,
+          "cpu_delta_vs_v4l2_percent": 0,
+          "rss_delta_vs_v4l2_percent": 0
+        },
+        {
+          "codec": "HEVC Main10",
+          "decoder": "VA-API",
+          "decode_fps": 148.546,
+          "realtime_speed_x": 2.4758,
+          "cpu_core_percent": 85.7033,
+          "max_rss_mib": 937.836,
+          "wall_seconds": 12.0977,
+          "fps_cv_percent": 0.78,
+          "repetitions": 3,
+          "frames_per_run": 1797,
+          "speed_delta_vs_v4l2_percent": 0.17,
+          "cpu_delta_vs_v4l2_percent": 222.92,
+          "rss_delta_vs_v4l2_percent": 17.47
+        },
+        {
+          "codec": "VP9 Profile 2",
+          "decoder": "V4L2 直接 P010",
+          "decode_fps": 116.3257,
+          "realtime_speed_x": 1.9407,
+          "cpu_core_percent": 20.51,
+          "max_rss_mib": 739.1093,
+          "wall_seconds": 10.3159,
+          "fps_cv_percent": 0.07,
+          "repetitions": 3,
+          "frames_per_run": 1200,
+          "speed_delta_vs_v4l2_percent": 0,
+          "cpu_delta_vs_v4l2_percent": 0,
+          "rss_delta_vs_v4l2_percent": 0
+        },
+        {
+          "codec": "VP9 Profile 2",
+          "decoder": "VA-API",
+          "decode_fps": 113.8183,
+          "realtime_speed_x": 1.8989,
+          "cpu_core_percent": 42.09,
+          "max_rss_mib": 798.5887,
+          "wall_seconds": 10.5432,
+          "fps_cv_percent": 0.26,
+          "repetitions": 3,
+          "frames_per_run": 1200,
+          "speed_delta_vs_v4l2_percent": -2.16,
+          "cpu_delta_vs_v4l2_percent": 105.22,
+          "rss_delta_vs_v4l2_percent": 8.05
+        }
+      ]
+    },
+    "accessIssues": []
+  },
+  "sources": [
+    {
+      "id": "benchmark_results",
+      "label": "基准测试汇总查询",
+      "path": "benchmark-results/v4l2-vaapi-summary.sql"
+    },
+    {
+      "id": "raw_benchmark_results",
+      "label": "完整基准测试原始结果",
+      "path": "benchmark-results/h264-hevc8-v4l2-vaapi.csv"
+    },
+    {
+      "id": "raw_vp9_results",
+      "label": "VP9 完整基准测试原始结果",
+      "path": "benchmark-results/vp9-profile0-v4l2-vaapi.csv"
+    },
+    {
+      "id": "raw_10bit_results",
+      "label": "10-bit P010 完整基准测试原始结果",
+      "path": "benchmark-results/p010-v4l2-vaapi.csv"
+    },
+    {
+      "id": "benchmark_10bit_script",
+      "label": "10-bit P010 可复现基准脚本",
+      "path": "benchmarks/compare_10bit_paths.py"
+    },
+    {
+      "id": "benchmark_script",
+      "label": "可复现基准测试脚本",
+      "path": "benchmarks/compare_decode_paths.py"
+    },
+    {
+      "id": "main10_smoke",
+      "label": "HEVC Main10 烟雾测试记录",
+      "path": "benchmark-results/hevc-main10-ffmpeg-smoke.md"
+    },
+    {
+      "id": "vp9_profile2_smoke",
+      "label": "VP9 Profile 2 烟雾测试记录",
+      "path": "benchmark-results/vp9-profile2-ffmpeg-smoke.md"
+    }
+  ]
+}

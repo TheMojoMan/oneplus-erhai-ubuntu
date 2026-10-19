@@ -1,0 +1,15 @@
+# Kernel module build output
+*.o
+*.ko
+*.mod
+*.mod.c
+*.a
+*.cmd
+.*.cmd
+Module.symvers
+modules.order
+.tmp_versions/
+*.symvers
+
+# .o.d dependency files (one is emitted as a dotfile: .<name>.o.d)
+*.o.d

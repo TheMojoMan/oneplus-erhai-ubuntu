@@ -1,0 +1,5 @@
+build/
+*.o
+*.so
+*.nv12
+*.png

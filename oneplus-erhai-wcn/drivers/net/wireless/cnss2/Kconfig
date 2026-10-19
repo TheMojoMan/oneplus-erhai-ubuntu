@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# Literal port of the OnePlus/Qualcomm downstream CNSS2 platform driver
+# (vendor/qcom/opensource/wlan/platform/cnss2, branch sm8750_b_16.0.0_pad_3).
+# Build glue only — the driver .c/.h are verbatim downstream source.
+# Dependency relaxed from downstream "PCI_MSM" to plain PCI so the driver
+# uses the mainline PCIe RC (the source's own CONFIG_PCI_MSM=n / #else path).
+
+config CNSS2
+	tristate "CNSS2 Platform Driver for Wi-Fi Module (downstream literal port)"
+	depends on PCI && QCOM_QMI_HELPERS && MHI_BUS
+	select CNSS_UTILS
+	select CNSS_QMI_SVC
+	select CNSS_PLAT_IPC_QMI_SVC
+	select WCNSS_MEM_PRE_ALLOC
+	select CNSS_GENL
+	# The qcacld WLAN driver that pairs with this one assigns
+	# net_device::wireless_handlers unconditionally, so it does not build --
+	# and, worse, is not ABI-compatible -- against a kernel without wireless
+	# extensions. That field only exists under CONFIG_WIRELESS_EXT, which is
+	# a hidden symbol no in-tree driver here selects any more.
+	select WIRELESS_EXT
+	select WEXT_PRIV
+	help
+	  Connectivity Subsystem (CNSS) platform driver for PCIe-based Qualcomm
+	  Wi-Fi devices (WCN78xx family). Handles firmware PIL/QMI handshake,
+	  cold-boot calibration, power and bus management, and MHI bring-up.
+	  This is a literal port of the OnePlus Pad 3 downstream source, built
+	  against mainline PCIe + MHI (CONFIG_PCI_MSM / CONFIG_MHI_BUS_MISC off).
+
+config CNSS2_QMI
+	bool "CNSS2 Platform Driver QMI support"
+	depends on CNSS2
+	default CNSS2
+	help
+	  CNSS2 uses the QMI framework to communicate with WLAN firmware:
+	  boot handshake (host/fw capabilities, cal), and on/off control.
+
+config CNSS2_DEBUG
+	bool "CNSS2 Platform Driver Debug Support"
+	depends on CNSS2
+	help
+	  Verbose logs and extra debug facilities in the CNSS2 driver.

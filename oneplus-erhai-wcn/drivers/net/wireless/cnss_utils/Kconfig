@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Literal port: cnss_utils + WLFW/DMS/IMS QMI IDL + platform IPC QMI service.
+
+config CNSS_UTILS
+	tristate "CNSS utilities support"
+	depends on QCOM_QMI_HELPERS
+	help
+	  CNSS utility APIs used by the WLAN driver to set/get wlan info
+	  (MAC address list, wlan MAC provisioning, DFS region, etc.).
+
+config CNSS_QMI_SVC
+	tristate "CNSS QMI service (WLFW/DMS/IMS IDL)"
+	depends on QCOM_QMI_HELPERS
+	help
+	  Generated QMI IDL for the WLAN firmware service (WLFW), device
+	  management service (DMS) and IMS private service.
+
+config CNSS_PLAT_IPC_QMI_SVC
+	tristate "CNSS Platform QMI IPC Support"
+	depends on QCOM_QMI_HELPERS
+	help
+	  CNSS platform kernel/user-space IPC over QMI.

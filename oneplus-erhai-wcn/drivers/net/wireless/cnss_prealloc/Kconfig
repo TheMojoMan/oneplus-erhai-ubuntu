@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+config WCNSS_MEM_PRE_ALLOC
+	tristate "WCNSS pre-alloc memory support"
+	help
+	  Pre-allocate memory (at cold-boot time) for the WLAN driver module
+	  to use for its internal allocations and release back to the pool.

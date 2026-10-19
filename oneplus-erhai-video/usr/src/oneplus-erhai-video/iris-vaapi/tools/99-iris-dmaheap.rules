@@ -1,0 +1,5 @@
+# iris-vaapi: Chrome's GPU process allocates surface backings from the
+# system DMA-heap via the VA-API driver; the default root-only mode makes
+# every vaCreateSurfaces fall back to memfd, which EGL cannot import, and
+# Chrome then falls back to software decoding.
+SUBSYSTEM=="dma_heap", KERNEL=="system", MODE="0666"
