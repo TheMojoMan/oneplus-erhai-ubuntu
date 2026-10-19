@@ -106,7 +106,7 @@ fastboot reboot recovery
 ```bash
 adb sideload erhai-ubuntu_installer.zip
 ```
-First time will throw an error -> **Cancel** → **Back** → **Advanced** → **ADB Sideload** → swipe, then on your PC:
+First time will throw an error -> **Cancel** → **Back** → **Advanced** → **ADB Sideload** → swipe, then again on your PC:
 ```bash
 adb sideload erhai-ubuntu_installer.zip
 ```
