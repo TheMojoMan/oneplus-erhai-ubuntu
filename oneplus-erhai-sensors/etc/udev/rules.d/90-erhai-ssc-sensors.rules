@@ -1,0 +1,7 @@
+# erhai: SSC sensors on the ADSP secure FastRPC device (libssc/iio-sensor-proxy 3.9)
+# Mount matrix derived live (flat screen-up Z=+1g, portrait top-up Y=+1g) then
+# rotated -90 deg so that the natural landscape pose classifies as "normal"
+# (mutter rotates only from that base orientation).
+ACTION=="remove", GOTO="erhai_ssc_sensors_end"
+SUBSYSTEM=="misc", KERNEL=="fastrpc-adsp-secure*", ENV{IIO_SENSOR_PROXY_TYPE}+="ssc-accel ssc-light ssc-compass", ENV{ACCEL_MOUNT_MATRIX}="0,1,0;-1,0,0;0,0,1", TAG+="systemd", ENV{SYSTEMD_WANTS}+="iio-sensor-proxy.service"
+LABEL="erhai_ssc_sensors_end"

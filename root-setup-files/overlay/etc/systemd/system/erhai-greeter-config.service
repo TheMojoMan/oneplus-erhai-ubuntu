@@ -1,0 +1,14 @@
+[Unit]
+Description=erhai reset greeter/initial-setup config (rate-proof monitors.xml, writable dir)
+# gdm is normally started by erhai-touchscreen.service; make sure we run first
+# no matter which path starts it.
+Before=gdm.service display-manager.service
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/erhai-greeter-config-reset.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

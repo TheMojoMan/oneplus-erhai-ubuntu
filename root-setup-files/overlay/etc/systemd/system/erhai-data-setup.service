@@ -1,0 +1,17 @@
+# /etc/systemd/system/erhai-data-setup.service
+[Unit]
+Description=erhai hand the data partition over to the first desktop user (self-removing)
+# Waits (in a transient erhai-data-setup-worker unit) for gnome-initial-setup
+# to finish and the first account to exist, then mounts PARTLABEL=data on
+# /media/data, adds the fstab entry and chowns the filesystem root to the new
+# user. No data partition on this install? It removes itself at once. Never
+# formats, never deletes, never recurses into sda19 -- it may hold data from a
+# previous install. See /usr/local/sbin/erhai-data-setup.sh.
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/erhai-data-setup.sh
+
+[Install]
+WantedBy=multi-user.target

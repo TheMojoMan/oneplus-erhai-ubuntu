@@ -1,0 +1,114 @@
+#!/bin/bash
+set -e
+
+# Dedicated group for the rear-flash LED attributes. A raw sysfs attribute
+# cannot be granted with TAG+="uaccess" (LED class devices have no device node
+# for logind to ACL), so 71-erhai-torch.rules chgrp's them here and makes them
+# group writable at add time instead.
+#
+# systemd-sysusers would be the tidy way to declare this, but the group is
+# needed by the udev RUN+=/chgrp below at the very next trigger, and a plain
+# addgroup keeps the package dependency-free (no sysusers.d in the source
+# tree of any package here) and is trivially idempotent.
+if ! getent group erhai-torch >/dev/null 2>&1; then
+	addgroup --system erhai-torch
+fi
+
+# Put the desktop accounts in the group. Reuses the same helper the other
+# erhai packages use so the set of "desktop users" stays defined in one place;
+# falls back to the first regular uid 1000..1099 when the helper is absent
+# (e.g. oneplus-erhai-desktop not installed).
+add_torch_group_to_desktop_users() {
+	local user
+	if [ -r /usr/local/sbin/erhai-desktop-users.sh ]; then
+		# shellcheck disable=SC1091
+		. /usr/local/sbin/erhai-desktop-users.sh
+		for entry in $(erhai_desktop_users); do
+			user=${entry%%:*}
+			id -nG "$user" 2>/dev/null | tr ' ' '\n' \
+				| grep -qx erhai-torch && continue
+			usermod -aG erhai-torch "$user" \
+				&& echo "oneplus-erhai-torch: $user += erhai-torch"
+		done
+		return 0
+	fi
+	for user in $(awk -F: '$3 >= 1000 && $3 < 1100 {print $1}' /etc/passwd); do
+		id -nG "$user" 2>/dev/null | tr ' ' '\n' \
+			| grep -qx erhai-torch && continue
+		usermod -aG erhai-torch "$user" \
+			&& echo "oneplus-erhai-torch: $user += erhai-torch"
+	done
+}
+add_torch_group_to_desktop_users || true
+
+# Re-run the rule against the already-probed LEDs so the group ownership is in
+# place before any session starts. "add" is the only action the rule reacts
+# to, so this neither disturbs the driver's attributes nor fights a live torch.
+udevadm control --reload >/dev/null 2>&1 || true
+udevadm trigger --action=add --subsystem-match=leds >/dev/null 2>&1 || true
+# Re-assert the ownership directly as well: the trigger above depends on udev
+# considering the device re-addable, and a stale-but-correct chgrp on a
+# running system is worth the two cheap commands.
+for led in /sys/class/leds/white:flash-*; do
+	[ -e "$led" ] || continue
+	chgrp -R erhai-torch "$led" 2>/dev/null || true
+	chmod -R g+w "$led" 2>/dev/null || true
+done
+
+# A stale USER-level extension copy (~/.local/share/gnome-shell/extensions/)
+# SHADOWS the system copy this package installs — gnome-shell prefers the user
+# directory. Purge user-level copies of every extension shipped by this
+# package from all home directories so the installed version always takes
+# effect.
+for uuid in erhai-torch@erhai.local; do
+	for home in /root /home/*; do
+		[ -d "$home/.local/share/gnome-shell/extensions/$uuid" ] || continue
+		rm -rf "${home:?}/.local/share/gnome-shell/extensions/$uuid"
+		echo "oneplus-erhai-torch: removed shadowing user-level copy of $uuid in $home/.local/share/gnome-shell/extensions/"
+	done
+done
+
+# Enable the shipped extension for every active graphical session user.
+# Installing the deb does NOT enable it: gnome-shell only loads extensions
+# listed in the user's dconf enabled-extensions, and an install/upgrade never
+# touches that key. Enabling through the user's session bus makes gnome-shell
+# load the extension immediately — no logout needed. Note that the erhai-torch
+# GROUP membership does need a fresh login (or `newgrp`) to take effect; that
+# is what the extension's own permission error tells the user.
+enable_ext_for_active_sessions() {
+	local out sid props uid name bus cur new uuid
+	out=$(loginctl list-sessions --no-legend 2>/dev/null) || return 0
+	while read -r sid rest; do
+		[ -n "$sid" ] || continue
+		props=$(loginctl show-session "$sid" -p Active -p Type -p User \
+			-p Name 2>/dev/null) || continue
+		case "$props" in *Active=yes*) ;; *) continue ;; esac
+		case "$props" in *Type=wayland*|*Type=x11*) ;; *) continue ;; esac
+		uid=$(printf '%s\n' "$props" | sed -n 's/^User=//p')
+		name=$(printf '%s\n' "$props" | sed -n 's/^Name=//p')
+		[ -n "$uid" ] && [ -n "$name" ] || continue
+		bus="/run/user/$uid/bus"
+		[ -S "$bus" ] || continue
+		cur=$(runuser -u "$name" -- env DBUS_SESSION_BUS_ADDRESS="unix:path=$bus" \
+			XDG_RUNTIME_DIR="/run/user/$uid" \
+			gsettings get org.gnome.shell enabled-extensions 2>/dev/null) || continue
+		new="$cur"
+		for uuid in erhai-torch@erhai.local; do
+			echo "$new" | grep -q "'$uuid'" && continue
+			if echo "$new" | grep -qE '\[\]|@as'; then
+				new="['$uuid']"
+			else
+				new="${new%]}, '$uuid']"
+			fi
+		done
+		[ "$new" = "$cur" ] && continue
+		if runuser -u "$name" -- env DBUS_SESSION_BUS_ADDRESS="unix:path=$bus" \
+			XDG_RUNTIME_DIR="/run/user/$uid" \
+			gsettings set org.gnome.shell enabled-extensions "$new" 2>/dev/null; then
+			echo "oneplus-erhai-torch: enabled erhai-torch@erhai.local for $name (uid $uid)"
+		fi
+	done <<< "$out"
+}
+enable_ext_for_active_sessions || true
+
+exit 0

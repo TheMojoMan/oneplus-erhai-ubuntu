@@ -1,0 +1,14 @@
+Package: oneplus-erhai-firmware
+Version: 1.2
+Architecture: arm64
+Maintainer: TheMojoMan <themojoman@gmx.net>
+Conflicts: linux-firmware
+Replaces: linux-firmware
+Description: Firmware blobs for OnePlus Pad 3 (erhai)
+ OxygenOS 16.0.9.400 firmware for the OnePlus Pad 3 (erhai/SM8750):
+ WCN7880 (peach) WLAN, BRAHMA Bluetooth, IPA, the ADSP split image
+ (adsp.mdt + adsp_dtb.mdt) and, since 1.2, the CDSP split image
+ (cdsp.mdt + cdsp.bNN + cdsp_dtb.mdt + cdsp_dtb.bNN) that hosts the
+ Hexagon NPU (HTP) and is the prerequisite for FastRPC on the compute
+ DSP (/dev/fastrpc-cdsp).
+

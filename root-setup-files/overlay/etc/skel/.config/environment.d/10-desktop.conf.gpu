@@ -1,0 +1,3 @@
+LIBGL_ALWAYS_SOFTWARE=0
+#MESA_LOADER_DRIVER_OVERRIDE=zink   # native gallium clean-reboot test 2026-06-16
+GALLIUM_DRIVER=freedreno   # native gallium clean-reboot test 2026-06-16

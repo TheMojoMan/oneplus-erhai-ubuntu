@@ -1,0 +1,18 @@
+[Unit]
+Description=erhai: bring up NT36536 touchscreen, wait until ready, then start gdm
+# gdm is DISABLED (systemctl disable gdm); this service is the only thing that starts
+# it. The script rebinds the in-cell touch controller, waits until its firmware boots
+# and the input event node is mounted, then starts gdm -- so the first display-manager
+# bring-up happens AFTER touch is ready (which is what makes in-cell sensing work).
+# Ordering: run after the base system + user-sessions are up; the script polls for the
+# SPI/panel itself, so no display-specific ordering is needed.
+After=basic.target systemd-user-sessions.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/erhai-touch-rebind.sh
+TimeoutStartSec=180
+
+[Install]
+WantedBy=multi-user.target

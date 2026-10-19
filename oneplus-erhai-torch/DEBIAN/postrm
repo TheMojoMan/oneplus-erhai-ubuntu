@@ -1,0 +1,33 @@
+#!/bin/bash
+set -e
+
+# On purge, drop the group this package created and remove it from every
+# account, so a reinstall starts from a clean slate. On a plain upgrade
+# ("upgrade"/"remove") the group and its memberships stay, otherwise the
+# user's torch access would break until the next login after every update.
+case "$1" in
+	purge)
+		if getent group erhai-torch >/dev/null 2>&1; then
+			for user in $(getent group erhai-torch \
+					| awk -F: '{print $4}' | tr ',' ' '); do
+				[ -n "$user" ] || continue
+				deluser "$user" erhai-torch >/dev/null 2>&1 || true
+			done
+			delgroup erhai-torch >/dev/null 2>&1 || true
+			echo "oneplus-erhai-torch: removed erhai-torch group"
+		fi
+
+		# The LED attributes keep the group ownership until the next time the
+		# driver re-registers them (a reboot, or a re-trigger with a reloaded
+		# rule set); hand them back so nothing points at a deleted group.
+		for led in /sys/class/leds/white:flash-*; do
+			[ -e "$led" ] || continue
+			chgrp -R root "$led" 2>/dev/null || true
+			chmod -R g-w "$led" 2>/dev/null || true
+		done
+
+		udevadm control --reload >/dev/null 2>&1 || true
+		;;
+esac
+
+exit 0

@@ -1,0 +1,31 @@
+#!/bin/bash
+set -e
+
+# Nothing has to be built here: the payload under /usr/lib/steam is already
+# complete and dpkg owns it.  The per-user writable Steam root is created by
+# /usr/bin/steam on first run, as the account that started it.
+
+case "${1:-}" in
+	configure)
+		# The launcher must be executable no matter how the tree was copied.
+		chmod 0755 /usr/lib/steam/steamrtarm64/steam 2>/dev/null || true
+		chmod 0755 /usr/lib/steam/steamrtarm64/steamwebhelper 2>/dev/null || true
+
+		# A hand-installed launcher in /usr/local/bin SHADOWS this one
+		# (/usr/local/bin precedes /usr/bin in PATH).  Say so instead of
+		# silently starting somebody else's tree.
+		if [ -e /usr/local/bin/steam ]; then
+			echo "steam: note: /usr/local/bin/steam exists and takes precedence" >&2
+			echo "steam: over /usr/bin/steam in PATH; run 'hash -r' if you want" >&2
+			echo "steam: the packaged launcher (/usr/bin/steam) instead." >&2
+		fi
+
+		# Keep the desktop entry's icon cache coherent on systems that have
+		# the tool; harmless when they do not.
+		if command -v update-desktop-database >/dev/null 2>&1; then
+			update-desktop-database -q /usr/share/applications || true
+		fi
+		;;
+esac
+
+exit 0

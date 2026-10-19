@@ -1,0 +1,15 @@
+#!/bin/bash
+# oneplus-erhai-pen postinst (0.1): enable + start the pen BT service.
+set -e
+
+mkdir -p /run/erhai-pen
+
+if [ -d /run/systemd/system ]; then
+	systemctl daemon-reload >/dev/null 2>&1 || true
+	systemctl enable erhai-pen.service erhai-pen-notify.service >/dev/null 2>&1 || true
+	systemctl restart erhai-pen.service >/dev/null 2>&1 || true
+	systemctl start erhai-pen-notify.service >/dev/null 2>&1 || true
+fi
+
+echo "oneplus-erhai-pen: erhai pen (stylus) Bluetooth service installed"
+exit 0

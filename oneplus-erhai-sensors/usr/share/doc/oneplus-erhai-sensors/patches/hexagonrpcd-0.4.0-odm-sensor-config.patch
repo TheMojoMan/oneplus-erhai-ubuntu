@@ -1,0 +1,118 @@
+--- pristine/hexagonrpc-0.4.0/hexagonrpcd/listener.c	2025-08-20 04:30:25.000000000 +0200
++++ hexagonrpc-0.4.0/hexagonrpcd/listener.c	2026-09-06 17:52:34.539994210 +0200
+@@ -224,19 +224,19 @@
+ 		fprintf(stderr, "Handles are not supported, but got %u in, %u out\n",
+ 				(sc & 0xf0) >> 4, sc & 0xf);
+ 		*result = AEE_EBADPARM;
+-		return 1;
++		return 0;
+ 	}
+ 
+ 	if (handle >= n_ifaces) {
+ 		fprintf(stderr, "Unsupported handle: %u\n", handle);
+ 		*result = AEE_EUNSUPPORTED;
+-		return 1;
++		return 0;
+ 	}
+ 
+ 	if (method >= ifaces[handle]->n_procs) {
+ 		fprintf(stderr, "Unsupported method: %u (%08x)\n", method, sc);
+ 		*result = AEE_EUNSUPPORTED;
+-		return 1;
++		return 0;
+ 	}
+ 
+ 	impl = &ifaces[handle]->procs[method];
+@@ -244,7 +244,7 @@
+ 	if (impl->def == NULL || impl->impl == NULL) {
+ 		fprintf(stderr, "Unsupported method: %u (%08x)\n", method, sc);
+ 		*result = AEE_EUNSUPPORTED;
+-		return 1;
++		return 0;
+ 	}
+ 
+ 	in_count = impl->def->in_bufs + ((impl->def->in_nums
+@@ -256,13 +256,13 @@
+ 	 || REMOTE_SCALARS_OUTBUFS(sc) != out_count) {
+ 		fprintf(stderr, "Unexpected buffer count: %08x\n", sc);
+ 		*result = AEE_EBADPARM;
+-		return 1;
++		return 0;
+ 	}
+ 
+ 	ret = check_inbuf_sizes(impl->def, decoded);
+ 	if (ret) {
+ 		*result = AEE_EBADPARM;
+-		return 1;
++		return 0;
+ 	}
+ 
+ 	*returned = allocate_outbufs(impl->def, decoded[0].p);
+--- pristine/hexagonrpc-0.4.0/hexagonrpcd/rpcd_builder.c	2025-08-20 04:30:25.000000000 +0200
++++ hexagonrpc-0.4.0/hexagonrpcd/rpcd_builder.c	2026-09-06 17:27:26.905519478 +0200
+@@ -28,6 +28,7 @@
+ // These paths are relative, with a prepended '/' if missing from previous segments
+ #define ACDBDATA		"/acdb/"
+ #define DSP_LIBS		"/dsp/"
++#define ODM_SENSOR_CONFIG	"/odm/sensor/config/"
+ #define SENSORS_CONFIG		"/sensors/config/"
+ #define SENSORS_REGISTRY	"/sensors/registry/"
+ #define SNS_REG_CONFIG		"/sensors/sns_reg.conf"
+@@ -111,13 +112,15 @@
+  */
+ struct hexagonfs_dirent *construct_root_dir(const char *prefix, const char *dsp)
+ {
+-	char *acdbdata, *dsp_libs, *sns_cfg, *sns_reg, *sns_reg_config, *socinfo;
++	char *acdbdata, *dsp_libs, *odm_cfg, *sns_cfg, *sns_reg, *sns_reg_config,
++	     *socinfo;
+ 	size_t n_prefix;
+-	struct hexagonfs_dirent *persist_dir, *vendor_dir;
++	struct hexagonfs_dirent *odm_dir, *persist_dir, *vendor_dir;
+ 
+ 	n_prefix = strlen(prefix);
+ 
+ 	acdbdata = malloc(n_prefix + strlen(ACDBDATA) + 1);
++	odm_cfg = malloc(n_prefix + strlen(ODM_SENSOR_CONFIG) + 1);
+ 	sns_cfg = malloc(n_prefix + strlen(SENSORS_CONFIG) + 1);
+ 	sns_reg = malloc(n_prefix + strlen(SENSORS_REGISTRY) + 1);
+ 	sns_reg_config = malloc(n_prefix + strlen(SNS_REG_CONFIG) + 1);
+@@ -130,6 +133,11 @@
+ 		strcat(acdbdata, ACDBDATA);
+ 	}
+ 
++	if (odm_cfg != NULL) {
++		strcpy(odm_cfg, prefix);
++		strcat(odm_cfg, ODM_SENSOR_CONFIG);
++	}
++
+ 	if (sns_cfg != NULL) {
+ 		strcpy(sns_cfg, prefix);
+ 		strcat(sns_cfg, SENSORS_CONFIG);
+@@ -182,12 +190,26 @@
+ 				)
+ 			);
+ 
+-	return hfs_mkdir("/", 6,
++	/*
++	 * Oplus devices keep device-specific sensor configs under
++	 * /odm/etc/sensor/config (json_list + sensor_config.json). The
++	 * host-side files live under <prefix>/odm/sensor/config/.
++	 */
++	odm_dir = hfs_mkdir("odm", 1,
++				hfs_mkdir("etc", 1,
++					hfs_mkdir("sensor", 1,
++						hfs_map_or_empty("config", odm_cfg)
++					)
++				)
++			);
++
++	return hfs_mkdir("/", 7,
+ 			hfs_mkdir("mnt", 1,
+ 				hfs_mkdir("vendor", 1,
+ 					persist_dir
+ 				)
+ 			),
++			odm_dir,
+ 			persist_dir,
+ 			hfs_mkdir("sys", 1,
+ 				hfs_mkdir("devices", 1,

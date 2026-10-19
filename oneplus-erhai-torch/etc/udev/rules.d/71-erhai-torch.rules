@@ -1,0 +1,25 @@
+# erhai: rear-camera torch (pm8550 flash-LED, leds-qcom-flash).
+#
+# Writing the LED class 'brightness' attribute puts the LED into TORCH mode
+# (0 = off), which is what the erhai-torch@erhai.local quick slider drives.
+# A raw sysfs attribute cannot be handed to the session user with
+# TAG+="uaccess": uaccess works by adding a logind ACL to a DEVICE NODE, and
+# LED class devices have none (udevadm info shows no DEVNAME), so a uaccess
+# rule here silently does nothing and the write still fails with EACCES.
+#
+# Instead hand the attributes over at add time: chgrp to the dedicated
+# erhai-torch group (created by the postinst) and make them group writable.
+# /bin/chgrp + /bin/chmod are used as separate RUN entries because RUN is not
+# a shell -- no pipes or globs. The rule must fire on "add" only: an "add"
+# udev trigger from the postinst re-applies the ownership on upgrade without
+# touching anything else, and change events (which the kernel emits on every
+# brightness write through the LED sysfs "uevent" attribute) must NOT re-run
+# it, or the chmod would fight the driver's own attribute permissions on
+# every slider movement.
+#
+# The controller node itself is also covered so the group can read
+# max_brightness / flash_fault for diagnostics.
+ACTION!="add", GOTO="erhai_torch_end"
+SUBSYSTEM=="leds", KERNEL=="white:flash-*", RUN+="/bin/chgrp -R erhai-torch /sys%p"
+SUBSYSTEM=="leds", KERNEL=="white:flash-*", RUN+="/bin/chmod -R g+w /sys%p"
+LABEL="erhai_torch_end"

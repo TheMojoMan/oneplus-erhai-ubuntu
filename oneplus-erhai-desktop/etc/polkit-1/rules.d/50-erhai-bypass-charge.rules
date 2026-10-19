@@ -1,0 +1,18 @@
+// Let the desktop user flip the erhai "bypass charging" switch from GNOME Quick
+// Settings without a password prompt. Scoped to starting
+// erhai-bypass-charge@<mode>.service and nothing else; the unit's ExecStart takes
+// the mode as its only argument and rejects anything that is not
+// on|off|toggle|apply.
+polkit.addRule(function (action, subject) {
+    if (action.id !== "org.freedesktop.systemd1.manage-units")
+        return;
+
+    var unit = action.lookup("unit");
+    if (!unit || unit.indexOf("erhai-bypass-charge@") !== 0)
+        return;
+    if (action.lookup("verb") !== "start")
+        return;
+
+    if (subject.local && subject.active && subject.isInGroup("sudo"))
+        return polkit.Result.YES;
+});

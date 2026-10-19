@@ -1,0 +1,15 @@
+{
+  "config":{
+    "hw_platform": ["MTP", "Surf", "RCM", "QRD", "HDK"],
+    "soc_id": ["618", "639"]
+  },
+  "motion_recognition":{
+    "owner": "oplus_motion_recognition",
+    ".config":{
+      "owner": "oplus_motion_recognition",
+      "is_pad_project":{ "type": "int", "ver": "0",
+        "data": "1"
+      }
+    }
+  }
+}

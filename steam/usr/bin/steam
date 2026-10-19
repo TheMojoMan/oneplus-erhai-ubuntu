@@ -1,0 +1,271 @@
+#!/bin/bash
+# /usr/bin/steam -- launcher for the native arm64 Steam client (erhai).
+#
+# This package ships ONLY Valve's bootstrap (steamrtarm64/steam, ~10 MB); the
+# client downloads the rest of itself on the first start.  Measured from a bare
+# bootstrap on 2026-10-17: 669 522 KB (654 MB) downloaded, 3.1 GB unpacked,
+# including the steamrt3c container runtime and the client's own x86 compat
+# trees -- so shipping that payload would be pointless.
+#
+# Steam's ROOT directory must be WRITABLE by the account that runs it: the
+# client updates itself and writes its config, caches and logs INSIDE its own
+# tree, which a dpkg-owned /usr tree cannot allow.  So /usr/lib/steam holds the
+# bootstrap and this launcher seeds it into ~/.local/share/Steam (Valve's own
+# default Steam root) on the first start -- Valve's own packaging model.
+# Nothing already in that root is ever overwritten or deleted.
+#
+# Overridable paths (also settable from /etc/steam/launcher.conf):
+#   STEAM_PAYLOAD_DIR    default /usr/lib/steam
+#   STEAM_HOME           default ~/.local/share/Steam
+#   STEAM_FORCE_VERIFY=1 / STEAM_NO_VERIFY=1   troubleshooting overrides
+#
+# Never start steam.sh instead of this launcher: with the arm64 tree missing it
+# falls through to the i386 client (Exec format error / missing libc.so.6).
+set -euo pipefail
+
+# Sourced before the defaults below, so it can override STEAM_HOME.
+PAYLOAD="${STEAM_PAYLOAD_DIR:-/usr/lib/steam}"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/erhai-steam"
+DEFAULT_HOME="${XDG_DATA_HOME:-$HOME/.local/share}/Steam"
+CONFIG_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/erhai-steam.conf"
+MIN_FREE_GB="${MIN_FREE_GB:-8}"
+
+# ------------------------------------------------------ where the data lives --
+# Steam's data -- the client it downloads AND every game -- lives in a directory
+# the client owns and writes to.  Rather than silently filling the ROOT
+# filesystem with ~3 GB, the first start asks where it should go (ask_location);
+# on a machine with a big data partition that is where people want it, exactly
+# like the reference setup on this tablet keeps its Steam root on /media/data.
+#
+# Precedence, highest first:
+#   1. STEAM_HOME in the environment            (explicit: never overridden)
+#   2. STEAM_HOME from /etc/steam/launcher.conf (root-owned, machine-wide)
+#   3. the user's saved answer                  ($CONFIG_FILE, written by the dialog)
+#   4. the first-start dialog                   (skipped when a Steam root already exists)
+#   5. $DEFAULT_HOME                            (~/.local/share/Steam, Valve's default)
+ENV_HOME="${STEAM_HOME:-}"
+unset STEAM_HOME
+# shellcheck disable=SC1091
+[ -r /etc/steam/launcher.conf ] && . /etc/steam/launcher.conf
+SYS_HOME="${STEAM_HOME:-}"
+unset STEAM_HOME
+# shellcheck disable=SC1091
+[ -r "$CONFIG_FILE" ] && . "$CONFIG_FILE"
+USER_HOME="${STEAM_HOME:-}"
+unset STEAM_HOME
+STEAM_HOME="${ENV_HOME:-${SYS_HOME:-${USER_HOME:-$DEFAULT_HOME}}}"
+
+die() {
+	printf 'steam: %s\n' "$*" >&2
+	# A desktop start deserves a dialog, but zenity BLOCKS until it is clicked,
+	# so it is only offered when there is a display to put it on -- a headless
+	# or over-ssh start must fail immediately, not hang forever.
+	if { [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ]; } &&
+		command -v zenity >/dev/null 2>&1; then
+		zenity --error --text="Steam: $*" 2>/dev/null || true
+	fi
+	exit 1
+}
+
+[ -s "$PAYLOAD/steamrtarm64/steam" ] ||
+	die "the Steam bootstrap is missing from $PAYLOAD (reinstall the 'steam' package)"
+
+PAYLOAD_VERSION="$(cat "$PAYLOAD/VERSION" 2>/dev/null || echo unknown)"
+
+# ------------------------------------------------ choosing the data location --
+# Writable, PERSISTENT filesystems with room.  tmpfs/ramfs are excluded (data
+# there would not survive a reboot) and so are the system mounts.
+location_candidates() {
+	df -k --output=target,avail,fstype 2>/dev/null | tail -n +2 |
+		awk '!seen[$1]++ {print $1 "\t" $2 "\t" $3 }' |
+		while IFS="$(printf '\t')" read -r mp avail fstype; do
+			case "$mp" in
+				""|/|/proc*|/sys*|/dev*|/run*|/snap*|/boot*) continue ;;
+			esac
+			case "$fstype" in
+				tmpfs|devtmpfs|ramfs|squashfs|overlay|autofs) continue ;;
+			esac
+			[ "$avail" -ge $((MIN_FREE_GB * 1048576)) ] 2>/dev/null || continue
+			[ -w "$mp" ] || continue
+			printf '%s\t%s\n' "$mp" "$(numfmt --to=iec $((avail * 1024)))"
+		done
+}
+
+# Prints the chosen directory; non-zero means "no choice" (no display, no
+# zenity, or the user closed the dialog) and the caller falls back to the default.
+ask_location() {
+	local mp free choice
+	local -a rows=()
+
+	command -v zenity >/dev/null 2>&1 || return 1
+	{ [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ]; } || return 1
+
+	# The PATH (or the CHOOSE marker) must be column 1: zenity --list returns the
+	# FIRST COLUMN of the selected row, not the whole row (measured -- with a
+	# label first it returns the label and the choice is lost).  The label and
+	# the free space follow, and the dialog is wide enough to show them.
+	rows=("$DEFAULT_HOME" "your home folder (default)" "")
+	while IFS="$(printf '\t')" read -r mp free; do
+		rows+=("$mp/Steam" "another partition" "$free free")
+	done < <(location_candidates)
+	rows+=("CHOOSE" "choose another folder..." "")
+
+	printf 'steam: asking where the Steam data should live\n' >&2
+	choice=$(zenity --list \
+		--title="Steam - where should the data live?" \
+		--text="Steam will download about 650 MB now (about 3.1 GB on disk) and keeps your games here too." \
+		--column="Location" --column="Where" --column="Free space" \
+		--width=980 --height=340 "${rows[@]}" 2>/dev/null) || return 1
+
+	# zenity returns the whole selected row (its columns joined by "|"), so the
+	# path is taken out of it; the CHOOSE row opens a folder chooser instead.
+	if [[ "$choice" == *CHOOSE* ]]; then
+		choice=$(zenity --file-selection --directory \
+			--title="Choose a folder for the Steam data" 2>/dev/null) || return 1
+	fi
+	printf '%s\n' "$choice" | tr '|' '\n' | grep -m1 '^/'
+}
+
+# Create it, check it is writable and has room.  Non-zero = ask again.
+usable_location() {
+	local d="$1" avail
+	if ! mkdir -p "$d" 2>/dev/null || [ ! -w "$d" ]; then
+		zenity --error --title="Steam" 2>/dev/null \
+			--text="\"$d\" cannot be created, or you cannot write to it. Pick another folder." ||
+			true
+		return 1
+	fi
+	avail=$(df -Pk --output=avail "$d" 2>/dev/null | tail -n 1)
+	[ -n "$avail" ] || return 0
+	if [ "$avail" -lt $((MIN_FREE_GB * 1048576)) ]; then
+		zenity --question --title="Steam" \
+			--text="Only $(numfmt --to=iec $((avail * 1024))) is free there. The client alone needs about 3.1 GB, and games need more.\n\nUse it anyway?" \
+			--ok-label="Use it anyway" --cancel-label="Pick another" 2>/dev/null ||
+			return 1
+	fi
+	return 0
+}
+
+remember_location() {
+	mkdir -p "${CONFIG_FILE%/*}" 2>/dev/null || return 0
+	{
+		printf '# Written by /usr/bin/steam: where the Steam data lives.\n'
+		printf '# Delete this file, or start with STEAM_ASK_HOME=1, to be asked again.\n'
+		printf 'STEAM_HOME=%q\n' "$1"
+	} >"$CONFIG_FILE" 2>/dev/null || true
+}
+
+should_ask=0
+if [ -z "$ENV_HOME" ] && [ -z "$SYS_HOME" ] && [ -z "$USER_HOME" ] &&
+	[ ! -s "$DEFAULT_HOME/steamrtarm64/steam" ]; then
+	should_ask=1
+fi
+[ "${STEAM_ASK_HOME:-0}" = 1 ] && should_ask=1
+
+if [ "$should_ask" = 1 ]; then
+	chosen=""
+	tries=0
+	while [ "$tries" -lt 3 ] && [ -z "$chosen" ]; do
+		tries=$((tries + 1))
+		picked=$(ask_location) || break
+		if usable_location "$picked"; then
+			chosen="$picked"
+		fi
+	done
+	# A cancelled dialog is remembered too, so the question is asked once.
+	STEAM_HOME="${chosen:-$DEFAULT_HOME}"
+	remember_location "$STEAM_HOME"
+	printf 'steam: Steam data will live in %s\n' "$STEAM_HOME" >&2
+fi
+
+# --------------------------------------------------------------- seed root ---
+# FILL IN the bootstrap only.  Once the client has updated itself its copy in
+# the Steam root is newer than ours, so nothing already present is overwritten
+# (--ignore-existing / cp -n) and nothing is ever deleted.
+seed() {
+	mkdir -p "$STEAM_HOME" "$STATE_DIR"
+	printf 'steam: installing the Steam bootstrap into %s\n' "$STEAM_HOME" >&2
+	if command -v rsync >/dev/null 2>&1; then
+		rsync -a --ignore-existing --exclude=/VERSION "$PAYLOAD/" "$STEAM_HOME/"
+	else
+		cp -an "$PAYLOAD/." "$STEAM_HOME/" 2>/dev/null ||
+			cp -a "$PAYLOAD/." "$STEAM_HOME/"
+		rm -f "$STEAM_HOME/VERSION"
+	fi
+	printf '%s\n' "$PAYLOAD_VERSION" >"$STATE_DIR/payload-version"
+}
+
+if [ ! -s "$STEAM_HOME/steamrtarm64/steam" ]; then
+	mkdir -p "$STATE_DIR"
+	if command -v flock >/dev/null 2>&1; then
+		exec 9>"$STATE_DIR/seed.lock"
+		flock -w 900 9 ||
+			die "another Steam start is still preparing the installation"
+		[ -s "$STEAM_HOME/steamrtarm64/steam" ] || seed
+		exec 9>&-
+	else
+		seed
+	fi
+fi
+
+# -------------------------------------------- Valve's bootstrap symlinks -----
+# ~/.steam is what the client (and tools that look for a Steam install) probe.
+# A path that already exists as a REAL directory is left alone; only a missing
+# entry or an existing symlink is (re)pointed.
+link() {
+	if [ -L "$2" ] || [ ! -e "$2" ]; then
+		ln -sfn "$1" "$2"
+	fi
+}
+mkdir -p "$HOME/.steam" "$STEAM_HOME/package"
+link "$STEAM_HOME" "$HOME/.steam/root"
+link "$STEAM_HOME" "$HOME/.steam/steam"
+link "$STEAM_HOME/ubuntu12_32" "$HOME/.steam/bin32"
+link "$STEAM_HOME/ubuntu12_32" "$HOME/.steam/bin"
+link "$STEAM_HOME/ubuntu12_64" "$HOME/.steam/bin64"
+link "$STEAM_HOME/linux32" "$HOME/.steam/sdk32"
+link "$STEAM_HOME/linux64" "$HOME/.steam/sdk64"
+link "$STEAM_HOME/linuxarm64" "$HOME/.steam/sdkarm64"
+rm -f "$HOME/.steam/starting"
+
+# Beta channel, plus the sentinel that selects the steamrt3c (container) client.
+printf 'publicbeta\n' >"$STEAM_HOME/package/beta"
+touch "$STEAM_HOME/.steam-enable-steamrt64-client"
+
+# steamrt64 must be the SYMLINK to the arm64 runtime.  If an update left a
+# real x86 directory there (the client zip ships one), park it and relink.
+if [ -d "$STEAM_HOME/steamrt64" ] && [ ! -L "$STEAM_HOME/steamrt64" ]; then
+	mv "$STEAM_HOME/steamrt64" "$STEAM_HOME/steamrt64.x86.local.$$"
+fi
+ln -sfn steamrtarm64 "$STEAM_HOME/steamrt64"
+
+# ------------------------------------------------------------------ launch ---
+# Verification must stay ON until the client has downloaded itself: with
+# -noverifyfiles the client SKIPS verification and then dies with "Failed to
+# load steamui.so" instead of fetching the client it is missing (measured).
+# A complete root passes the client's own size check in ~23 s and the ARM tree
+# survives it unchanged, so once the install record and the downloaded UI are
+# both there we skip it for a fast start -- which is what a normal Steam start
+# does anyway.
+complete() {
+	[ -s "$STEAM_HOME/package/steam_client_publicbeta_linuxarm64.installed" ] &&
+		[ -n "$(ls -A "$STEAM_HOME/steamui" 2>/dev/null || true)" ]
+}
+
+verify_args=(-noverifyfiles)
+if ! complete || [ "${STEAM_FORCE_VERIFY:-0}" = 1 ]; then
+	verify_args=()
+fi
+if [ "${STEAM_NO_VERIFY:-0}" = 1 ]; then
+	verify_args=(-noverifyfiles)
+fi
+if [ "${#verify_args[@]}" -eq 0 ]; then
+	printf 'steam: first start: downloading the client from Valve (~650 MB, once)\n' >&2
+fi
+
+: "${GDK_BACKEND:=x11}"
+: "${DISPLAY:=:0}"
+export GDK_BACKEND DISPLAY
+
+cd "$STEAM_HOME"
+exec "$STEAM_HOME/steamrtarm64/steam" "${verify_args[@]}" "$@"

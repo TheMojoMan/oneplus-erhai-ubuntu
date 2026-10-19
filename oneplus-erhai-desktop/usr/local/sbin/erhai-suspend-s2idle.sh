@@ -1,0 +1,435 @@
+#!/bin/bash
+# erhai SUSPEND stage-1 harness — s2idle only, auto-wake by RTC alarm.
+# (2026-09-16, after the first `echo mem` attempt aborted by WLAN and left the
+#  session's display dead: see gpu-MEMORY-2026-09-12.md §2026-09-16.)
+#
+# WHY EVERY STEP IS HERE
+#  * DISPLAY OFF FIRST: the previous attempt let the kernel suspend devices
+#    with the DPU/DSI *live*; the suspend then aborted mid-way and the panel
+#    rails were dropped+raised under a running compositor -> backlight on,
+#    screen black, input dead.  Turning the panel off through the PROVEN
+#    `erhai-display-toggle.sh off` path first means the compositor's pipeline
+#    is already blanked, so an abort resumes into a state it understands.
+#  * QUIESCE WLAN: the abort was `pm_wakeup_pending()` -> `pm_abort_suspend`,
+#    and the only in-tree `pm_system_wakeup()` callers are cnss2/qcacld
+#    (cnss2/main.c:1973 Dev-SOL IRQ, cnss2/pci.c:8364 WLAN wake IRQ,
+#    qcacld hif_exec.c:1129 / hif_main.c:3037,3112 / qdf_lock.c:429).
+#    Stopping traffic + the discover sweeper removes the RX/wake IRQs that
+#    fire inside the suspend window.
+#  * RTC ALARM: /sys/class/rtc/rtc1/wakealarm with the **+N** form. rtc1
+#    (rtc-pm8xxx) counts in its OWN namespace (since_epoch ~5.6e5, wall clock
+#    1.79e9) and rtc0 (rtc-efi) cannot be read at all, so an absolute wall
+#    clock value never fires (and rtcwake refuses with EIO).  `+N` bases the
+#    alarm on the RTC's own clock -> fires N s later.
+#    rtc-pm8xxx.c:653 `devm_pm_set_wake_irq(alarm_irq)` = real wake IRQ.
+#  * POWER BUTTON backstop: pm8941-pwrkey.c:227 `enable_irq_wake()` in its
+#    suspend callback; `power/wakeup=enabled`.  Owner can always wake it.
+#  * LONGS: everything is appended+fsync'd to the survival log, so a silent
+#    SoC POR still leaves the pre-crash lines on sda19.
+#
+# USAGE (always as a SYSTEM unit so it survives session teardown):
+#   systemd-run --unit=erhai-suspend-s2idle --collect \
+#     --setenv=WAKE_SECS=25 --setenv=QUIESCE=1 --setenv=DISPLAY_OFF_FIRST=1 \
+#     /bin/bash /media/data/develop/erhai/tmp/gpu-hang-capture/erhai-suspend-s2idle.sh
+#
+# KNOBS
+#   WAKE_SECS=25        RTC alarm = now + this (auto-resume; also the timeout)
+#   RTC_ALARM=1         0 = do NOT arm the RTC alarm (owner presses power to
+#                          wake). Also skips the +WAKE_SECS+45 unwedge timer
+#                          (that net would unblank the panel mid-sleep while
+#                          waiting for a power press — wrong for manual wake).
+#   QUIESCE=1           stop discover sweeper + `nmcli radio wifi off` first
+#   DISPLAY_OFF_FIRST=1 run erhai-display-toggle.sh off before suspending
+#   DRY=0               DRY=1 = do everything except `echo mem`
+#   RESTORE_WIFI=1      bring wifi back at the end
+#   MEM_STATE=s2idle    value written to /sys/power/mem_sleep
+#   PARK_GPU=0          1 = unpin GPU (echo auto) and wait for a FRESH runtime
+#                          park right before entering s2idle, so the display
+#                          teardown happens with the GPU ALREADY collapsed (the
+#                          serialization that made display OFF->ON survivable at
+#                          08:02-08:15 on this kernel). ABORT if it cannot park
+#                          within PARK_WAIT — never force an unverified state.
+#   PARK_WAIT=15        seconds budget for the GPU park confirmation
+#   SETACTIVE_FIRST=0   1 = issue a REAL display blank (gnome-shell ScreenSaver
+#                          SetActive true) before PARK_GPU. Backlight-only off
+#                          (DISPLAY_OFF_FIRST) keeps the DPU/DSI pipeline + a
+#                          live compositor alive, so the GPU can never park
+#                          (proven 15:35 DRY: 15x active). A real blank stops
+#                          mutter, letting runtime-PM actually suspend the GPU.
+set -u
+
+WAKE_SECS=${WAKE_SECS:-25}
+RTC_ALARM=${RTC_ALARM:-1}
+QUIESCE=${QUIESCE:-1}
+DISPLAY_OFF_FIRST=${DISPLAY_OFF_FIRST:-1}
+DRY=${DRY:-0}
+RESTORE_WIFI=${RESTORE_WIFI:-1}
+MEM_STATE=${MEM_STATE:-s2idle}
+PARK_GPU=${PARK_GPU:-0}
+PARK_WAIT=${PARK_WAIT:-15}
+SETACTIVE_FIRST=${SETACTIVE_FIRST:-0}
+USE_WAKEUP_COUNT=${USE_WAKEUP_COUNT:-0}   # 0: unusable here, see STEP4b
+WIFI_WATCH_A=${WIFI_WATCH_A:-60}         # post-resume: wifi UNTOUCHED watch
+WIFI_WATCH_B=${WIFI_WATCH_B:-60}         # post-resume: after explicit re-enable
+D=/media/data/develop/erhai/tmp/gpu-hang-capture
+RESUMEDF=/run/erhai-suspend-resumed
+
+LOG=/media/data/develop/erhai/tmp/gpu-hang-capture/suspend-s2idle.log
+DONEF=/run/erhai-suspend-done
+SURVLOG=/usr/local/sbin/erhai-surv-log
+TOGGLE=/usr/local/sbin/erhai-display-toggle.sh
+RTC=/sys/class/rtc/rtc1
+BL=/sys/class/backlight/ktz8868-backlight
+BATT=/sys/class/power_supply/bq27z561-0
+GPU=/sys/devices/platform/soc@0/3d00000.gpu/power
+GENPD=/sys/kernel/debug/pm_genpd/pm_genpd_summary
+USER_NAME=themojoman
+UID_N=$(id -u "$USER_NAME")
+RT=/run/user/$UID_N
+
+exec >> "$LOG" 2>&1
+rm -f "$DONEF"
+say() { echo "[$(date +%T) up=$(cut -d' ' -f1 /proc/uptime)] $*"; \
+        [ -x "$SURVLOG" ] && "$SURVLOG" "suspend-s2idle: $*" 2>/dev/null; }
+kmsg() { echo "erhai-suspend: $*" > /dev/kmsg 2>/dev/null; }
+snap() { # one-line state: panel + gpu + genpd
+    printf 'bl=%s gpu=%s/%s gdsc[%s]\n' \
+        "$(cat $BL/actual_brightness 2>/dev/null)" \
+        "$(cat $GPU/control 2>/dev/null)" "$(cat $GPU/runtime_status 2>/dev/null)" \
+        "$(grep -E '^(mdss_gdsc|mdss_int2_gdsc)' $GENPD 2>/dev/null | awk '{printf "%s=%s ",$1,$2}')"
+}
+ss() { runuser -u "$USER_NAME" -- env XDG_RUNTIME_DIR="$RT" \
+        DBUS_SESSION_BUS_ADDRESS="unix:path=$RT/bus" timeout 10 gdbus call --session \
+        --dest org.gnome.Shell --object-path /org/gnome/ScreenSaver \
+        --method org.gnome.ScreenSaver.SetActive "$1" 2>&1; }
+
+say "===== SUSPEND s2idle RUN START (WAKE_SECS=$WAKE_SECS QUIESCE=$QUIESCE DISPLAY_OFF_FIRST=$DISPLAY_OFF_FIRST DRY=$DRY MEM_STATE=$MEM_STATE) ====="
+kmsg "START WAKE_SECS=$WAKE_SECS QUIESCE=$QUIESCE"
+ORIG_MEM_SLEEP=$(cat /sys/power/mem_sleep 2>/dev/null | grep -oE '\[[a-z0-9]+' | tr -d '[')
+say "pre: mem_sleep=[$(cat /sys/power/mem_sleep)] orig=${ORIG_MEM_SLEEP:-unknown} $(snap)"
+
+# ---- safety net: independent unit that restores the panel even if this dies.
+# Only with an RTC auto-wake: with RTC_ALARM=0 the owner presses power to
+# resume, so a wall-clock unwedge would fire mid-sleep and unblank the panel —
+# wrong. Skipped entirely in manual-wake mode.
+if [ "$RTC_ALARM" = 1 ]; then
+    systemd-run --unit=erhai-suspend-unwedge --collect --on-active=$((WAKE_SECS+45)) \
+        /bin/bash -c "$TOGGLE on; $SURVLOG 'suspend-s2idle: UNWEDGE fired (safety net)'" \
+        >/dev/null 2>&1 && say "safety net armed (+$((WAKE_SECS+45))s panel unblank)"
+else
+    say "safety net SKIPPED (RTC_ALARM=0 — manual power-button wake)"
+fi
+
+# ---- STEP 1: display off first (proven path)
+if [ "$DISPLAY_OFF_FIRST" = 1 ]; then
+    say "STEP1 display off -> $("$TOGGLE" off 2>&1; echo rc=$?)"
+    sleep 2
+    say "STEP1 post: $(snap)"
+else
+    say "STEP1 skipped"
+fi
+
+# ---- STEP 2: quiesce WLAN (remove the abort source)
+# DRY guard: NEVER radio-off in a DRY run. A DRY run returns in ~2 s, so the
+# radio off->on churn is compressed into milliseconds -> WCN VDEV wedge
+# (`hdd_open: VDEV SYNC TRANS fails -22`, 19:39/19:41/20:16 — recoverable only
+# by reboot). DRY only validates the plumbing, never the WLAN teardown.
+if [ "$DRY" = 0 ] && [ "$QUIESCE" = 1 ]; then
+    if systemctl is-active --quiet erhai-wifi-discover.service; then
+        systemctl stop erhai-wifi-discover.service && say "STEP2 discover sweeper stopped"
+    else
+        say "STEP2 discover sweeper not active"
+    fi
+    say "STEP2 nmcli radio wifi off -> $(nmcli radio wifi off 2>&1; echo rc=$?)"
+elif [ "$DRY" = 1 ] && [ "$QUIESCE" = 1 ]; then
+    say "STEP2 SKIPPED radio off in DRY run (would wedge the WCN) — sweeper not stopped either"
+fi
+
+# ---- STEP 2c: WAIT until the WLAN is FULLY settled before `echo mem`.
+# In the GNOME-menu path logind's PrepareForSleep makes NetworkManager tear the
+# WCN down itself (its sleep inhibitor), racing our nmcli radio off — 19:27:10
+# crash showed a kworker wedged in hif_exec_napi_kill/hdd_psoc_idle_shutdown/
+# cnss_pci_dev_shutdown holding a mutex when `echo mem` ran 6 s later
+# (preempt_count 1). Every SURVIVING run entered suspend with wlp1s0 reported
+# `unavailable`. So: poll until the radio is NOT connected/connecting/
+# activating, then require one clean `unavailable|unmanaged` reading, else ABORT
+# (§"never force an unverified state") — a too-slow WLAN settle must never be
+# carried into suspend.
+if [ "$DRY" = 0 ] && [ "$QUIESCE" = 1 ]; then
+    WLAN_SETTLE=${WLAN_SETTLE:-12}
+    say "STEP2c waiting for WLAN to fully settle (budget ${WLAN_SETTLE}s)..."
+    t_s0=$(cut -d' ' -f1 /proc/uptime)
+    wl_settled=no
+    i=0
+    while [ "$i" -lt "$WLAN_SETTLE" ]; do
+        wl=$(nmcli -t -f DEVICE,STATE dev 2>/dev/null | grep -E '^wlp' | head -1)
+        st=${wl#*:}
+        [ -z "$st" ] && st="(no device)"
+        case "$st" in
+            unavailable|unmanaged) wl_settled=yes; say "STEP2c t=${i}s state=$st -> SETTLED"; break ;;
+            *) say "STEP2c t=${i}s state=$st (waiting...)" ;;
+        esac
+        sleep 1; i=$((i+1))
+    done
+    if [ "$wl_settled" = yes ]; then
+        say "STEP2c WLAN settled: $(nmcli -t -f DEVICE,STATE dev 2>/dev/null | grep wlp | head -2 | tr '\n' ' ')"
+    else
+        say "STEP2c !!! WLAN did NOT settle within ${WLAN_SETTLE}s — ABORTING (never suspend mid-WLAN-teardown)"
+        say "===== SUSPEND s2idle RUN END (ABORTED at STEP2c) ====="
+        exit 3
+    fi
+else
+    say "STEP2 quiesce skipped"
+fi
+
+# ---- STEP 2b: stop the power-watch service across the whole sleep window
+# The power key that WAKES a manual-wake (RTC_ALARM=0) s2idle is ALSO queued
+# in the evdev ring buffer and delivered to erhai-power-watch.py after resume
+# (kernel input core: the event is only read by clients whose fd was open AT
+# the time). With the watcher running it treats that same physical press as a
+# NEW toggle and calls erhai-panel-power.sh — which, with no /run/erhai-panel-off
+# marker and the panel still physically down, BLANKS the freshly-restored
+# screen (seen 18:42:14-16: STEP6 display on -> nvt_ts_suspend). Stopping the
+# service closes its fd, so the wake event is never delivered to it; the fresh
+# open at STEP6 only reads events from after reopen. Restart in STEP6.
+POWERWATCH_ACTIVE=0
+if systemctl is-active --quiet erhai-power-toggle.service; then
+    POWERWATCH_ACTIVE=1
+    if systemctl stop erhai-power-toggle.service 2>/dev/null; then
+        say "STEP2b power-watch service STOPPED (prevents wake-press double-toggle)"
+    else
+        say "STEP2b power-watch service stop FAILED (rc=$?) — double-toggle risk!"
+    fi
+else
+    say "STEP2b power-watch service not active (nothing to stop)"
+fi
+
+# ---- STEP 2d: freeze the WCN psoc idle-shutdown timer for the sleep window.
+# The 19:27:10 GNOME-suspend POR showed the WLAN idle-shutdown racing suspend:
+# NM's PrepareForSleep radio-off triggers `hdd_psoc_idle_timeout_callback`
+# (psoc idle timeouts after 250 ms in this kernel's config default) ->
+# `cnss: Doing idle shutdown` -> NULL-pointer-deref in the wlan driver
+# (htc_stop/hif teardown race) -> kernel tainted, then suspend entry 6 s later
+# silently reset the SoC. The QDF timer multiplier
+# (/sys/module/wlan/parameters/timer_multiplier, range 1..0xFFFFFFFF) scales
+# EVERY qdf_delayed_work — including psoc_idle_timeout_work. Setting a huge
+# value here makes the idle-shutdown effectively unreachable for the whole
+# sleep, so it can never collide with `echo mem`. Restored in STEP6.
+WLAN_TM=/sys/module/wlan/parameters/timer_multiplier
+WLAN_TM_ORIG=""
+if [ "$DRY" = 0 ] && [ -w "$WLAN_TM" ]; then
+    WLAN_TM_ORIG=$(cat "$WLAN_TM" 2>/dev/null)
+    if [ "$WLAN_TM_ORIG" != 1000000 ]; then
+        echo 1000000 > "$WLAN_TM" 2>/dev/null && say "STEP2d WCN psoc-idle timer frozen (timer_multiplier 1 -> 1000000, was $WLAN_TM_ORIG)"
+    else
+        say "STEP2d WCN timer_multiplier already 1000000"
+    fi
+else
+    if [ "$DRY" = 1 ]; then
+        say "STEP2d SKIPPED in DRY run (timer churn unnecessary; real run freezes it)"
+    else
+        say "STEP2d $WLAN_TM not writable — psoc idle-shutdown could race suspend"
+    fi
+fi
+
+# ---- STEP 3: arm the RTC alarm (our auto-wake) and verify the readback.
+# RTC_ALARM=0 -> skip entirely (owner wakes with a short power press).
+RTC_BASE=""
+if [ "$RTC_ALARM" = 1 ]; then
+    if [ -w "$RTC/wakealarm" ]; then
+        echo 0 > "$RTC/wakealarm" 2>/dev/null
+        base=$(cat "$RTC/since_epoch" 2>/dev/null)
+        echo "+$WAKE_SECS" > "$RTC/wakealarm" 2>/dev/null
+        rb=$(cat "$RTC/wakealarm" 2>/dev/null)
+        say "STEP3 rtc alarm +$WAKE_SECS -> readback=[$rb] (rtc now=$base, expected=$((base+WAKE_SECS)))"
+        [ -n "$rb" ] || say "STEP3 !!! ALARM NOT SET — power button is the only wake !!!"
+    else
+        say "STEP3 !!! $RTC/wakealarm not writable — power button is the only wake !!!"
+    fi
+else
+    say "STEP3 SKIPPED (RTC_ALARM=0) — power button is the ONLY wake"
+fi
+
+# ---- STEP 4: select s2idle
+say "STEP4 mem_sleep before=[$(cat /sys/power/mem_sleep)]"
+echo "$MEM_STATE" > /sys/power/mem_sleep 2>/dev/null
+say "STEP4 mem_sleep after=[$(cat /sys/power/mem_sleep)] state=[$(cat /sys/power/state)]"
+# ---- STEP 4b: enable the wakeup-event gate (what systemd does on x86).
+# Writing the current count to /sys/power/wakeup_count sets events_check_enabled
+# + saved_count, so ANY wakeup-source event (including the RTC alarm IRQ's
+# rtc_update_irq -> pm_stay_awake, which bumps combined_event_count) makes
+# pm_wakeup_pending() true and terminates the sleep.  Without it, an arm64
+# s2idle loop can only be exited by a HARD wake IRQ (pwrkey) — the alarm would
+# fire its handler while the pad stayed asleep.
+if [ "$USE_WAKEUP_COUNT" = 1 ]; then
+    wc_ok=0
+    for i in 1 2 3 4 5; do
+        cnt=$(cat /sys/power/wakeup_count 2>/dev/null)
+        if [ -n "$cnt" ] && echo "$cnt" > /sys/power/wakeup_count 2>/dev/null; then
+            wc_ok=1; say "STEP4b wakeup_count gate SET (count=$cnt, attempt $i)"; break
+        fi
+        say "STEP4b wakeup_count attempt $i raced (event in flight); retrying"
+        sleep 1
+    done
+    [ "$wc_ok" = 1 ] || say "STEP4b !!! gate NOT set — only the power button can end s2idle !!!"
+else
+    say "STEP4b wakeup_count gate disabled"
+fi
+kmsg "ENTER mem (mem_sleep=$MEM_STATE WAKE_SECS=$WAKE_SECS wc_gate=$USE_WAKEUP_COUNT PARK_GPU=$PARK_GPU)"
+
+# ---- STEP 4c: OPTIONAL — REAL blank first, then park the GPU before s2idle
+# Step 1 (SETACTIVE_FIRST): SetActive true = real DPU/DSI teardown under the
+#   compositor.  This stops mutter from submitting frames, which is the only
+#   way the GPU can reach runtime-suspend at all (backlight-only NEVER does —
+#   proven 15:35 DRY: 15x active).
+# Step 2 (PARK_GPU): unpin (echo auto) and wait for a FRESH runtime park, then
+#   suspend immediately on the first `suspended` observation — the GPU is
+#   ALREADY collapsed when the kernel tears the display down inside s2idle.
+# If either cannot complete within its budget we ABORT — never write
+# /sys/power/state from an unverified state.
+if [ "$SETACTIVE_FIRST" = 1 ] || [ "$PARK_GPU" = 1 ]; then
+    if [ "$SETACTIVE_FIRST" = 1 ]; then
+        say "STEP4c REAL blank: SetActive true -> $(ss true)"
+        sleep 3
+        say "STEP4c REAL blank post: $(snap)"
+        dmesg 2>/dev/null | grep -aE 'nvt_ts_panel_power|display on|display off' | tail -4 | while read -r l; do say "  dmesg| $l"; done
+    fi
+    if [ "$PARK_GPU" = 1 ]; then
+        say "STEP4c PARK: echo auto -> $(echo auto > "$GPU/control" 2>&1; echo rc=$?)"
+        say "STEP4c PARK: waiting for runtime_status=suspended (budget ${PARK_WAIT}s)..."
+        t_p0=$(cut -d' ' -f1 /proc/uptime)
+        parked=no
+        i=0
+        while [ "$i" -lt "$PARK_WAIT" ]; do
+            st=$(cat "$GPU/runtime_status" 2>/dev/null)
+            say "STEP4c park poll t=${i}s status=$st"
+            if [ "$st" = suspended ]; then
+                parked=yes
+                break
+            fi
+            sleep 1; i=$((i+1))
+        done
+        t_p1=$(cut -d' ' -f1 /proc/uptime)
+        say "STEP4c PARK: parked=$parked after_wait=$i s (uptime ${t_p0}->${t_p1})"
+        if [ "$parked" != yes ]; then
+            say "STEP4c !!! GPU never parked within ${PARK_WAIT}s — ABORTING (no suspend)"
+            echo on > "$GPU/control" 2>/dev/null
+            say "STEP4c abort: GPU re-pinned $(snap)"
+            exit 3
+        fi
+        say "STEP4c PARK confirmed — proceeding to STEP5 immediately"
+    fi
+fi
+
+# ---- STEP 5: THE SUSPEND
+if [ "$DRY" = 1 ]; then
+    say "STEP5 DRY run — not writing /sys/power/state"
+else
+    t0=$(cut -d' ' -f1 /proc/uptime)
+    kmsg "GO uptime=$t0"
+    soc_pre_cap=$(cat "$BATT/capacity" 2>/dev/null)
+    soc_pre_chg=$(cat "$BATT/charge_now" 2>/dev/null)
+    soc_pre_v=$(cat "$BATT/voltage_now" 2>/dev/null)
+    say "STEP5 pre-suspend SOC: capacity=${soc_pre_cap}% charge_now=${soc_pre_chg}uAh voltage=$(awk -v v="$soc_pre_v" 'BEGIN{printf "%.3f", v/1e6}')V"
+    say "STEP5 ENTER /sys/power/state <- mem   (t0=$t0)  *** pad may sleep now ***"
+    echo mem > /sys/power/state
+    rc=$?
+    t1=$(cut -d' ' -f1 /proc/uptime)
+    gap=$(awk -v a="$t0" -v b="$t1" 'BEGIN{printf "%.2f", b-a}')
+    say "STEP5 RETURNED rc=$rc t1=$t1 gap=${gap}s  (real sleep expects >= $WAKE_SECS)"
+    kmsg "BACK uptime=$t1 gap=$gap rc=$rc"
+    say "STEP5 $(snap)"
+    soc_post_cap=$(cat "$BATT/capacity" 2>/dev/null)
+    soc_post_chg=$(cat "$BATT/charge_now" 2>/dev/null)
+    soc_post_v=$(cat "$BATT/voltage_now" 2>/dev/null)
+    say "STEP5 post-resume SOC: capacity=${soc_post_cap}% charge_now=${soc_post_chg}uAh voltage=$(awk -v v="$soc_post_v" 'BEGIN{printf "%.3f", v/1e6}')V"
+    # discharge consumption estimate: dAh * avgV = Wh. charge_now falling
+    # during a sleep => consumed. If it ROSE, something charged it (abort path).
+    awk -v c0="$soc_pre_chg" -v c1="$soc_post_chg" -v v0="$soc_pre_v" -v v1="$soc_post_v" \
+        -v cap0="$soc_pre_cap" -v cap1="$soc_post_cap" -v gap="$gap" \
+        'BEGIN{
+            if (c0 != "" && c1 != "" && c0 > 0 && c1 > 0) {
+                d_mah = (c0 - c1) / 1000.0
+                vavg = (v0 + v1) / 2e6
+                wh = d_mah * vavg / 1000.0
+                if (d_mah < -5) {
+                    printf "STEP5 consumption: INVALID — charge_now ROSE by %.1f mAh (charger attached during sleep); unplug for a valid power test\n", -d_mah
+                } else {
+                    if (gap > 0) watts = wh / (gap/3600.0)
+                    else watts = 0
+                    printf "STEP5 consumption: dQ=%.1f mAh  E=%.4f Wh  avg_power=%.3f W over %.1f s (SoC %d%% -> %d%%)\n", d_mah, wh, watts, gap, cap0, cap1
+                }
+            } else {
+                print "STEP5 consumption: SKIPPED (charge_now unavailable/unreadable)"
+            }
+        }'
+    say "STEP5 suspend_stats: success=$(cat /sys/power/suspend_stats/success 2>/dev/null) fail=$(cat /sys/power/suspend_stats/fail 2>/dev/null) failed_step=$(cat /sys/power/suspend_stats/last_failed_step 2>/dev/null) failed_errno=$(cat /sys/power/suspend_stats/last_failed_errno 2>/dev/null) failed_dev=[$(cat /sys/power/suspend_stats/last_failed_dev 2>/dev/null)]"
+    say "STEP5 wakealarm after=[$(cat $RTC/wakealarm 2>/dev/null)]"
+    dmesg 2>/dev/null | grep -aE 'suspend entry|suspend exit|Some devices failed|Wakeup pending|Triggering wakeup|hdd_suspend_wlan|hdd_resume_wlan|trigger sys resume|nvt_ts_panel_power|Restarting tasks' | tail -25 | while read -r l; do say "  dmesg| $l"; done
+fi
+
+# ---- STEP 6: restore
+say "STEP6 restore: SetActive false -> $(ss false)"
+say "STEP6 display on -> $("$TOGGLE" on 2>&1; echo rc=$?)"
+sleep 2
+if [ "$PARK_GPU" = 1 ]; then
+    echo on > "$GPU/control" 2>/dev/null
+    say "STEP6 gpu re-pinned: $(snap)"
+fi
+say "STEP6 post-restore: $(snap)"
+if [ "$RESTORE_WIFI" = 1 ] && [ "$QUIESCE" = 1 ]; then
+    say "STEP6 nmcli radio wifi on -> $(nmcli radio wifi on 2>&1; echo rc=$?)"
+    systemctl start erhai-wifi-discover.service 2>/dev/null && say "STEP6 discover sweeper restarted"
+fi
+if [ -n "${ORIG_MEM_SLEEP:-}" ]; then
+    echo "$ORIG_MEM_SLEEP" > /sys/power/mem_sleep 2>/dev/null
+    say "STEP6 mem_sleep restored=[$(cat /sys/power/mem_sleep)] (orig=$ORIG_MEM_SLEEP)"
+fi
+if [ -n "$WLAN_TM_ORIG" ]; then
+    if [ "$WLAN_TM_ORIG" != 1000000 ]; then
+        echo "$WLAN_TM_ORIG" > "$WLAN_TM" 2>/dev/null && say "STEP6 WCN timer_multiplier restored -> $WLAN_TM_ORIG"
+    fi
+fi
+# Restore the power-watch service. Its fd was closed during suspend, so the
+# wake-press evdev event was never delivered to it (see STEP2b); opening the
+# device freshly here only reads events from after this reopen.
+if [ "$POWERWATCH_ACTIVE" = 1 ]; then
+    if systemctl start erhai-power-toggle.service 2>/dev/null; then
+        say "STEP6 power-watch service RESTARTED"
+    else
+        say "STEP6 power-watch service start FAILED (rc=$?)"
+    fi
+fi
+
+# ---- STEP 7: WiFi-repeat observation (owner requested a repeat test)
+# With QUIESCE=1 the radio is OFF after resume. WIFI_WATCH_A watches the
+# untouched state (does it come back by itself? — answer: NO, only
+# gnome-control-center's wifi panel re-enables it, as proven this boot at
+# 09:28:26 pid 55718). WIFI_WATCH_B watches the explicit re-enable.
+rfk() { printf 'rfkill: '; rfkill list 2>/dev/null | grep -A1 'Wireless LAN' | tr '\n' ' '; echo; }
+nmst() { nmcli -t -f DEVICE,STATE dev 2>/dev/null | grep wlp | head -2 | tr '\n' ' '; echo; }
+if [ "$QUIESCE" = 1 ]; then
+    say "STEP7 WATCH_A start (wifi left OFF, untouched for ${WIFI_WATCH_A}s): $(nmst)"
+    i=0
+    while [ "$i" -lt "$WIFI_WATCH_A" ]; do
+        sleep 10; i=$((i+10))
+        say "STEP7 A t=${i}s $(nmst)$(rfk)"
+    done
+    say "STEP7 WATCH_A end: $(nmst) — conclusion: came back by itself? $(nmcli -t -f DEVICE,STATE dev | grep -q wlp1s0:connected && echo YES || echo NO)"
+    if [ "$RESTORE_WIFI" = 1 ]; then
+        say "STEP7 explicit re-enable: nmcli radio wifi on -> $(nmcli radio wifi on 2>&1; echo rc=$?)"
+        systemctl start erhai-wifi-discover.service 2>/dev/null && say "STEP7 discover sweeper restarted"
+        say "STEP7 WATCH_B start (${WIFI_WATCH_B}s): $(nmst)"
+        i=0
+        while [ "$i" -lt "$WIFI_WATCH_B" ]; do
+            sleep 10; i=$((i+10))
+            say "STEP7 B t=${i}s $(nmst)$(rfk)"
+        done
+        say "STEP7 WATCH_B end: $(nmst)"
+    fi
+elif [ "$RESTORE_WIFI" = 1 ]; then
+    systemctl start erhai-wifi-discover.service 2>/dev/null && say "STEP7 discover sweeper restarted"
+fi
+systemctl stop erhai-suspend-unwedge.timer erhai-suspend-unwedge.service 2>/dev/null
+touch "$DONEF"
+say "===== SUSPEND s2idle RUN END (done marker $DONEF set) ====="

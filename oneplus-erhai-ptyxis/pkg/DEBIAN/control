@@ -1,0 +1,38 @@
+Package: oneplus-erhai-ptyxis
+Version: 0.3
+Section: gnome
+Priority: optional
+Architecture: arm64
+Maintainer: TheMojoMan <themojoman@gmx.net>
+Depends: ptyxis (>= 50), libvte-2.91-gtk4-0
+Description: Touch-friendly Ptyxis (GNOME terminal) for the OnePlus Pad 3 (erhai)
+ A patched build of Ptyxis with touchscreen features:
+  * one-finger drag scrolls the terminal contents (1:1 with the finger for
+    slow movement, accelerated up to 1.3x for fast swipes, and gliding to a
+    stop after release); dragging a selection handle or the marked end near
+    the top/bottom edge auto-scrolls, faster the closer it gets to the edge;
+  * a long press marks text: the word under the finger is selected, dragging
+    extends it, and on release the marked region is colour-inverted, copied
+    to the clipboard with a "Copied to clipboard" toast, and two draggable
+    handles appear to adjust the region (releasing a handle re-copies); the
+    marking goes away as soon as you send input to the terminal (typing, the
+    on-screen keyboard, a paste) or tap outside it, exactly like a text
+    selection;
+  * a plain tap is forwarded to the application as a left mouse click when it
+    wants mouse events (micro, vim, less, ...), so tapping moves its text
+    cursor to the tapped cell exactly as in unpatched Ptyxis;
+  * a Paste button in the header bar, right of the new-tab button, so pasting
+    is one tap away on a touchscreen (it follows the active tab's clipboard
+    state and is insensitive while there is nothing pastable).
+ .
+ Ptyxis is a C/GTK4/VTE application, so this is a source patch (of
+ src/ptyxis-terminal.c, src/ptyxis-window.c and src/ptyxis-window.ui), not an
+ extension.  The package installs the patched
+ /usr/bin/ptyxis by diverting Ubuntu's binary (kept as /usr/bin/ptyxis.erhai-orig);
+ removing the package restores it.  Mouse and keyboard behaviour is unchanged.
+ .
+ Already-running Ptyxis windows keep the old binary (the app is
+ single-instance), so close all Ptyxis windows once after installing to pick
+ up the new one.
+ Package README: /usr/share/oneplus-erhai-ptyxis/README.md
+ Source patch:   /usr/share/oneplus-erhai-ptyxis/ptyxis-erhai-touch.patch

@@ -1,0 +1,49 @@
+Package: oneplus-erhai-fastrpc
+Version: 0.2
+Section: libs
+Priority: optional
+Installed-Size: 79356
+Architecture: arm64
+Maintainer: TheMojoMan <themojoman@gmx.net>
+Depends: libc6, libbsd0, libyaml-0-2, systemd, udev
+Recommends: oneplus-erhai-firmware, oneplus-erhai-npu
+Suggests: oneplus-erhai-sensors
+Description: Qualcomm FastRPC userspace for the OnePlus Pad 3 (erhai): CDSP transport
+ This is the SHARED FastRPC layer of erhai: the Qualcomm userspace built from
+ github.com/qualcomm/fastrpc, plus the DSP-side payload trees a FastRPC client
+ uploads to the DSP. It is what makes /dev/fastrpc-cdsp usable at all, so the
+ NPU/HTP stack (oneplus-erhai-npu) and any other FastRPC client need it.
+ .
+  - client libraries in /usr/local/lib: libcdsprpc (SONAME libcdsprpc.so.1),
+    libadsprpc, libsdsprpc and the three *_default_listener shims;
+  - cdsprpcd, the remotefs daemon for the COMPUTE DSP (the Linux equivalent of
+    Android's `cdsprpcd rootpd cdsp`), with a hardened unit
+    (cdsprpcd.service: ConditionPathExists-gated so a kernel without the CDSP
+    SKIPS it) and a drop-in setting ADSP_LIBRARY_PATH/DSP_LIBRARY_PATH to the
+    DSP payload trees;
+  - the `fastrpc` group (usr/lib/sysusers.d/fastrpc.conf) and the udev rule that
+    hands /dev/fastrpc-* to it (root:fastrpc 0640) and ACLs /dev/dma_heap/system
+    -- uaccess cannot be used here, the FastRPC nodes are misc devices;
+    the postinst also puts the desktop accounts into the group, which needs a
+    re-login to take effect;
+  - /etc/environment.d/57-erhai-fastrpc-unsigned.conf (FASTRPC_UNSIGNED_PD=1):
+    the Linux QNN/ggml DSP skels are unsigned-only, and QNN picks
+    signed-vs-unsigned from the platform info, so the CDSP refuses the PD image
+    (0x8000054f) without it;
+  - the DSP payload trees clients read from: /usr/lib/rfsa/adsp,
+    /usr/lib/rfsa/cdsp and /usr/share/qcom/hexagon/v79 (fastrpc_shell_3 +
+    _unsigned_3, the Hexagon C++ runtime, the QNN HTP v79 skel, the HTP runtime
+    and the ggml-htp skels, from OxygenOS 16.0.9.400, the public QNN/QAIRT
+    releases and Qualcomm's PyPI GenieX tooling);
+  - fastrpc_test + fastrpc-healthcheck (bring-up/diagnostic tools).
+ .
+ DELIBERATELY NOT SHIPPED: the adsprpcd/sdsprpcd/gdsprpcd daemons and their
+ units -- the ADSP/SDSP paths on erhai are served by oneplus-erhai-sensors'
+ hexagonrpcd-erhai -- the libtool .la files, and the manual backup copies of the
+ QNN skel (*.previous, *.qai_appbuilder) that nothing loads.
+ .
+ Kernel side (NO kernel package is recommended or suggested on purpose: the
+ erhai kernel is mandatory for Ubuntu on this tablet and ships in the image):
+ the CDSP remoteproc must be enabled (oneplus-erhai-linux from the 7.2 +b63
+ build on, or any 7.3-rc* line) and the firmware must carry the cdsp split image
+ (oneplus-erhai-firmware >= 1.2).

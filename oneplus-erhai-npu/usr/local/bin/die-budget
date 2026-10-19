@@ -1,0 +1,30 @@
+#!/bin/bash
+# die-budget -- whole-die thermal budget for the erhai NPU tooling.
+#
+#   die-budget status                     current die / budget / margin
+#   die-budget wait [mc [soak [deadline]]]   exit 0 when die stays <= mc for soak s
+#   die-budget watch <pid> [mc [soak]]       exit when pid exits; kill -9 on breach
+#
+# Budget in milli-C; default 94000 (94 C) / soak 15 s.  DIE_BUDGET_MC=0 disables.
+set -u
+HERE=$(dirname "$(readlink -f "$0")")
+# shellcheck source=die-budget.sh
+DB=${DIE_BUDGET_DB:-$HERE/../lib/oneplus-erhai-npu/die-budget.sh}
+[ -f "$DB" ] || DB=/usr/local/lib/oneplus-erhai-npu/die-budget.sh
+. "$DB" || { echo "die-budget: library not found ($DB)" >&2; exit 1; }
+
+case "${1:-status}" in
+status) die_budget_status ;;
+wait)
+	die_wait_idle "${2:-$DIE_BUDGET_MC}" "${3:-$DIE_BUDGET_SOAK}" "${4:-180}"
+	case $? in
+	0) echo "die-budget: die under budget - ok" ;;
+	1) echo "die-budget: disabled (DIE_BUDGET_MC=0) - ok" ;;
+	2) echo "die-budget: TIMEOUT - die stayed over budget" >&2; exit 1 ;;
+	esac
+	;;
+watch)
+	die_watch "${2:?die-budget watch <pid>}" "${3:-$DIE_BUDGET_MC}" "${4:-$DIE_BUDGET_SOAK}"
+	;;
+*) echo "usage: die-budget {status|wait [mc [soak [deadline]]]|watch <pid> [mc [soak]]}" >&2; exit 2 ;;
+esac

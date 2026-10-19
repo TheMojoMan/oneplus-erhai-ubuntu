@@ -1,0 +1,76 @@
+#!/bin/sh
+# erhai — guided calibration for the folio-fold watcher.
+#
+# Runs the fold probe (guided: it beeps when to fold the keyboard up onto the
+# screen and when to fold it back), writes /etc/erhai/folio-fold.conf from the
+# best fold channel it found, and restarts the watcher so the new numbers take
+# effect immediately.  Takes ~35 s (two fold cycles).
+#
+# Run it from your desktop session WITHOUT sudo, so the fold/unfold cues are
+# audible:
+#
+#       erhai-folio-calibrate
+#
+# It asks for sudo once (for the GPIO/evtest probe sources and for installing
+# the config into /etc).  Re-run it whenever the folio is replaced or the
+# detection feels off.  Extra options go to the probe (e.g. `--window 8`).
+#
+# Environment:
+#   ERHAI_FOLIO_FROM_CAPTURE=DIR  reuse an existing probe capture instead of
+#                                 running the guided probe again
+#   ERHAI_FOLIO_CONF=FILE         write the config there directly (no install)
+#   ERHAI_FOLIO_PROBE_OUT=DIR     where captures are stored
+CONF=${ERHAI_FOLIO_CONF:-/etc/erhai/folio-fold.conf}
+PROBE=/usr/local/sbin/erhai-folio-probe.py
+if [ "$(id -u)" = 0 ]; then
+    OUTROOT=${ERHAI_FOLIO_PROBE_OUT:-/var/lib/erhai/folio-probe}
+else
+    OUTROOT=${ERHAI_FOLIO_PROBE_OUT:-${XDG_CACHE_HOME:-$HOME/.cache}/erhai/folio-probe}
+fi
+
+[ -x "$PROBE" ] || { echo "missing $PROBE" >&2; exit 1; }
+run_dir=$OUTROOT/$(date +%Y%m%d-%H%M%S)
+mkdir -p "$run_dir" || exit 1
+
+if [ -n "${ERHAI_FOLIO_CONF:-}" ]; then
+    target=$CONF                 # explicit path: write directly, no root
+    install_needed=0
+else
+    target=$run_dir/folio-fold.conf
+    install_needed=1
+fi
+
+if [ -n "${ERHAI_FOLIO_FROM_CAPTURE:-}" ]; then
+    echo "re-using the capture $ERHAI_FOLIO_FROM_CAPTURE"
+    "$PROBE" --analyze "$ERHAI_FOLIO_FROM_CAPTURE" \
+        --write-config "$target" "$@"
+else
+    "$PROBE" --repeat 2 --out "$run_dir" --write-config "$target" "$@"
+fi
+rc=$?
+
+if [ "$install_needed" = 1 ] && [ -s "$target" ]; then
+    if sudo install -D -m 644 "$target" "$CONF"; then
+        echo "installed $CONF"
+    else
+        echo "!! could not install $CONF" >&2
+        rc=1
+    fi
+fi
+
+# The running watcher re-reads the config within ~2 s, but restart it too so a
+# fresh start picks up the new numbers immediately (a detached keyboard leaves
+# it stopped — the gate will start it with the new config later).
+systemctl try-restart erhai-folio-fold.service 2>/dev/null || true
+
+echo
+if [ "$rc" -eq 0 ]; then
+    echo "folio-fold: config written to $CONF"
+    echo "            verify: journalctl -u erhai-folio-fold -f   (then fold the"
+    echo "                    keyboard up onto the screen and back)"
+else
+    echo "folio-fold: probe found no usable fold channel (rc=$rc);"
+    echo "            $CONF was left DISABLED"
+fi
+echo "            capture: $run_dir"
+exit "$rc"

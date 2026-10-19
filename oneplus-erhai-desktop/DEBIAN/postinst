@@ -1,0 +1,156 @@
+#!/bin/bash
+set -e
+
+# erhai: finger-drag scrolling for the Ubuntu Dock (touch-scroll patch,
+# 2026-10-04).  The dock is a GNOME SESSION-MODE extension, so a per-user
+# override is refused and the patched dash.js must sit at the extension's own
+# system path -- a path owned by gnome-shell-ubuntu-extensions.  A file from
+# this package at that path would be a dpkg file CONFLICT, so install ours with
+# dpkg-divert: Ubuntu's file is kept as dash.js.erhai-orig and an upgrade of
+# gnome-shell-ubuntu-extensions writes to the diverted name, so it can never
+# clobber the patch.  DEBIAN/postrm drops the diversion again.
+#
+# The diversion is registered WITHOUT --rename and we keep Ubuntu's original
+# ourselves: `dpkg-divert --remove --rename` refuses to overwrite a different
+# existing file, so the --rename round trip can fail on removal and leave the
+# dock with NO dash.js (measured 2026-10-04).  postrm therefore just copies
+# dash.js.erhai-orig back.
+#
+# This runs OUTSIDE the systemd guard below so an image build (chroot, no
+# systemd) applies it too.
+DOCK_EXT_DIR=/usr/share/gnome-shell/extensions/ubuntu-dock@ubuntu.com
+DOCK_DASH="$DOCK_EXT_DIR/dash.js"
+DOCK_ORIG="$DOCK_DASH.erhai-orig"
+DOCK_PAYLOAD=/usr/share/oneplus-erhai-desktop/ubuntu-dock-dash.js
+if [ -d "$DOCK_EXT_DIR" ] && [ -f "$DOCK_PAYLOAD" ]; then
+	# Save Ubuntu's original once -- but never our own patched file (it
+	# carries the _initTouchScroll marker), so a re-install cannot turn the
+	# patched file into "the original".
+	if [ ! -f "$DOCK_ORIG" ] && [ -f "$DOCK_DASH" ] &&
+	   ! grep -q '_initTouchScroll' "$DOCK_DASH" 2>/dev/null; then
+		cp -a "$DOCK_DASH" "$DOCK_ORIG" 2>/dev/null || true
+	fi
+	dpkg-divert --package oneplus-erhai-desktop --add --no-rename \
+		--divert "$DOCK_ORIG" "$DOCK_DASH" >/dev/null 2>&1 || true
+	install -o root -g root -m 0644 "$DOCK_PAYLOAD" "$DOCK_DASH" || true
+fi
+
+# erhai: touch long-press -> context menu for the Desktop Icons NG extension
+# (2026-10-04).  DING opens its context menus only on a secondary (mouse)
+# button press; a touch long tap arrives as an emulated primary (button 1)
+# press, so the menu never opened with a finger.  ding@rastersoft.com belongs
+# to gnome-shell-ubuntu-extensions, so the patched files are installed with
+# dpkg-divert (Ubuntu's originals kept as *.erhai-orig), exactly like the dock
+# patch above -- a plain file at the extension's own path would be a dpkg file
+# conflict and an upgrade of gnome-shell-ubuntu-extensions could clobber it.
+# DEBIAN/postrm drops the diversions again.
+DING_EXT_DIR=/usr/share/gnome-shell/extensions/ding@rastersoft.com
+DING_PAYLOAD_DIR=/usr/share/oneplus-erhai-desktop/ding-touch
+for DING_REL in app/desktopGrid.js app/desktopManager.js app/desktopIconItem.js; do
+	DING_FILE="$DING_EXT_DIR/$DING_REL"
+	DING_ORIG="$DING_FILE.erhai-orig"
+	DING_PAYLOAD="$DING_PAYLOAD_DIR/$DING_REL"
+	[ -d "$DING_EXT_DIR" ] && [ -f "$DING_PAYLOAD" ] || continue
+	# Save Ubuntu's original once -- but never our own patched file (it
+	# carries the _initTouchLongPress marker), so a re-install cannot turn
+	# the patched file into "the original".
+	if [ ! -f "$DING_ORIG" ] && [ -f "$DING_FILE" ] &&
+	   ! grep -q '_initTouchLongPress' "$DING_FILE" 2>/dev/null; then
+		cp -a "$DING_FILE" "$DING_ORIG" 2>/dev/null || true
+	fi
+	dpkg-divert --package oneplus-erhai-desktop --add --no-rename \
+		--divert "$DING_ORIG" "$DING_FILE" >/dev/null 2>&1 || true
+	install -o root -g root -m 0644 "$DING_PAYLOAD" "$DING_FILE" || true
+done
+
+if [ -d /run/systemd/system ]; then
+	if command -v dconf >/dev/null 2>&1; then
+		dconf update || true
+	fi
+	systemctl daemon-reload >/dev/null 2>&1 || true
+	for unit in erhai-gpu-pin.service erhai-desktop-gl.service \
+	            erhai-host-charge.service erhai-power-toggle.service \
+	            erhai-pogo-osk.service erhai-touchscreen.service \
+	            erhai-backlight.service erhai-greeter-brightness.service \
+	            erhai-rtc-sync.service erhai-bypass-charge.service; do
+		systemctl enable "$unit" >/dev/null 2>&1 || true
+	done
+	# erhai: bypass charging (GNOME Quick Settings switch).
+	#   * erhai-bypass-charge.service is the holder: it re-applies the persisted
+	#     choice from /etc/default/erhai-charge and re-asserts the ADSP
+	#     charge-enable inhibit every poll (the ADSP clears it on its own charge
+	#     events),
+	#   * erhai-bypass-charge@<on|off>.service is the oneshot the extension
+	#     starts (polkit, 50-erhai-bypass-charge.rules).
+	# Restarted here so an install/upgrade takes effect immediately; a fresh
+	# install has ERHAI_BYPASS_CHARGE=0 and the holder just idles.  The state
+	# file is a conffile, so an upgrade never overwrites a user's choice.
+	systemctl restart erhai-bypass-charge.service >/dev/null 2>&1 || true
+	# erhai: battery-backed clock (kernel +b8 DTB offset cell).
+	#   * erhai-rtc-sync.service stores the system clock in the PMK8550 PMIC RTC
+	#     once per boot (a no-op when hctosys just read the same value),
+	#   * erhai-rtc-sync.timer re-runs it hourly, so an NTP correction reaches
+	#     the RTC without waiting for the next reboot.
+	# On a pre-+b8 kernel the helper logs "kernel has no RTC offset storage"
+	# and exits 0, so this is safe on older kernels too.
+	systemctl enable --now erhai-rtc-sync.timer >/dev/null 2>&1 || true
+	systemctl restart erhai-rtc-sync.service >/dev/null 2>&1 || true
+	# erhai: fixed backlight level for boot and the login screen.
+	#   * erhai-backlight.service one-shots the boot level (before gdm),
+	#   * erhai-greeter-brightness.py re-pins it whenever a greeter session
+	#     appears after a logout, and keeps it pinned while one is on screen.
+	# The backlight unit is deliberately NOT started here: it would change the
+	# level of a session that is already running.  The watcher changes nothing
+	# until a greeter session exists.  (restart, not `try-restart || start`:
+	# try-restart on an inactive-but-loaded unit SUCCEEDS as a no-op, so the
+	# start would never run on a first install.)
+	systemctl restart erhai-greeter-brightness.service \
+		>/dev/null 2>&1 || true
+	# The greeter's file-db (/var/lib/gdm3/greeter-dconf-defaults) is compiled by
+	# gdm's own ExecStartPre from /usr/share/gdm/dconf, which now carries
+	# 95-erhai-greeter (greeter session-name + GNOME ALS off).  Recompile it here
+	# so a running gdm is covered without waiting for its next start.
+	if [ -x /usr/share/gdm/generate-config ]; then
+		/usr/share/gdm/generate-config >/dev/null 2>&1 || true
+	fi
+	# 99-erhai-no-gsd-ambient.gschema.override: dpkg triggers normally recompile
+	# the schema cache; do it explicitly as well (idempotent).
+	if command -v glib-compile-schemas >/dev/null 2>&1; then
+		glib-compile-schemas /usr/share/glib-2.0/schemas \
+			>/dev/null 2>&1 || true
+	fi
+	# erhai-folio-gate.service is deliberately NOT in the loop above: it is the
+	# pre-b46 fallback and is (re)armed only by the version check below.
+	# erhai-folio-fold.service is deliberately NOT enabled: the udev rules
+	# (71-erhai-folio-udev.rules) own its lifecycle on kernels whose pogo-kbd
+	# driver emits the attach/detach uevent (>= +b46).  The 1 Hz
+	# erhai-folio-gate.service is only the pre-b46 FALLBACK, so it is enabled
+	# on old kernels / unknown states (e.g. an image build where the kernel
+	# package is not yet queryable) but must never be re-armed by an upgrade
+	# on a uevent kernel once the owner disabled it.
+	KERN_DEB=$(dpkg-query -W -f='${Version}' oneplus-erhai-linux-7.2 \
+		2>/dev/null || true)
+	KERN_B=$(printf '%s\n' "$KERN_DEB" \
+		| sed -n 's/.*+b\([0-9][0-9]*\).*/\1/p')
+	if [ -n "$KERN_B" ] && [ "$KERN_B" -ge 46 ] 2>/dev/null; then
+		:   # uevent kernel: udev drives the watcher, no gate needed
+	else
+		systemctl enable --now erhai-folio-gate.service \
+			>/dev/null 2>&1 || true
+	fi
+	systemctl try-restart erhai-folio-gate.service >/dev/null 2>&1 || true
+	if [ -d /run/udev ]; then
+		# Re-apply the pogo touchpad integration tag on the running system
+		# (the pinned tablet-mode kernel + libinput need the touchpad
+		# tagged external; on older kernels this is a harmless no-op).
+		udevadm trigger --action=change --subsystem-match=input \
+			>/dev/null 2>&1 || true
+		# Fire the folio-fold udev rule for the keyboard's current state so
+		# the watcher starts without waiting for an attach/detach edge.
+		udevadm trigger --action=change --subsystem-match=serial \
+			>/dev/null 2>&1 || true
+	fi
+fi
+udevadm control --reload >/dev/null 2>&1 || true
+
+exit 0

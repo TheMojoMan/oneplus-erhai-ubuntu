@@ -1,0 +1,17 @@
+[Unit]
+Description=erhai: bypass charging holder (keep the persisted switch state on the ADSP)
+Documentation=file:/usr/share/oneplus-erhai-desktop/README.md
+After=multi-user.target
+
+[Service]
+Type=simple
+# Re-applies the persisted /etc/default/erhai-charge choice at boot and then
+# holds it: the ADSP clears the charge inhibit on its own charge events, so the
+# BATT_CHG_EN write has to be re-asserted (same 10 s cadence the in-kernel
+# max_soc limiter uses).  Also applies the low-SoC safety floor.
+ExecStart=/usr/local/sbin/erhai-bypass-charge.sh run
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

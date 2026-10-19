@@ -1,0 +1,167 @@
+Package: oneplus-erhai-desktop
+Version: 2.13
+Section: utils
+Priority: optional
+Architecture: all
+Maintainer: TheMojoMan <themojoman@gmx.net>
+Depends: python3
+Recommends: gnome-shell, dconf-cli, oneplus-erhai-sensors
+Description: Desktop glue for the OnePlus Pad 3 (erhai)
+ Everything the GNOME desktop needs on top of the base image: bringing up the
+ Adreno 830 GMU before session start (erhai-gpu-pin; the GPU is PINNED
+ always-active at runtime-PM 'on' on every kernel since 2026-09-13 — it never
+ runtime-suspends, so the intermittent GMU resume hang can never fire),
+ boot-time GL environment selection
+ (erhai-desktop-gl), power-key REAL panel power cycle
+ (erhai-power-toggle + erhai-power-watch.py -> erhai-panel-power.sh: parks the
+ GPU then tears the internal DPU/DSI panel down via gnome-shell SetActive, so
+ compiles/downloads/external-display apps keep running while the panel sleeps;
+ backlight-only toggle while a DP-1 external monitor is attached; GNOME's
+ "Suspend" wired to the proven manual-wake s2idle harness via a
+ systemd-suspend.service ExecStart override -> erhai-suspend-gnome.sh ->
+ erhai-suspend-s2idle.sh (display-off-first + WLAN quiesce + full restore;
+ short power press wakes, long press powers off; auto-sleep stays off)),
+ pogo keyboard attach/detach -> OSK on/off (erhai-pogo-osk +
+ erhai-pogo-osk.py), folio folded onto the screen -> panel backlight
+ off/on (erhai-folio-gate.service starts/stops erhai-folio-fold.py with the
+ keyboard attach state; erhai-folio-calibrate + erhai-folio-probe.py pick the
+ fold signal and write /etc/erhai/folio-fold.conf), the shared backlight
+ on/off/toggle script both features use (erhai-display-toggle.sh, which also
+ plays a panel-off click on every blank and a panel-on click on every restore
+ through the active session via pw-play; /etc/erhai/display.conf can mute or
+ replace either), ktz8868
+ backlight display toggle, USB-C host charging while acting as data
+ host (erhai-host-charge), pogo keyboard activation helper (CLI only -- the
+ app-grid launcher was removed 2026-10-17),
+ Novatek NT36536 touchscreen bring-up before GDM (erhai-touchscreen +
+ touch-calibration udev rule), dconf defaults, and the desktop-users /
+ user-groups helpers used by image presets.
+ Fixed login-screen policy (2026-09-22): the internal panel comes up at 50 % of
+ max_brightness at boot (erhai-backlight.service) and is re-pinned to 50 % for
+ every GDM greeter session, i.e. the login screen, by
+ erhai-greeter-brightness.py (a logind watcher; user sessions are never
+ touched).  GNOME's own ambient-light auto-brightness is forced OFF as a
+ GSettings DEFAULT (99-erhai-no-gsd-ambient.gschema.override) because the
+ greeter's dconf can end up unreadable, in which case only a default override
+ reaches it - that was the login screen crashing to its minimum level.  The
+ greeter also gets session-name='gnome-login' (greeter dconf seed +
+ /usr/share/gdm/dconf/95-erhai-greeter + /etc/dconf/profile/gdm) and a greeter
+ .desktop that pins --session=gnome-login, so a dconf-less greeter can no longer
+ come up as a FULL UBUNTU DESKTOP.
+ Ships the FIXED gjs-osk on-screen keyboard as a system-wide GNOME Shell
+ extension (/usr/share/gnome-shell/extensions/gjsosk@vishram1123.com/), copied
+ from the image overlay on every build so the deb and a flashed image can never
+ diverge.  Its folio gate (pogoGate.js + the [erhai] hunks in extension.js)
+ keeps the OSK from coming up by itself while the pogo keyboard is attached: no
+ touch/tap auto-show, no bottom-edge swipe, no restore at login, an
+ automatically opened keyboard is retracted on the attach edge, an external
+ keyboard-visible=true is forced back to false, and the on-screen CLOSE key
+ clears the sticky keyboard-visible flag through the extension object.  It also
+ sends modifier+key combinations for the NON-character keys and for HELD
+ modifiers (2026-10-06): tapping Shift then Enter sends Shift+Enter (likewise
+ arrows/Esc/Tab/Space), and holding Ctrl/Alt/Super with one finger while tapping
+ another key sends Ctrl/Alt/Super+key - a held modifier is applied to that key
+ and is not left latched behind.  The
+ indicator / quick-settings toggle and the `opened` command key still work, so
+ the OSK stays one deliberate tap away.  Nothing in it loads in the greeter
+ (no session-modes), which keeps GNOME's built-in OSK there.  A USER-LEVEL copy
+ of the same uuid takes precedence in gnome-shell (the user data dir is
+ collected first and the later system copy is skipped as "already installed"),
+ so a device that has one in ~/.local/share/gnome-shell/extensions/ keeps
+ loading that one.
+ Battery-backed clock (2026-09-29): the PMK8550 PMIC RTC is a 1 Hz
+ free-running counter with no wall-clock epoch of its own (and this firmware's
+ EFI "RTC" answers with an invalid date), which is why the pad used to boot at
+ 1970 and only got the right time once WiFi/NTP was up.  Kernel +b8 gives the
+ RTC an "offset" nvmem cell (PMIC SDAM 0x7150) and erhai-rtc-sync.py stores
+ system_time - counter into it once at boot and hourly
+ (erhai-rtc-sync.service + erhai-rtc-sync.timer), so the next boot is right
+ from second zero - the same value Android's time_daemon keeps in
+ /mnt/vendor/persist/time/ats_1.  The helper refuses to store an implausible
+ clock and exits 0 on a kernel without the cell (pre-+b8), so it is harmless
+ everywhere.  Audit/seed the cell by hand with workspace tmp/rtc-offset-probe.py.
+ Bypass charging (2026-09-30): a GNOME Quick Settings switch
+ (erhai-bypass@erhai.local) that stops the battery charging while a charger is
+ attached, so the tablet runs from the adapter alone (measured live: pack
+ 3.93 A -> 0.117 A = 0.49 W with the switch on, back to 1.74 A with it off).
+ The switch starts erhai-bypass-charge@<on|off>.service, which polkit lets an
+ active local user start without a prompt (50-erhai-bypass-charge.rules); the
+ helper /usr/local/sbin/erhai-bypass-charge.sh holds the ADSP battery-psy
+ charge-enable property (BATT_CHG_EN = 24, opcode 0x31) down, parks the
+ in-kernel max_soc limiter (it drives the same property, so it must stand down)
+ and applies a 10 % low-SoC safety floor; erhai-bypass-charge.service applies
+ and holds the persisted choice from /etc/default/erhai-charge at boot.
+ Since 2.6 it ALSO parks the SC8547A SuperVOOC charge pump (fastchg_deliver /
+ fastchg_auto on the *-006f master debugfs) while bypass holds: the CP is a
+ direct 2:1 path to the cell driven by the AP kernel, which the ADSP
+ charge-enable inhibit cannot reach, so a genuine SuperVOOC brick kept charging
+ straight through bypass until the CP itself was stopped (2026-10-03).  On `off`
+ it gives the CP back and restarts the VOOC PHY so the ladder re-identifies.
+ Since 2.7 the IN-KERNEL CHARGE LIMIT engages the same full bypass at the cap:
+ erhai_otg_glink's max_soc (default 80 %) only stopped the ADSP charger, which
+ on this hardware left the pad running down on battery (the erhai_pps stall
+ watchdog re-injected current, and the SC8547A pump charged through the ADSP
+ inhibit).  While the pack sits at the limit the holder now parks the stall
+ watchdog AND the charge pump and releases both below the limit (release band
+ ERHAI_BYPASS_HYST, default 3 %), so a reached charge limit means "tablet on
+ adapter power, pack held" instead of "charging off, battery draining".  The
+ kernel limiter keeps owning BATT_CHG_EN (still exactly one writer); the
+ augmentation can be disabled with ERHAI_BYPASS_AUTO_LIMIT=0.  `erhai-bypass-
+ charge.sh limit [n]` reads/sets the limit.  No kernel change is needed.
+ Since 2.8 the UBUNTU DOCK SCROLLS WITH A FINGER: a patched dash.js adds a
+ Clutter.PanGesture to the dock's scroll view (capture phase) so a quick swipe
+ scrolls the app icons with a kinetic glide, while a press-and-hold still
+ starts an icon reorder drag and mouse/trackpad drags are untouched.
+ ubuntu-dock@ubuntu.com is a GNOME SESSION-MODE extension, so a per-user
+ override is refused and the patched file must sit at its system path, which
+ belongs to gnome-shell-ubuntu-extensions; the deb ships it under a private
+ name (usr/share/oneplus-erhai-desktop/ubuntu-dock-dash.js) and DEBIAN/postinst
+ installs it with dpkg-divert (Ubuntu's file kept as dash.js.erhai-orig), so it
+ is not a dpkg file conflict and an Ubuntu upgrade cannot clobber it; postrm
+ restores Ubuntu's file on removal.  The package README documents it.
+ Re-login needed (GNOME cannot reload extension code).
+ Since 2.9 the DESKTOP ICONS NG (DING) EXTENSION OPENS ITS CONTEXT MENUS WITH A
+ LONG FINGER TAP: DING (ding@rastersoft.com) draws the desktop background and
+ icons in its own gjs process and opened both context menus only on a secondary
+ (mouse) button press (button == 3), while a touch tap or long tap arrives as an
+ emulated PRIMARY (button 1) press, so a long tap did nothing.  A touch-only
+ shim now opens the same menu when a finger is held still for 500 ms over the
+ desktop or an icon (cancelled if the finger moves more than 14 px; only events whose device source
+ is Gdk.InputSource.TOUCHSCREEN are affected, so mouse and trackpad behaviour is
+ untouched and a held mouse button does NOT open the menu).  Like the dock patch, the files belong to gnome-shell-ubuntu-extensions,
+ so the patched app/desktopGrid.js, app/desktopManager.js and
+ app/desktopIconItem.js ship under /usr/share/oneplus-erhai-desktop/ding-touch/
+ and DEBIAN/postinst installs them with dpkg-divert (Ubuntu's files kept as
+ *.erhai-orig); postrm restores them.  This is NOT reachable through GNOME's
+ built-in "Simulated Secondary Click" accessibility setting: that is implemented
+ in Mutter/Clutter for pointer buttons only, and Mutter's touch path emits
+ CLUTTER_TOUCH_* events, never a button press.  Re-login (or `pkill -f ding.js`)
+ needed to load the patched code.
+ Since 2.11 that long press is a SINGLE-FINGER gesture and it is cancelled when
+ the compositor cancels the touch.  The 500 ms timer used to be armed on the
+ emulated button-1 press of ANY touch, which is indistinguishable with one or
+ with three fingers down, so three fingers resting on the glass - or a slow
+ 3-finger workspace swipe, whose fingers rest before they move - opened the
+ desktop menu 500 ms in; the menu's popup grab then cancelled the shell's
+ 3-finger workspace gesture (SwipeTracker._cancelPanGesture() ends at
+ cancelProgress = the CURRENT workspace), i.e. the swipe snapped back and only
+ fast swipes still worked.  DING now watches the raw touch events (adds
+ Gdk.EventMask.TOUCH_MASK and handles touch-event: GTK3 delivers one per finger,
+ while the emulated button event carries no finger count) and a touch the
+ compositor CANCELS because the shell grabbed it for a gesture never comes with
+ a button-release - so the cancel must also clear the timer.  A live finger
+ count + a "saw more than one finger" latch gate the timer, so the menu opens
+ only for a real one-finger long press (or a mouse right-click, which is a
+ different code path entirely and untouched).
+ Since 2.13 the CHARGE-LIMIT BYPASS RELEASES ONLY A PARK IT RECORDED.  The
+ release path decided "something is parked" from the SC8547A pump's own
+ fastchg_deliver reading 0 - but 0 is ALSO the driver's normal idle state (no
+ (S)VOOC brick attached, or any auto-decline/auto-finish/PHY stop), so the holder
+ re-armed the pump and bounced the VOOC PHY (vooc 0 -> 1) on EVERY poll; a PHY
+ stop flips the USB D+/D- crossbar, so every attached USB device was dropped and
+ re-enumerated once per POLL+1 s, forever (measured 2026-10-18: a Kingston
+ DataTraveler cycled every 11 s with no charger even attached).  A limit park is
+ now recorded in /run/erhai-charge-limit-parked (written BEFORE the park, so a
+ park can never exist without its record) and only a recorded park is released,
+ exactly once; the manual switch keeps its own record in
+ /etc/default/erhai-charge.  No kernel change is needed.

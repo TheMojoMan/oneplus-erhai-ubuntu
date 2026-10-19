@@ -1,0 +1,17 @@
+Package: oneplus-erhai-bluetooth
+Version: 2.3
+Section: net
+Priority: optional
+Architecture: all
+Maintainer: TheMojoMan <themojoman@gmx.net>
+Depends: bluez
+Description: Bluetooth support package for the OnePlus Pad 3 (erhai)
+ Since 2.2 this package no longer ships per-device address machinery. The
+ shared DTB address (C0:FF:EE:13:1E:1A) is used for all devices; BT comes up
+ instantly via stock bluetooth.service. The former erhai-bt-addr /
+ erhai-bt-up services and scripts are retired by the postinst.
+ .
+ Since 2.3 the postinst also sets "FilterDiscoverable = false" in
+ /etc/bluetooth/main.conf: BlueZ 5.85 defaults to hiding non-discoverable LE
+ advertisers, which made the OnePlus Stylo pen invisible to bluetoothctl
+ (its advertisement carries Flags=0x04, i.e. no LE-discoverable bit).

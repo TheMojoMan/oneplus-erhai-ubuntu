@@ -1,0 +1,18 @@
+[Unit]
+Description=erhai Android-style whole-die CPU+GPU thermal governor (NPU-aware)
+DefaultDependencies=no
+After=sysinit.target
+Before=multi-user.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/erhai-thermal.sh monitor
+ExecStop=/usr/local/sbin/erhai-thermal.sh release
+KillSignal=SIGTERM
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

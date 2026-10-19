@@ -1,0 +1,216 @@
+#!/bin/bash
+# oneplus-erhai-linux postinst: turn the installed vmlinuz + DTB into a Unified
+# Kernel Image and put it in /boot of THIS root filesystem, where rEFInd finds it.
+#
+# The boot chain is: power-on / reboot -> multiboot loader in boot_a -> Mu-erhai
+# (UEFI) -> rEFInd -> the entry the user picks. There is no bootloader config to
+# update: rEFInd scans the "boot" directory of EVERY volume, so writing the .efi
+# into /boot is the whole job.
+#
+# 2026-10-17 (owner decision, live-tested): the ESP is NOT written any more.  An
+# erhai image boots the UKI that lives in its own /boot (the root filesystem is
+# built with LABEL=ubuntu, which is what gives those entries the os_ubuntu icon)
+# and the installer ships no UKI on the ESP either.  ESP entries left by earlier
+# installs stay where they are -- nothing here deletes an .efi.  The retired ESP
+# machinery (mount by partlabel, reuse-an-already-mounted-ESP, the fallbacks) is
+# preserved in /media/data/develop/erhai/tmp/esp-uki-machinery-backup-20261017/.
+set -e
+
+# 1. Kernel version = this package's version minus the "+b<N>" Debian revision
+#    that build-kernel.sh appends to the .deb Version only (so apt sees
+#    rebuilds of the same kernelrelease as upgrades). The revision is NOT part
+#    of the kernelrelease.
+KVER=$(dpkg-query --show --showformat='${Version}' "$DPKG_MAINTSCRIPT_PACKAGE")
+FULLVER="$KVER"
+KVER="${KVER%%+b*}"
+
+if [ -z "$KVER" ]; then
+    echo "Error: Could not determine kernel version."
+    exit 1
+fi
+
+CLEAN_KVER="${KVER//-sm8750-themojoman/}"
+
+# erhai UKI file naming: use the +b<N> Debian revision as part of the EFI
+# filename (<release>-b<N>.efi, e.g. 7.3.0-rc4-b33.efi) so the rEFInd
+# menu clearly identifies which build+kernel is booted (owner request
+# 2026-09-13). Fall back to the release-based name when there is no +b<N>
+# (e.g. a base image build).
+DEB_REV="${FULLVER##*+b}"
+if [ "$DEB_REV" = "$FULLVER" ]; then
+    DEB_REV=""
+fi
+
+# 2. Are we running inside a build CHROOT (build-root.sh's image build) instead
+#    of on a live system?
+#
+#    It decides ONE thing now that the ESP is no longer written (2026-10-17):
+#    which root label -- and therefore which file name and which root= -- the UKI
+#    gets.  Inside a chroot NOTHING describes this machine: mountinfo and
+#    /proc/cmdline are the HOST's (findmnt -no SOURCE / answers /dev/sda18, or
+#    nothing at all when /sys is not bound), so a chrooted install would bake the
+#    developer machine's root= into the IMAGE's UKI -- measured 2026-09-29, when
+#    a `linux1` machine produced a `linux`-labelled UKI for the image.
+#
+#    Detect it by comparing OUR root filesystem with the root of the namespace's
+#    PID 1: on a live system they are the same (measured: / and -L /proc/1/root
+#    both 66307:2), in a chroot they differ (66308:9975279 vs 66307:2).  An
+#    unreadable/absent /proc/1/root is treated as a chroot -- the safe direction,
+#    because a chroot must never take the host's cmdline for its own.
+IN_CHROOT=false
+ROOT_IDS="$(stat -c '%d:%i' / 2>/dev/null || true)"
+PID1_IDS="$(stat -L -c '%d:%i' /proc/1/root 2>/dev/null || true)"
+if [ "${ERHAI_FORCE_CHROOT:-0}" = 1 ]; then
+    IN_CHROOT=true
+elif [ -z "$ROOT_IDS" ] || [ -z "$PID1_IDS" ]; then
+    IN_CHROOT=true
+elif [ "$ROOT_IDS" != "$PID1_IDS" ]; then
+    IN_CHROOT=true
+fi
+
+# 3. Root partition label, so the cmdline follows whichever partition this kernel
+#    is installed for instead of a hard-coded /dev/sdaN (UFS enumeration order is
+#    not fixed).  Sources, in order: an explicit ERHAI_ROOT_LABEL (test/seam), the
+#    cmdline we were booted with, then the partition backing /.
+#
+#    On a LIVE system the label MUST resolve: `linux1` while installed on the
+#    development partition, `linux` on the shipped one.  Guessing is not allowed
+#    -- a wrong root= makes the boot entry unbootable, which is worse than an
+#    install that does not offer an entry at all.
+if [ "$IN_CHROOT" = true ]; then
+    ROOT_LABEL="${ERHAI_ROOT_LABEL:-}"
+else
+    ROOT_LABEL="${ERHAI_ROOT_LABEL:-$(tr ' ' '\n' < /proc/cmdline 2>/dev/null \
+                     | sed -n 's/^root=PARTLABEL=//p' | head -n1)}"
+    if [ -z "$ROOT_LABEL" ]; then
+        ROOT_LABEL="$(lsblk -no PARTLABEL "$(findmnt -no SOURCE /)" 2>/dev/null | head -n1)"
+    fi
+fi
+
+if [ "$IN_CHROOT" = true ]; then
+    # Build chroot: the image is built for build-root.sh's own root partition,
+    # PARTLABEL=linux, and the host's cmdline must not leak in.
+    [ -n "$ROOT_LABEL" ] || ROOT_LABEL="linux"
+    echo "Notice: build chroot detected -- the image's UKI goes to /boot with"
+    echo "        root=$ROOT_LABEL (the host's cmdline is ignored)."
+elif [ -z "$ROOT_LABEL" ]; then
+    echo "Error: cannot determine the root partition label of this system" >&2
+    echo "       (neither the cmdline nor findmnt/lsblk answered). Not guessing:" >&2
+    echo "       no UKI written." >&2
+    exit 0
+elif [ ! -e "/dev/disk/by-partlabel/$ROOT_LABEL" ]; then
+    echo "Error: root label '$ROOT_LABEL' has no /dev/disk/by-partlabel entry," >&2
+    echo "       so a UKI built here could not find its root at boot." >&2
+    echo "       No UKI written." >&2
+    exit 0
+fi
+
+# 4. EFI filename and kernel command line.
+#
+#    The name carries the root partition as well as the build revision, so the
+#    rEFInd menu is unambiguous when several kernels sit in one /boot (the `-l1`
+#    tag marks a UKI that was installed from the development partition):
+#
+#      installed from the linux1 partition (development)  -> <kver>-l1-b<N>.efi
+#      installed from the linux  partition (shipped image) -> <kver>-b<N>.efi
+#      no +b<N> revision (base image build)                -> <kver>-<root label>.efi
+#
+#    The postrm rebuilds this EXACTLY (it must, or removal cannot find the file),
+#    so any change here has to be mirrored there.
+#
+#    usbcore.autosuspend=-1 is load-bearing, not tuning: with autosuspend on,
+#    USB-OTG HID devices enumerate, work for a few seconds and then die in an
+#    EPROTO (-71) reset storm on the first resume.
+#
+#    Do NOT add fw_devlink=permissive here. It lets DSI probe ahead of its
+#    regulators, which turns into a racy PLL-lock failure and a boot that wedges
+#    before the rootfs.
+#
+#    clk_ignore_unused / pd_ignore_unused are load-bearing as well (measured
+#    2026-09-29): 544 clocks are in the tree, 231 have their hardware enable bit
+#    set and 134 of those have NO driver holding them -- the whole DSI1 PLL
+#    chain, the USB3 + UFS PHY clocks, rf_clk1..3 (WiFi/BT/modem), the cam/video/
+#    disp PLLs and 79 LPASS audio clocks; on the power-domain side NCC0_0 and
+#    NCC1_1 are ON with no device attached at all. Drop either flag and
+#    clk_disable_unused() / genpd_power_off_unused() act at ~0.65 s, before the
+#    display, audio and USB stacks have taken over -- the silent-POR class.
+#
+#    log_buf_len=8M: the default ring is 128 KiB (CONFIG_LOG_BUF_SHIFT 17, not
+#    overridden in erhai_defconfig) which wraps in minutes; the silent-POR class
+#    is only diagnosable from the last kernel lines before the reset.
+#
+#    earlycon=efifb was DROPPED 2026-09-29: 'console=tty0' registers the dmesg
+#    dummy console at 0.000116 s and printk then unregisters every boot console
+#    (0.000118 s), so the efifb bootconsole never printed anything tty0 did not
+#    already own. consoleblank=0 was dropped too -- it already defaults to 0 in
+#    this kernel (drivers/tty/vt/vt.c), so the token was a no-op.
+if [ "$ROOT_LABEL" = "linux1" ]; then
+    ROOT_TAG="-l1"
+else
+    ROOT_TAG=""
+fi
+
+if [ -n "$DEB_REV" ]; then
+    OUTPUT_EFI="${CLEAN_KVER}${ROOT_TAG}-b${DEB_REV}.efi"
+else
+    OUTPUT_EFI="${CLEAN_KVER}-${ROOT_LABEL}.efi"
+fi
+CMDLINE="root=PARTLABEL=$ROOT_LABEL rootwait rw rootfstype=ext4 fw_devlink=off \
+console=tty0 loglevel=4 clk_ignore_unused pd_ignore_unused \
+panic=30 usbcore.autosuspend=-1 log_buf_len=8M"
+
+BOOT_DIR="/boot"
+KERNEL_IMG="$BOOT_DIR/vmlinuz-$KVER"
+DTB_FILE="$BOOT_DIR/dtb-$KVER"
+
+UKIFY_BIN=$(which ukify)
+
+# 5. Module dependencies for the new kernel.
+if [ -d "/lib/modules/$KVER" ] && command -v depmod > /dev/null; then
+    depmod -a "$KVER" || true
+fi
+
+# 6. Print full details in the requested format
+echo "Post-install: Generating UKI..."
+echo " - Kernel:  $KERNEL_IMG"
+echo " - DTB:     $DTB_FILE"
+echo " - Output:  $OUTPUT_EFI"
+echo " - Cmdline: $CMDLINE"
+
+# 7. Build the UKI. The DTB is always embedded: Mu-erhai hands us no device
+#    tree, so a kernel without one gets nowhere.
+if [ -f "$KERNEL_IMG" ] && [ -x "$UKIFY_BIN" ]; then
+    "$UKIFY_BIN" build \
+        --linux "$KERNEL_IMG" \
+        --devicetree "$DTB_FILE" \
+        --efi-arch aa64 \
+        --cmdline "$CMDLINE" \
+        --output "$OUTPUT_EFI"
+else
+    echo "Error: Kernel image or ukify not found. Skipping UKI generation."
+    exit 0
+fi
+
+# 8. Publish the UKI into /boot of THIS root filesystem.
+#
+#    One path for every case (2026-10-17): rEFInd scans the "boot" directory of
+#    every volume, so this single copy IS the boot entry -- on a live system and
+#    in an image build alike.  No ESP mount, no partlabel guess, no
+#    read-only-ESP handling and no "which partition was it installed from"
+#    bookkeeping: the file name still carries the root tag (see step 4) so
+#    several kernels in /boot stay distinguishable, and the VOLUME's label
+#    (`ubuntu` on an image) is what gives the entry its icon.
+#
+#    THIS SCRIPT MUST NEVER DELETE AN .efi.  An install only adds its own entry;
+#    every older revision stays in /boot as a rollback entry (rEFInd lists them
+#    all).  Removing a boot entry is the postrm's job, and only for the package
+#    version being removed.
+cp "$OUTPUT_EFI" /boot/
+sync
+echo "Notice: $OUTPUT_EFI copied to /boot/ (rEFInd scans /boot; the ESP is untouched)."
+echo "Pick it in the rEFInd menu on the next boot."
+
+# 9. Cleanup: the UKI is not kept in the CWD (it lives in /boot).
+rm -f "$OUTPUT_EFI"
+
+exit 0

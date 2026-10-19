@@ -1,0 +1,35 @@
+Package: oneplus-erhai-torch
+Version: 0.1
+Section: utils
+Priority: optional
+Architecture: all
+Maintainer: TheMojoMan <themojoman@gmx.net>
+Depends: udev
+Recommends: gnome-shell
+Description: Torch (rear camera flash LED) control for the OnePlus Pad 3 (erhai)
+ Turns the rear camera flash into a usable torch with on/off and a
+ brightness slider, driven from a GNOME Quick Settings quick slider
+ (erhai-torch@erhai.local).
+ .
+ The rear flash is the pm8550 SPMI flash-LED controller (led-controller@ee00)
+ exposed by leds-qcom-flash as two LEDs, white:flash-0 (channels 1+4) and
+ white:flash-1 (channels 2+3). Writing the LED class 'brightness' attribute
+ puts the LED into TORCH mode: the driver scales the torch current against
+ led-max-microamp (500 mA per LED, split over the two channels), and a value
+ of 0 disables the module again. That is exactly what a torch slider wants,
+ so the extension drives 'brightness' directly.
+ .
+ Writing a sysfs attribute is a privileged operation, and 'uaccess' does not
+ help here: LED class devices have no device node, so logind has nothing to
+ put an ACL on. The shipped udev rule (71-erhai-torch.rules) instead chgrp's
+ the LED attributes to a dedicated 'erhai-torch' group and makes them group
+ writable at device-add time, and the postinst puts the desktop users into
+ that group. The slider therefore writes the LED itself, with no root helper,
+ no polkit prompt and no round trip through a service.
+ .
+ Group membership takes effect at the next login, so an existing session may
+ need one logout before the slider can drive the LED; the extension reports
+ exactly that if the write is refused.
+ .
+ The extension switches the torch off when it is disabled (including at
+ logout), so a panel toggle can never leave the flash burning unattended.

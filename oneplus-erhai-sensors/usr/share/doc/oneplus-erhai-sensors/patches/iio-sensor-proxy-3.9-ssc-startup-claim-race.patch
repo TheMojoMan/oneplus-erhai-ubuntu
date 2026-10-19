@@ -1,0 +1,32 @@
+Fix SSC sensor startup race: start polling for clients that claimed during discovery
+Upstream 3.9 owns the D-Bus name before find_sensors() completes. A claim that
+arrives during the multi-second SSC discovery window inserts the client but
+cannot start polling (no driver yet), and initial-scan sensors never emit a
+hotplug uevent, so the sensor never starts. Mirror the hotplug path in
+name_acquired_handler(): start polling for driver types that already have
+claimants once discovery finishes.
+--- a/src/iio-sensor-proxy.c
++++ b/src/iio-sensor-proxy.c
++++ iio-sensor-proxy-3.9/src/iio-sensor-proxy.c	2026-09-06 19:03:38.312995058 +0200
+@@ -784,6 +784,21 @@
+ 	if (!any_sensors_left (data))
+ 		goto bail;
+ 
++	/* Clients that claimed a sensor while discovery was still running
++	 * (possible because the D-Bus name is owned before find_sensors()
++	 * completes) never got their driver started: there was no driver yet
++	 * at claim time, and sensors found by the initial scan do not
++	 * generate a hotplug uevent. Start polling for those clients now,
++	 * mirroring what the hotplug path does. */
++	for (i = 0; i < NUM_SENSOR_TYPES; i++) {
++		if (DEVICE_FOR_TYPE(i) && g_hash_table_size (data->clients[i]) > 0) {
++			g_debug ("Starting driver for clients that claimed the %s sensor during startup",
++				 driver_type_to_str (i));
++			data->sensor_startup_dbus_event_delayed[i] = TRUE;
++			driver_set_polling (DEVICE_FOR_TYPE(i), TRUE);
++		}
++	}
++
+ 	send_dbus_event (data, PROP_ALL);
+ 	send_dbus_event (data, PROP_ALL_COMPASS);
+ 	return;

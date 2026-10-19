@@ -1,0 +1,32 @@
+Package: oneplus-erhai-mesa
+Version: 26.3.0~devel.git230483.gf5cb8ee032a-1erhai1
+Section: libs
+Priority: optional
+Architecture: arm64
+Maintainer: TheMojoMan <themojoman@gmx.net>
+Depends: libc6, libdrm2, libexpat1, libgcc-s1, libstdc++6,
+ libwayland-client0, libx11-6, libx11-xcb1, libxext6, libxxf86vm1,
+ libxcb1, libxcb-dri3-0, libxcb-glx0, libxcb-keysyms1, libxcb-present0,
+ libxcb-randr0, libxcb-shm0, libxcb-sync1, libxcb-xfixes0,
+ libxshmfence1, zlib1g, libzstd1,
+ libllvm21, libllvmspirvlib21.1
+Recommends: libvulkan1
+Suggests: vulkan-tools, mesa-utils
+Installed-Size: 134032
+Description: Mesa 26.3.0-devel (turnip/freedreno) for the OnePlus Pad 3 (erhai)
+ Out-of-tree Mesa build for the Adreno 830 (gen8_0_1) in the OnePlus Pad 3,
+ installed under /opt/mesa so it never shadows the system Mesa.
+ .
+ Ubuntu's Mesa is too old for gen8: its freedreno gallium driver refuses the
+ chip ("failed to create dri2 screen") and its turnip does not recognise the
+ chip id, so GL falls back to llvmpipe and every hardware-accelerated Vulkan
+ client fails. This build supports the part both ways -- native freedreno
+ gallium (GL_RENDERER=FD830) and Vulkan 1.4 turnip, with zink on top of it as
+ the alternative GL path.
+ .
+ Nothing is activated by installing this package. The desktop session opts in
+ through environment variables (VK_DRIVER_FILES, LD_LIBRARY_PATH,
+ __EGL_VENDOR_LIBRARY_FILENAMES); a ready-made drop-in is shipped at
+ /usr/share/oneplus-erhai-mesa/10-desktop.conf.gpu, which is what
+ erhai-desktop-gl.service installs into the user's environment.d when the
+ kernel has the GPU enabled.

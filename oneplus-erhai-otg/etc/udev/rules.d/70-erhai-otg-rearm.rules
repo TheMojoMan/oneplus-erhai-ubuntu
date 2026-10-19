@@ -1,0 +1,9 @@
+# erhai (OnePlus Pad 3): re-arm the ADSP OTG session after Type-C detach.
+# After a detach the ADSP CC attach detection can stay dead until the session
+# is re-armed (see /usr/local/sbin/erhai-otg-rearm.sh).
+#
+# Trigger on port0 "change"; the script does the detach-edge detection
+# (marker file) so the re-arm write's own change uevents cannot loop.
+# NOTE: ACTION=="remove" + SYSTEMD_WANTS never fires (systemd drops the
+# start request for deleted devices) - do not rely on remove rules.
+ACTION=="change", SUBSYSTEM=="typec", KERNEL=="port0", TAG+="systemd", ENV{SYSTEMD_WANTS}="erhai-otg-rearm.service"

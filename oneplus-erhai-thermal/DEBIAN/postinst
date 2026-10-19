@@ -1,0 +1,40 @@
+#!/bin/bash
+set -e
+
+if [ -d /run/systemd/system ]; then
+	systemctl daemon-reload >/dev/null 2>&1 || true
+	systemctl enable erhai-thermal.service >/dev/null 2>&1 || true
+	# v1.2 turns the boot one-shot into the long-running governor: stop whatever
+	# the previous version left in the exited state, then start the governor so
+	# the switch is live immediately (no reboot needed).  Both are idempotent
+	# and safe during image build (no /run/systemd/system -> skipped above).
+	systemctl stop erhai-thermal.service >/dev/null 2>&1 || true
+	systemctl reset-failed erhai-thermal.service >/dev/null 2>&1 || true
+	systemctl start erhai-thermal.service >/dev/null 2>&1 || true
+fi
+
+# A stale USER-level extension copy (~/.local/share/gnome-shell/extensions/)
+# SHADOWS the system copy this package installs — gnome-shell prefers the
+# user directory. Purge user-level copies of every extension shipped by
+# this package from all home directories so the installed version always
+# takes effect.
+for uuid in erhai-thermal@erhai.local; do
+	for home in /root /home/*; do
+		[ -d "$home/.local/share/gnome-shell/extensions/$uuid" ] || continue
+		rm -rf "${home:?}/.local/share/gnome-shell/extensions/$uuid"
+		echo "erhai-thermal: removed shadowing user-level copy of $uuid in $home/.local/share/gnome-shell/extensions/"
+	done
+done
+
+# /etc/default/erhai-thermal is STATE: the governor rewrites it on every profile
+# switch.  It is therefore NOT a payload file - shipping it (as a plain file or as
+# a conffile) makes dpkg flag it as modified on every `dpkg -V` forever.  Seed it
+# ONCE from the shipped template and never touch an existing file, so an upgrade
+# keeps the user's profile and tunables.  A missing file is also fine: the script
+# falls back to its built-in default (performance).
+if [ ! -e /etc/default/erhai-thermal ] && [ -r /usr/share/oneplus-erhai-thermal/defaults ]; then
+	install -m644 /usr/share/oneplus-erhai-thermal/defaults /etc/default/erhai-thermal || true
+	echo "erhai-thermal: seeded /etc/default/erhai-thermal from the shipped template"
+fi
+
+exit 0

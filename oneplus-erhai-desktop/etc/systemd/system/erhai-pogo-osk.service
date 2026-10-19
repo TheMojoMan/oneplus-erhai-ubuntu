@@ -1,0 +1,12 @@
+[Unit]
+Description=erhai pogo keyboard attach -> OSK off / detach -> OSK on
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/erhai-pogo-osk.py
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

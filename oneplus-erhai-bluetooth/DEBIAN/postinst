@@ -1,0 +1,66 @@
+#!/bin/bash
+# oneplus-erhai-bluetooth postinst (2.2+): RETIREMENT of the per-device
+# address machinery. Decision 2026-09-03: every device ships the shared DTB
+# address; uniqueness was dropped in favour of instant bring-up and zero
+# moving parts. This postinst disables/stops the old units (the unit and
+# script files themselves are removed by dpkg because 2.2 no longer ships
+# them), and deletes the persisted per-device address.
+set -e
+
+if [ -d /run/systemd/system ]; then
+	systemctl daemon-reload >/dev/null 2>&1 || true
+	systemctl disable erhai-bt-addr.service erhai-bt-up.service >/dev/null 2>&1 || true
+	systemctl stop erhai-bt-addr.service erhai-bt-up.service >/dev/null 2>&1 || true
+fi
+
+# Vestigial per-device address (no longer consumed by anything).
+rm -f /var/lib/erhai/bt-address
+rmdir /var/lib/erhai 2>/dev/null || true
+
+# --- 2.3: BlueZ 5.85 hides NON-DISCOVERABLE LE advertisers by default -------
+# BlueZ >= 5.85 defaults btd_opts.filter_discoverable to true (src/main.c
+# init_defaults()), and device_is_discoverable() then requires the LE
+# General/Limited Discoverable flag in the advertisement (src/adapter.c);
+# btd_adapter_device_found() DROPS a device whose advertisement lacks it.  A
+# OnePlus Stylo 2 pen advertises connectable ADV_IND with Flags=0x04
+# (BR/EDR-not-supported only, NO discoverable bit), so bluetoothd never creates
+# a Device1 for it and `bluetoothctl connect` fails "Device not available" -
+# measured 2026-10-03 on Marcos' pad: the pen is in the raw HCI capture at
+# -40 dBm yet absent from `bluetoothctl devices`.  The main.conf option below is
+# the escape hatch.  Verified live on erhai: with it false a non-discoverable
+# advertiser IS surfaced, with the default true it is not.
+CONF=/etc/bluetooth/main.conf
+if [ -f "$CONF" ] && command -v python3 >/dev/null 2>&1; then
+	python3 - "$CONF" <<'PY' || true
+import re, sys
+p = sys.argv[1]
+lines = open(p, encoding="utf-8").read().splitlines()
+found = False
+out = []
+for ln in lines:
+    if re.match(r'^\s*#?\s*FilterDiscoverable\s*=', ln):
+        out.append("FilterDiscoverable = false")
+        found = True
+    else:
+        out.append(ln)
+if not found:
+    res = []
+    ins = False
+    for ln in out:
+        res.append(ln)
+        if not ins and ln.strip() == "[General]":
+            res.append("FilterDiscoverable = false")
+            ins = True
+    if not ins:
+        res.append("FilterDiscoverable = false")
+    out = res
+open(p, "w", encoding="utf-8").write("\n".join(out) + "\n")
+PY
+	if [ -d /run/systemd/system ]; then
+		systemctl restart bluetooth >/dev/null 2>&1 || true
+	fi
+fi
+
+echo "oneplus-erhai-bluetooth: per-device BT address machinery retired; FilterDiscoverable=false applied (non-discoverable LE devices such as the pen become visible/connectable)"
+
+exit 0

@@ -1,0 +1,16 @@
+[Unit]
+Description=erhai: internal panel backlight to the fixed boot level
+# Runs after systemd-backlight@ (which restores whatever value was saved at the
+# last shutdown) and before anything that puts a session on the screen, so the
+# boot state is deterministic.  The login screen is additionally pinned by
+# erhai-greeter-brightness.service.
+After=local-fs.target systemd-backlight@backlight:ktz8868-backlight.service
+Before=gdm.service display-manager.service erhai-touchscreen.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/erhai-backlight-fixed.sh
+
+[Install]
+WantedBy=multi-user.target

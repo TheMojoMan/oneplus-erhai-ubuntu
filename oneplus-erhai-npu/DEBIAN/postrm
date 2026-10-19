@@ -1,0 +1,15 @@
+#!/bin/bash
+# oneplus-erhai-npu postrm: tear the fallback unit down on remove (not on upgrade
+# -- a removed unit file must not leave an enabled-but-missing unit).  The
+# cdsprpcd daemon belongs to oneplus-erhai-fastrpc and is left alone.
+set -e
+
+case "${1:-}" in
+remove|purge)
+	systemctl stop hexagonrpcd-cdsp.service >/dev/null 2>&1 || true
+	systemctl disable hexagonrpcd-cdsp.service >/dev/null 2>&1 || true
+	systemctl daemon-reload >/dev/null 2>&1 || true
+	;;
+esac
+
+exit 0

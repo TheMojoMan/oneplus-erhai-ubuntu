@@ -1,0 +1,48 @@
+#!/bin/bash
+# erhai: undo the Ubuntu Dock touch-scroll diversion (see DEBIAN/postinst).
+#
+# postinst diverted /usr/share/gnome-shell/extensions/ubuntu-dock@ubuntu.com/
+# dash.js so this package's patched copy could sit at that path without a dpkg
+# file conflict.  On a real removal (not an upgrade) the diversion must go
+# again, otherwise the path stays diverted and the stock dash.js would never be
+# restored -- the dock extension would then load with NO dash.js at all.
+#
+# The diversion was registered WITHOUT --rename, so dpkg-divert does not touch
+# files here; we copy Ubuntu's saved original (dash.js.erhai-orig) back over the
+# patched copy ourselves.  (`dpkg-divert --remove --rename` cannot be used: it
+# refuses to overwrite the different existing dash.js -- measured 2026-10-04.)
+set -e
+
+DOCK_EXT_DIR=/usr/share/gnome-shell/extensions/ubuntu-dock@ubuntu.com
+DOCK_DASH="$DOCK_EXT_DIR/dash.js"
+DOCK_ORIG="$DOCK_DASH.erhai-orig"
+
+case "$1" in
+remove|purge)
+	dpkg-divert --remove --no-rename \
+		--divert "$DOCK_ORIG" "$DOCK_DASH" >/dev/null 2>&1 || true
+	if [ -f "$DOCK_ORIG" ]; then
+		cp -f "$DOCK_ORIG" "$DOCK_DASH" >/dev/null 2>&1 || true
+	elif [ ! -f "$DOCK_DASH" ]; then
+		echo "oneplus-erhai-desktop: warning: no $DOCK_DASH and no saved" >&2
+		echo "  original -- reinstall gnome-shell-ubuntu-extensions" >&2
+	fi
+
+	# erhai: undo the DING touch long-press diversions (see DEBIAN/postinst).
+	DING_EXT_DIR=/usr/share/gnome-shell/extensions/ding@rastersoft.com
+	for DING_REL in app/desktopGrid.js app/desktopManager.js app/desktopIconItem.js; do
+		DING_FILE="$DING_EXT_DIR/$DING_REL"
+		DING_ORIG="$DING_FILE.erhai-orig"
+		dpkg-divert --remove --no-rename \
+			--divert "$DING_ORIG" "$DING_FILE" >/dev/null 2>&1 || true
+		if [ -f "$DING_ORIG" ]; then
+			cp -f "$DING_ORIG" "$DING_FILE" >/dev/null 2>&1 || true
+		elif [ ! -f "$DING_FILE" ]; then
+			echo "oneplus-erhai-desktop: warning: no $DING_FILE and no" >&2
+			echo "  saved original -- reinstall gnome-shell-ubuntu-extensions" >&2
+		fi
+	done
+	;;
+esac
+
+exit 0

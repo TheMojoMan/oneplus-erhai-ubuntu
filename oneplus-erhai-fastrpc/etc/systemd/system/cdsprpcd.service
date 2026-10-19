@@ -1,0 +1,12 @@
+[Unit]
+Description=cDSP RPC daemon
+After=dev-fastrpc\x2dcdsp.device dev-fastrpc\x2dcdsp\x2dsecure.device
+ConditionPathExists=|/dev/fastrpc-cdsp
+ConditionPathExists=|/dev/fastrpc-cdsp-secure
+
+[Service]
+Type=exec
+ExecStart=/usr/local/sbin/cdsprpcd
+Restart=on-failure
+RestartSec=5
+RestartForceExitStatus=SIGTERM

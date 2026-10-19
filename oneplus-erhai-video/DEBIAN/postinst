@@ -1,0 +1,19 @@
+#!/bin/sh
+set -e
+
+# /dev/dma_heap/system must be 0666 (99-iris-dmaheap.rules) for the iris
+# VA-API driver to allocate system DMA-BUFs; without it browsers fall back
+# to memfd backings EGL cannot import (software decode). The rule normally
+# applies on coldplug, make it effective immediately on a running system.
+if [ -e /dev/dma_heap/system ]; then
+	chmod 0666 /dev/dma_heap/system 2>/dev/null || true
+	udevadm trigger --subsystem-match=dma_heap 2>/dev/null || true
+fi
+
+# Everything else needs no activation step:
+# - Firefox: policies.json applies at next launch; the MOZ_DISABLE_RDD_SANDBOX
+#   environment at next login (environment.d).
+# - Chromium: the wrapper sources every /etc/chromium.d/* file at each launch.
+# - Brave: /etc/brave/policies/managed/*.json applies at each launch.
+
+exit 0

@@ -1,0 +1,11 @@
+{
+  "uuid": "erhai-bypass@erhai.local",
+  "name": "erhai Bypass Charging",
+  "description": "Switch that stops the battery from charging while a charger is attached, so the tablet runs from the adapter only (ADSP BATT_CHG_EN held down by erhai-bypass-charge.sh).",
+  "shell-version": [
+    "48",
+    "49",
+    "50"
+  ],
+  "version": 1
+}

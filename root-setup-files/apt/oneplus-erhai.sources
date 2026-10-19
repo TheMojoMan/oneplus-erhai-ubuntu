@@ -1,0 +1,33 @@
+# TheMojoMan PPA – OnePlus Pad 3 (erhai) kernel packages
+# Ubuntu 26.04 LTS (Resolute Racoon)
+# Modern DEB822 format (.sources)
+#
+# Installation:
+#   1. Import GPG key:
+#      wget -qO- https://themojoman.github.io/ppa/themojoman.gpg \
+#        | sudo gpg --dearmor -o /etc/apt/keyrings/themojoman.gpg
+
+# Universal Repository (for all Ubuntu versions)
+Types: deb
+URIs: https://themojoman.github.io/ppa/oneplus-erhai/ubuntu/main/
+Suites: ./
+Signed-By: /etc/apt/keyrings/themojoman.gpg
+
+# Version-Specific Repository (only for resolute)
+#Types: deb
+#URIs: https://themojoman.github.io/ppa/oneplus-erhai/ubuntu/resolute/
+#Suites: ./
+#Signed-By: /etc/apt/keyrings/themojoman.gpg
+# Version-Specific Repository (only for resolute)
+#Types: deb
+#URIs: https://themojoman.github.io/ppa/oneplus-erhai/ubuntu/resolute/
+#Suites: ./
+#Signed-By: /etc/apt/keyrings/themojoman.gpg
+
+# TESTING suite -- PRIVATE, opt-in. NOT enabled in shipped images: fresh
+# builds land here first and only the repo owner's own device lists this
+# entry. Promoted to main/ via update-ppa.sh --cptesting.
+#Types: deb
+#URIs: https://themojoman.github.io/ppa/oneplus-erhai/ubuntu/testing/
+#Suites: ./
+#Signed-By: /etc/apt/keyrings/themojoman.gpg

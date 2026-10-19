@@ -1,0 +1,131 @@
+#!/bin/bash
+set -e
+
+ldconfig >/dev/null 2>&1 || true
+
+# The ADSP daemon runs as User=fastrpc / Group=fastrpc (upstream's unit), so the
+# group must exist before hexagonrpcd is (re)started.  oneplus-erhai-fastrpc
+# declares and owns it (usr/lib/sysusers.d/fastrpc.conf), but the ADSP path must
+# also work where the CDSP/NPU stack is not installed -- create it defensively.
+# groupadd comes from passwd (essential), so this adds no dependency.
+if ! getent group fastrpc >/dev/null 2>&1; then
+	groupadd --system fastrpc
+	echo "oneplus-erhai-sensors: created the fastrpc group (hexagonrpcd runs as it)"
+fi
+
+if [ -d /run/systemd/system ]; then
+	systemctl daemon-reload >/dev/null 2>&1 || true
+	systemctl enable hexagonrpcd.service >/dev/null 2>&1 || true
+	# erhai-alsd is a USER service: enable globally (all future users) and
+	# start/refresh it for every active graphical session now.
+	systemctl --global enable erhai-alsd.service >/dev/null 2>&1 || true
+	for unit in erhai-tablet-mode.service; do
+		systemctl enable "$unit" >/dev/null 2>&1 || true
+	done
+	# (Re)start the pinned tablet-mode switch now: mutter only picks the
+	# switch up from toggle events / initial state at device add, so a
+	# restart is safe (the fresh device is re-scanned with state set).
+	if systemctl enable erhai-tablet-mode.service >/dev/null 2>&1; then
+		systemctl restart erhai-tablet-mode.service >/dev/null 2>&1 || true
+	fi
+	# Deliberately NOT restarting iio-sensor-proxy here: after a proxy
+	# restart mutter/gsd-power do NOT re-claim (their claim calls fire only
+	# on proxy appear / session start), so a mid-session restart kills
+	# auto-rotate and auto-brightness until the next login. The udev trigger
+	# below starts it via SYSTEMD_WANTS if nothing holds it yet.
+fi
+
+udevadm control --reload >/dev/null 2>&1 || true
+udevadm trigger --subsystem-match=misc >/dev/null 2>&1 || true
+
+# A stale USER-level extension copy (~/.local/share/gnome-shell/extensions/)
+# SHADOWS the system copy this package installs — gnome-shell prefers the
+# user directory. Purge user-level copies of every extension shipped by
+# this package from all home directories so the installed version always
+# takes effect.
+for uuid in erhai-sensors@erhai.local; do
+	for home in /root /home/*; do
+		[ -d "$home/.local/share/gnome-shell/extensions/$uuid" ] || continue
+		rm -rf "${home:?}/.local/share/gnome-shell/extensions/$uuid"
+		echo "erhai-sensors: removed shadowing user-level copy of $uuid in $home/.local/share/gnome-shell/extensions/"
+	done
+done
+
+# Enable the shipped extension for every active graphical session user.
+# Installing the deb does NOT enable it: gnome-shell only loads extensions
+# listed in the user's dconf enabled-extensions, and an install/upgrade
+# never touches that key.  Enabling through the user's session bus makes
+# gnome-shell load the extension immediately — no logout needed.  Users
+# without an active graphical session enable it themselves (Extensions
+# app / gnome-extensions enable).
+enable_ext_for_active_sessions() {
+	local out sid props uid name bus cur new uuid
+	out=$(loginctl list-sessions --no-legend 2>/dev/null) || return 0
+	while read -r sid rest; do
+		[ -n "$sid" ] || continue
+		props=$(loginctl show-session "$sid" -p Active -p Type -p User \
+			-p Name 2>/dev/null) || continue
+		case "$props" in *Active=yes*) ;; *) continue ;; esac
+		case "$props" in *Type=wayland*|*Type=x11*) ;; *) continue ;; esac
+		uid=$(printf '%s\n' "$props" | sed -n 's/^User=//p')
+		name=$(printf '%s\n' "$props" | sed -n 's/^Name=//p')
+		[ -n "$uid" ] && [ -n "$name" ] || continue
+		bus="/run/user/$uid/bus"
+		[ -S "$bus" ] || continue
+		cur=$(runuser -u "$name" -- env DBUS_SESSION_BUS_ADDRESS="unix:path=$bus" \
+			XDG_RUNTIME_DIR="/run/user/$uid" \
+			gsettings get org.gnome.shell enabled-extensions 2>/dev/null) || continue
+		new="$cur"
+		for uuid in erhai-sensors@erhai.local; do
+			echo "$new" | grep -q "'$uuid'" && continue
+			if echo "$new" | grep -qE '\[\]|@as'; then
+				new="['$uuid']"
+			else
+				new="${new%\]}, '$uuid']"
+			fi
+		done
+		[ "$new" = "$cur" ] && continue
+		if runuser -u "$name" -- env DBUS_SESSION_BUS_ADDRESS="unix:path=$bus" \
+			XDG_RUNTIME_DIR="/run/user/$uid" \
+			gsettings set org.gnome.shell enabled-extensions "$new" 2>/dev/null; then
+			echo "erhai-sensors: enabled erhai-sensors@erhai.local for $name (uid $uid)"
+		fi
+	done <<< "$out"
+}
+enable_ext_for_active_sessions || true
+
+# Roll out erhai-alsd to every active graphical session: reload the user
+# manager (new unit file), enable + start the daemon, and make sure gsd's
+# own ambient handling is OFF (it fights erhai-alsd; alsd also forces this
+# on start, but only once it runs as that user).
+alsd_for_active_sessions() {
+	local out sid props uid name bus
+	out=$(loginctl list-sessions --no-legend 2>/dev/null) || return 0
+	while read -r sid rest; do
+		[ -n "$sid" ] || continue
+		props=$(loginctl show-session "$sid" -p Active -p Type -p User \
+			-p Name 2>/dev/null) || continue
+		case "$props" in *Active=yes*) ;; *) continue ;; esac
+		case "$props" in *Type=wayland*|*Type=x11*) ;; *) continue ;; esac
+		uid=$(printf '%s\n' "$props" | sed -n 's/^User=//p')
+		name=$(printf '%s\n' "$props" | sed -n 's/^Name=//p')
+		[ -n "$uid" ] && [ -n "$name" ] || continue
+		bus="/run/user/$uid/bus"
+		[ -S "$bus" ] || continue
+		if runuser -u "$name" -- env DBUS_SESSION_BUS_ADDRESS="unix:path=$bus" \
+			XDG_RUNTIME_DIR="/run/user/$uid" \
+			systemctl --user daemon-reload >/dev/null 2>&1 &&
+		   runuser -u "$name" -- env DBUS_SESSION_BUS_ADDRESS="unix:path=$bus" \
+			XDG_RUNTIME_DIR="/run/user/$uid" \
+			systemctl --user enable --now erhai-alsd.service >/dev/null 2>&1; then
+			echo "erhai-sensors: started erhai-alsd for $name (uid $uid)"
+		fi
+		runuser -u "$name" -- env DBUS_SESSION_BUS_ADDRESS="unix:path=$bus" \
+			XDG_RUNTIME_DIR="/run/user/$uid" \
+			gsettings set org.gnome.settings-daemon.plugins.power \
+			ambient-enabled false >/dev/null 2>&1 || true
+	done <<< "$out"
+}
+alsd_for_active_sessions || true
+
+exit 0

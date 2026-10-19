@@ -1,0 +1,25 @@
+# oneplus-erhai-sensors — payload provenance
+#
+# All binaries were built from source on the device (aarch64):
+#   usr/local/libexec/iio-sensor-proxy  iio-sensor-proxy 3.9
+#                                       meson setup build -Dssc-support=enabled
+#                                       + patches/iio-sensor-proxy-3.9-ssc-startup-claim-race.patch
+#   usr/local/bin/monitor-sensor        iio-sensor-proxy 3.9 (same build)
+#   usr/local/lib/aarch64-linux-gnu/... libssc 0.4.4 (codeberg DylanVanAssche/libssc),
+#                                       build-erhai + ninja install
+#   usr/local/bin/ssccli                libssc 0.4.4 diagnostic client (same build)
+#   usr/local/bin/hexagonrpcd-erhai     hexagonrpcd 0.4.0 (src tree
+#                                       hexagonrpcd-erhai/src-0.4.0-patched/)
+#                                       + patches/hexagonrpcd-0.4.0-odm-sensor-config.patch
+#
+# var/lib/hexagonfs-erhai is the ADSP remotefs root the sensor PD reads its
+# configs through (acdb from vendor_a /etc/acdbdata, dsp shells + libsns_*,
+# vendor_a json.lst + *.json, odm json_list + pakala_mtp_*, sns_reg.conf =
+# vendor sns_reg_config, socinfo -> /sys/devices/soc0). It must be complete
+# BEFORE hexagonrpcd first attaches — the sensor PD loads configs once and
+# never retries (no PD-restart ioctl in fastrpc); a fresh boot with the tree
+# complete is what makes discovery work.
+#
+# The erhai-sensors@erhai.local extension (usr/share/gnome-shell/extensions/)
+# is additionally enabled via dconf (root-setup-files/skel-dconf.ini and
+# oneplus-erhai-desktop/etc/dconf/db/local.d/00-erhai).

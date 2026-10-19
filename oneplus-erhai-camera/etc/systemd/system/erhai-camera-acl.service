@@ -1,0 +1,15 @@
+[Unit]
+Description=erhai: re-apply uaccess ACLs to camera devices after first login
+# The camera nodes are (re)created by erhai-cam-arm before any user session
+# exists, so uaccess grants no ACL and logind never revisits them. Wait for
+# the first desktop session, then replay add-uevents (see script).
+After=multi-user.target erhai-cam-arm.service systemd-logind.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/erhai-camera-acl-refresh.sh
+RemainAfterExit=yes
+TimeoutStartSec=420
+
+[Install]
+WantedBy=multi-user.target

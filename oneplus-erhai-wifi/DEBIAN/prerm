@@ -1,0 +1,15 @@
+#!/bin/sh
+# Disable the bring-up services on remove/purge (files are going away).
+set -e
+
+if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+	systemctl disable --now erhai-wcn-wifi.service || true
+	systemctl disable --now erhai-wcn-devcd.service || true
+	systemctl disable --now erhai-wcn-holdfloor.service || true
+else
+	rm -f /etc/systemd/system/multi-user.target.wants/erhai-wcn-wifi.service \
+	      /etc/systemd/system/multi-user.target.wants/erhai-wcn-devcd.service \
+	      /etc/systemd/system/sysinit.target.wants/erhai-wcn-holdfloor.service
+fi
+
+exit 0

@@ -1,0 +1,14 @@
+# erhai: pogo keyboard attach/detach -> start/stop the folio-fold watcher.
+#
+# The oneplus-pogo-kbd driver (kernel builds >= the erhai uevent commit) emits
+# a CHANGE uevent on the serial device whenever its `attached` attribute
+# flips, so udev can drive the watcher's lifecycle reactively:
+#   attached=1 -> systemd starts erhai-folio-fold.service
+#   attached=0 -> the watcher is stopped (its ExecStopPost + marker restore
+#                 the panel and release the touchscreen grab)
+# `attached` is unique to the pogo keyboard among serial devices, so no device
+# name is hardcoded here.  On kernels without the driver uevent this rule
+# still matches the boot-time ADD event; in-between transitions are covered by
+# erhai-folio-gate.service (the 1 Hz poller, kept as the fallback).
+SUBSYSTEM=="serial", ATTR{attached}=="1", TAG+="systemd", ENV{SYSTEMD_WANTS}+="erhai-folio-fold.service"
+SUBSYSTEM=="serial", ATTR{attached}=="0", RUN+="/usr/bin/systemctl --no-block stop erhai-folio-fold.service"

@@ -1,0 +1,3 @@
+# erhai: hw video decode via qcom_iris V4L2 decoder (kernel +b9 decode-order support)
+# AcceleratedVideoDecoder is the M152 Linux gate; V4L2VideoDecoder is the backend used here.
+export CHROMIUM_FLAGS=" --enable-features=AcceleratedVideoDecoder"

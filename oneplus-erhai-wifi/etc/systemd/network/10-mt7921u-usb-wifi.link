@@ -1,0 +1,26 @@
+# erhai: pin a stable MAC on the mt7921u USB WiFi dongle.
+#
+# Regression seen on the v7.2-rc1 kernel (worked on v7.1-rc2): mt76 now FAILS to
+# read this dongle's EFUSE MAC and logs
+#     mt7921u ...: Invalid MAC address, using random address <XX>
+# assigning a NEW *random* MAC on every probe (even mid-boot after a reset).
+# The udev-derived interface name is wlx<MAC>, so a fresh random MAC each boot
+# means a fresh interface name -> any NetworkManager profile pinned to
+# connection.interface-name stops matching -> no auto-connect, a Wi-Fi password
+# re-prompt, a new duplicate "SSID N" profile every boot, AND a drifting DHCP
+# lease/IP (which also breaks build.sh's hardcoded root@192.168.0.193 deploy).
+#
+# 90:de:80:3e:90:71 is the dongle's real factory MAC (Shenzhen Bilian OUI, no
+# locally-administered bit — i.e. NOT one of mt76's random 02:/x6: addresses);
+# it is the address v7.1 read from EFUSE and auto-connected with. Pinning it
+# here restores the stable identity (stable wlx90de803e9071 name + stable IP).
+#
+# udev (net_setup_link) applies this at device creation, before NetworkManager,
+# with or without systemd-networkd running. Re-apply to sda17 after a reflash:
+#   scp wifi/10-mt7921u-usb-wifi.link root@<ip>:/etc/systemd/network/
+[Match]
+Driver=mt7921u
+
+[Link]
+MACAddressPolicy=none
+MACAddress=90:de:80:3e:90:71

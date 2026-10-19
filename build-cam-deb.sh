@@ -1,0 +1,67 @@
+#!/bin/bash
+# Build oneplus-erhai-erhaicam_<version>_arm64.deb from the
+# oneplus-erhai-erhaicam/ staging tree.
+#
+#   ./build-cam-deb.sh -> debs/oneplus-erhai-erhaicam_<version>_arm64.deb
+#
+# ErhaiCam: STANDALONE GTK4/GStreamer camera app (preview, built-in contrast
+# autofocus via the kernel cn3927 lens subdev, photos, experimental video,
+# camera switch, accelerometer orientation).  NOT part of the camera-drivers
+# package (oneplus-erhai-camera = kernel drivers + autofocus udev rules);
+# this deb only ships the app binary + desktop file.
+# The binary is compiled here from src/erhai-cam.cpp so the deb always
+# matches its shipped source.
+# The compile step needs libgtk-4-dev, libgstreamer1.0-dev and
+# libgstreamer-plugins-base1.0-dev on the build host.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+. "$HERE/ppa-common.sh"
+SRC="$HERE/oneplus-erhai-erhaicam"
+PKG=$(awk '/^Package:/ {print $2}' "$SRC/DEBIAN/control")
+VER=$(awk '/^Version:/ {print $2}' "$SRC/DEBIAN/control")
+ARCH=$(awk '/^Architecture:/ {print $2}' "$SRC/DEBIAN/control")
+
+for f in src/erhai-cam.cpp \
+	 src/erhai-npu-analyze.py \
+	 src/gen-cam-stats-onnx.py \
+	 usr/local/lib/oneplus-erhai-erhaicam/erhai-npu-analyze.py \
+	 usr/share/oneplus-erhai-erhaicam/erhai-cam-stats.onnx \
+	 usr/share/applications/com.github.themojoman.ErhaiCam.desktop DEBIAN/control DEBIAN/postinst; do
+	[ -f "$SRC/$f" ] || { echo "missing $f in $SRC" >&2; exit 1; }
+done
+
+PKGS="gstreamer-app-1.0 gstreamer-video-1.0 gtk4"
+pkg-config --exists $PKGS || {
+	echo "missing pkg-config deps ($PKGS); install libgtk-4-dev," \
+	     "libgstreamer1.0-dev, libgstreamer-plugins-base1.0-dev" >&2
+	exit 1
+}
+mkdir -p "$SRC/usr/bin"
+${CXX:-g++} -O2 -g -std=c++20 -Wall -Wextra -Wpedantic \
+	$(pkg-config --cflags $PKGS) \
+	-o "$SRC/usr/bin/erhai-cam" \
+	"$SRC/src/erhai-cam.cpp" \
+	$(pkg-config --libs $PKGS)
+
+# The NPU statistics graph is generated so the shipped model always matches
+# its generator (the helper and the generator are shipped alongside it).
+python3 "$SRC/src/gen-cam-stats-onnx.py" \
+	"$SRC/usr/share/oneplus-erhai-erhaicam/erhai-cam-stats.onnx"
+
+# Keep the helper that ships in the deb byte-identical to the source tree copy
+# the app's dev-tree lookup uses (src/) — no drift between dev and install.
+cp "$SRC/src/erhai-npu-analyze.py" \
+   "$SRC/usr/local/lib/oneplus-erhai-erhaicam/erhai-npu-analyze.py"
+
+find "$SRC" -type d -exec chmod 755 {} \;
+chmod 755 "$SRC"/DEBIAN/postinst "$SRC"/usr/bin/erhai-cam
+chmod 755 "$SRC"/usr/local/lib/oneplus-erhai-erhaicam/*.py
+dpkg-deb --build --root-owner-group "$SRC" "$DEB_DIR/${PKG}_${VER}_${ARCH}.deb"
+
+# NO_PPA=1 builds locally without publishing (in-development iterations;
+# the PPA only gets the package once it is feature-complete and owner-tested).
+if [ "${NO_PPA:-0}" != 1 ]; then
+	ppa_copy "$DEB_DIR/${PKG}_${VER}_${ARCH}.deb"
+fi
+echo "built ${PKG}_${VER}_${ARCH}.deb"

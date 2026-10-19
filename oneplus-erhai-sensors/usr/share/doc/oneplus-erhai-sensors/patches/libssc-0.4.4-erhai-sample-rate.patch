@@ -1,0 +1,102 @@
+diff --git a/src/libssc-sensor.c b/src/libssc-sensor.c
+--- a/src/libssc-sensor.c
++++ b/src/libssc-sensor.c
+@@ -723,6 +723,9 @@ sensor_set_property (GObject *object, guint prop_id, const GValue *value, GParamSpec *pspec)
+ 		case PROP_UID_HIGH:
+ 			priv->uid_high = g_value_get_uint64 (value);
+ 			break;
++		case PROP_SAMPLE_RATE:
++			priv->sample_rate = g_value_get_float (value);
++			break;
+ 		case PROP_DATA_TYPE:
+ 			g_free (priv->data_type);
+ 			priv->data_type = g_value_dup_string (value);
+ 			break;
+@@ -876,8 +879,14 @@ ssc_sensor_class_init (SSCSensorClass *object_class)
+-		g_param_spec_string (SSC_SENSOR_SAMPLE_RATE,
+-				     "Sample rate",
+-				     "The sample rate in Hz supported by the sensor.",
+-				     NULL,
+-				     G_PARAM_READABLE);
++		g_param_spec_float (SSC_SENSOR_SAMPLE_RATE,
++				     "Sample rate",
++				     "The sample rate in Hz requested for this sensor "
++				     "(0 = use the advertised rate).",
++				     -G_MAXFLOAT, G_MAXFLOAT, 0.0,
++				     G_PARAM_READWRITE);
+ 	g_object_class_install_property (object_class, PROP_SAMPLE_RATE, properties[PROP_SAMPLE_RATE]);
+diff --git a/src/libssc-cli.c b/src/libssc-cli.c
+--- a/src/libssc-cli.c
++++ b/src/libssc-cli.c
+@@ -19,6 +19,7 @@
+ 
+ #include "libssc-cli-private.h"
++#include "libssc-sensor.h"
+ 
+ #define DEFAULT_ENABLE_SECONDS 10
+@@ -159,6 +160,15 @@ gyroscope_measurement (...)
+ 
+ /*****************************************************************************/
+ 
++/* erhai: request a sample rate (0 = use the rate the sensor advertises). */
++static void
++ssccli_request_rate (gpointer sensor, gdouble rate)
++{
++	if (rate > 0.0)
++		g_object_set (sensor, SSC_SENSOR_SAMPLE_RATE, (gfloat) rate, NULL);
++}
++
+ int main(int argc, char *argv[])
+ {
+@@ -168,7 +175,8 @@ int main(int argc, char *argv[])
+ 	gboolean debug = FALSE;
+ 	gchar *sensor_str = "";
+ 	gint64 timeout = DEFAULT_ENABLE_SECONDS;
++	gdouble rate = 0.0;
+ 	const GOptionEntry options[] = {
+@@ -173,7 +181,8 @@ int main(int argc, char *argv[])
+ 		{ "sensor", 0, 0, G_OPTION_ARG_STRING, &sensor_str, "Enable a sensor. Supported sensors: 'proximity', 'light', 'accelerometer', 'magnetometer', 'compass', 'gyroscope'", NULL },
+ 		{ "timeout", 0, 0, G_OPTION_ARG_INT64, &timeout, "Number of seconds before this will timeout [default 10]", NULL },
++		{ "rate", 'r', 0, G_OPTION_ARG_DOUBLE, &rate, "Requested sample rate in Hz for continuous sensors (0 = advertised, default 0)", NULL },
+ 		{ NULL, 0, 0, G_OPTION_ARG_NONE, NULL, NULL, NULL }
+ 	};
+@@ -212,6 +220,7 @@ int main(int argc, char *argv[])
+ 		}
+ 		g_signal_connect (proximity, "measurement", ...);
++		ssccli_request_rate (proximity, rate);
+ 		if (!ssc_sensor_proximity_open_sync (proximity, NULL, &err)) {
+@@ -227,6 +235,7 @@ int main(int argc, char *argv[])
+ 		}
+ 		g_signal_connect (light, "measurement", ...);
++		ssccli_request_rate (light, rate);
+ 		if (!ssc_sensor_light_open_sync (light, NULL, &err)) {
+@@ -242,6 +250,7 @@ int main(int argc, char *argv[])
+ 		}
+ 		g_signal_connect (accelerometer, "measurement", ...);
++		ssccli_request_rate (accelerometer, rate);
+ 		if (!ssc_sensor_accelerometer_open_sync (accelerometer, NULL, &err)) {
+@@ -257,6 +265,7 @@ int main(int argc, char *argv[])
+ 		}
+ 		g_signal_connect (magnetometer, "measurement", ...);
++		ssccli_request_rate (magnetometer, rate);
+ 		if (!ssc_sensor_magnetometer_open_sync (magnetometer, NULL, &err)) {
+@@ -272,6 +280,7 @@ int main(int argc, char *argv[])
+ 		}
+ 		g_signal_connect (compass, "measurement", ...);
++		ssccli_request_rate (compass, rate);
+ 		if (!ssc_sensor_compass_open_sync (compass, NULL, &err)) {
+@@ -287,6 +295,7 @@ int main(int argc, char *argv[])
+ 		}
+ 		g_signal_connect (gyroscope, "measurement", ...);
++		ssccli_request_rate (gyroscope, rate);
+ 		if (!ssc_sensor_gyroscope_open_sync (gyroscope, NULL, &err)) {
+
+COMMIT NOTES
+- The SSCSensor "sample-rate" GObject property was READABLE; the erhai patch
+  makes it READWRITE so a client can request a rate before opening the sensor
+  (libssc-sensor.c), and ssccli exposes it as `-r, --rate HZ` (libssc-cli.c).
+- Measured behaviour on erhai (2026-09-13): the SSC hardware floors the rate
+  at 5 Hz (a 1 Hz request delivers 5 Hz) and a concurrent compass claim pushes
+  the magnetometer back up to ~50 Hz regardless of the request.
+- Build: meson build dir `build-erhai`; `ninja -C build-erhai` produces
+  src/ssccli and src/libssc.so.2 which are copied into this package.

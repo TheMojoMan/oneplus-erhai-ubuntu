@@ -1,0 +1,7 @@
+# Grant the active graphical session user rw on the CCI i2c adapters, so the
+# camera-focus GNOME extension can poke the VCM (slave 0x0c on i2c-10) without
+# root. uaccess = logind adds an ACL for whoever owns the active seat session.
+SUBSYSTEM=="i2c-dev", ATTR{name}=="Qualcomm-CCI", TAG+="uaccess"
+# Same for the CN3927 lens subdev: erhai-autofocus (and any AF client) drives
+# V4L2_CID_FOCUS_ABSOLUTE directly on /dev/v4l-subdevN.
+SUBSYSTEM=="video4linux", ATTR{name}=="cn3927 focus", TAG+="uaccess"

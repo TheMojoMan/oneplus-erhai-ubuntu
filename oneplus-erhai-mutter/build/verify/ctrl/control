@@ -1,0 +1,29 @@
+Package: libmutter-18-0
+Source: mutter
+Version: 50.1-0ubuntu2.4+erhai1
+Architecture: arm64
+Maintainer: Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>
+Installed-Size: 4741
+Depends: adwaita-icon-theme, gsettings-desktop-schemas (>= 40~alpha), mutter-common (>= 50~beta), mutter-common-bin (>= 49.0), libatk1.0-0t64 (>= 2.2.0), libc6 (>= 2.43), libcairo2 (>= 1.6.0), libcanberra0 (>= 0.2), libcolord2 (>= 1.4.5), libdisplay-info3 (>= 0.3.0), libdrm2 (>= 2.4.119), libegl1, libeis1 (>= 1.5.0), libfribidi0 (>= 0.19.2), libgbm1 (>= 21.3.0~rc1), libgl1, libglib2.0-0t64 (>= 2.83.0), libglycin-2-0 (>= 2.0~beta.2), libgnome-desktop-4-2t64 (>= 3.17.92), libgraphene-1.0-0 (>= 1.10.0), libgudev-1.0-0 (>= 238), libharfbuzz0b (>= 0.6.0), libinput10 (>= 1.30.0), libjson-glib-1.0-0 (>= 1.5.2), liblcms2-2 (>= 2.6), libpango-1.0-0 (>= 1.45.5), libpangocairo-1.0-0 (>= 1.18.0), libpipewire-0.3-0t64 (>= 1.6.1), libpixman-1-0 (>= 0.11.2), libsoup-3.0-0 (>= 3.0.3), libstartup-notification0 (>= 0.11), libsystemd0 (>= 226), libudev1 (>= 183), libwacom9 (>= 2.0.0), libwayland-server0 (>= 1.24.0), libx11-6 (>= 2:1.7.0), libx11-xcb1, libxau6 (>= 1:1.0.11), libxcb-res0 (>= 1.10), libxcb1, libxcomposite1 (>= 1:0.4.6), libxcursor1 (>> 1.1.2), libxdamage1 (>= 1:1.1), libxext6, libxfixes3 (>= 1:6.0.0), libxi6 (>= 2:1.2.99.4), libxinerama1 (>= 2:1.1.4), libxkbcommon0 (>= 1.0.0), libxkbregistry0 (>= 1.0.0), libxrandr2 (>= 2:1.2.99.3)
+Breaks: gnome-kiosk (<< 50~rc~), gnome-shell (<< 50~rc~), xwayland (<< 2:23.1.0)
+Section: libs
+Priority: optional
+Multi-Arch: same
+Homepage: https://mutter.gnome.org/
+Description: window manager library from the Mutter window manager
+ Mutter is a Wayland display server and X11 window manager and
+ compositor library. It contains functionality related to, among other
+ things, window management, window compositing, focus tracking, workspace
+ management, keybindings and monitor configuration.
+ .
+ Internally it uses a fork of Cogl, a hardware acceleration abstraction
+ library used to simplify usage of OpenGL pipelines, as well as a fork
+ of Clutter, a scene graph and user interface toolkit.
+ .
+ This package contains the window manager shared library, used by mutter
+ itself, and gnome-shell.
+Original-Maintainer: Debian GNOME Maintainers <pkg-gnome-maintainers@lists.alioth.debian.org>
+ .
+ Locally rebuilt package: Ubuntu's 50.1-0ubuntu2.4 with the oneplus-erhai patched
+ libmutter-18.so.0.0.0 (compositor touch-drag NULL-deref guard).  Depends, Breaks
+ and Symbols are Ubuntu's, unchanged.

@@ -1,0 +1,85 @@
+#!/bin/bash
+# llama-erhai / llama-erhai-server -- run the packaged erhai llama.cpp with the
+# device stack wired up (CPU + Adreno OpenCL + Hexagon NPU).
+#
+#   llama-erhai -m model.gguf -p 'hello' -n 128
+#   llama-erhai --list-devices
+#   llama-erhai -m model.gguf -c 13312 \
+#        --offload-spec 'HTP0:layers=0-17,HTP1:layers=18-36'      # NPU
+#   llama-erhai-server -m model.gguf -c 13312 --alias qwen3-4b --port 8081 \
+#        --offload-spec 'HTP0:layers=0-17,HTP1:layers=18-36'
+#
+# WHY THIS WRAPPER EXISTS (both traps are measured, see the package README):
+#   * GGML_BACKEND_PATH must point at the Hexagon backend FILE (not a directory),
+#     because the loader only searches the directory of the real binary;
+#   * every backend-load site is guarded by `if (!ggml_backend_reg_count())`, so a
+#     plain run never reads that variable -- only an option that calls
+#     ggml_backend_load_all() does (--offload-spec/-os, -dev/--device,
+#     --list-devices).  Passing a spec through this wrapper therefore activates
+#     the Hexagon backend.
+#
+# SAFETY DEFAULT, and the reason this wrapper is not just a symlink: with NO
+# device option given it adds `--device none` (CPU only).  Auto-selection has
+# picked GPUOpenCL (the Adreno) on this pad and a single OpenCL fault takes the
+# panel and the session down with it -- the 2026-09-22 incident ended in a hard
+# reset (msm hangcheck -> drm recover_worker loop, SoC alive, screen dead).  Ask
+# for the GPU explicitly if you must, and not while the desktop is up.  A GPU
+# device named in the arguments prints a warning; LLAMA_ERHAI_GPU_OK=1 silences
+# it once the risk has been accepted.
+#
+# The NPU additionally needs the CDSP userspace stack (cdsprpcd, libcdsprpc,
+# /usr/lib/rfsa, the fastrpc group) and kernel >= +b63 -- see the README.
+set -euo pipefail
+
+PREFIX="${LLAMA_ERHAI_PREFIX:-/opt/llama.cpp}"
+# The vendor Hexagon backend and its HTP skel libs live NEXT TO the ggml libs:
+# libggml-hexagon.so has RUNPATH $ORIGIN and needs libggml-base.so, so it can only
+# be put in one directory with them.
+HEXAGON="${LLAMA_ERHAI_HEXAGON:-$PREFIX/bin/libggml-hexagon.so}"
+
+me="$(basename "$0")"
+case "$me" in
+	llama-erhai)        TOOL=llama-cli ;;
+	llama-erhai-server) TOOL=llama-server ;;
+	*) echo "$me: unknown invocation name (use llama-erhai or llama-erhai-server)" >&2
+	   exit 2 ;;
+esac
+BIN="$PREFIX/bin/$TOOL"
+[ -x "$BIN" ] || { echo "$me: $BIN is missing (is oneplus-erhai-llamacpp installed?)" >&2
+		   exit 2; }
+
+# Hexagon backend + unsigned-PD skels.  Both are no-ops for a CPU/OpenCL run.
+[ -r "$HEXAGON" ] && export GGML_BACKEND_PATH="${GGML_BACKEND_PATH:-$HEXAGON}"
+export FASTRPC_UNSIGNED_PD="${FASTRPC_UNSIGNED_PD:-1}"
+
+dev_args=0 gpu_args=0 info_args=0
+for a in "$@"; do
+	case "$a" in
+		-dev|--device|-ot|--override-tensor|--offload-spec|-os|-dev=*|--device=*|-ot=*|--override-tensor=*|--offload-spec=*|--list-devices)
+			dev_args=1 ;;
+	esac
+	case "$a" in
+		-h|--help|--version|--version=*) info_args=1 ;;
+	esac
+	case "$a" in
+		*GPU*|*gpu*|*OpenCL*|*opencl*|*Vulkan*|*vulkan*) gpu_args=1 ;;
+	esac
+done
+
+if [ "$gpu_args" = 1 ] && [ "${LLAMA_ERHAI_GPU_OK:-0}" != 1 ]; then
+	echo "$me: WARNING -- these arguments name a GPU backend (Adreno/OpenCL/Vulkan)." >&2
+	echo "  An OpenCL fault on this pad took the display and the whole session down" >&2
+	echo "  (2026-09-22: ggml-opencl assert -> msm hangcheck -> drm recover loop ->" >&2
+	echo "  hard reset).  Use the Hexagon NPU instead:" >&2
+	echo "    --offload-spec 'HTP0:layers=0-17,HTP1:layers=18-36'" >&2
+	echo "  LLAMA_ERHAI_GPU_OK=1 accepts the risk and silences this warning." >&2
+fi
+
+if [ "$dev_args" = 0 ] && [ "$info_args" = 0 ]; then
+	set -- "$@" --device none
+	echo "$me: no device option given -> CPU only (--device none)." >&2
+	echo "  NPU: add --offload-spec 'HTP0:layers=0-17,HTP1:layers=18-36' (needs the" >&2
+	echo "       CDSP userspace stack; see /usr/share/doc/oneplus-erhai-llamacpp/)." >&2
+fi
+
+exec "$BIN" "$@"

@@ -1,0 +1,22 @@
+# erhai: GNOME's own ambient-light auto-brightness must stay OFF, for EVERYONE.
+#
+# On this pad auto-brightness is erhai-alsd (a per-session user daemon, keyed on
+# org.erhai.sensors ambient-enabled, off by default and only ever running for the
+# logged-in user) -- see oneplus-erhai-sensors.  gsd-power's implementation must
+# never run in its place: it starts with an UNANCHORED curve
+# (ambient_norm_value = -1 until something sets the brightness once), so its
+# readings clamp to 0, the running average decays onto 0 %, and the shell then
+# applies that as the MINIMUM backlight.
+#
+# This is a *default* override on purpose.  The GDM greeter session can end up
+# with an unreadable dconf configuration (GDM 50's dynamic greeter user + a HOME
+# its uid cannot always read), in which case GSettings returns pure schema
+# defaults -- a dconf value in the greeter's own db cannot help there, but a
+# default override can.  That is the login screen dimming to its floor on
+# logout (2026-09-22).
+#
+# Values set by a dconf db still win over this default, so a user who explicitly
+# turns GNOME's ambient handling on keeps that choice (our own daemon does not
+# need it either way).
+[org.gnome.settings-daemon.plugins.power]
+ambient-enabled=false

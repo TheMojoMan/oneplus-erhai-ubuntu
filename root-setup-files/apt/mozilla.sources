@@ -1,0 +1,10 @@
+# Mozilla's own Firefox .deb repository.
+# Ubuntu's "firefox" package is a transitional stub that installs the snap; the
+# snap has no working GPU path here and starts slowly, so pull the real .deb
+# from Mozilla instead (see mozilla-firefox.pref for the priority pin).
+Types: deb
+URIs: https://packages.mozilla.org/apt
+Suites: mozilla
+Components: main
+Architectures: arm64
+Signed-By: /etc/apt/keyrings/packages.mozilla.org.asc

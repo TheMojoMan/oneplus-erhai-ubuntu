@@ -1,0 +1,31 @@
+[org/gnome/desktop/a11y/applications]
+screen-keyboard-enabled=true
+
+[org/gnome/desktop/interface]
+# fallback only; the real scale comes from monitors.xml
+scaling-factor=uint32 2
+
+[org/gnome/desktop/session]
+# The greeter must run the GDM greeter session, never the distro desktop
+# session.  Ubuntu's 10_ubuntu-settings.gschema.override makes "ubuntu" the
+# DEFAULT for this key, so any greeter whose dconf cannot be read (GDM 50's
+# dynamic greeter user can end up with a HOME its uid cannot read) comes up as a
+# FULL UBUNTU DESKTOP instead of the login screen.  This db is the greeter's
+# user-db; the greeter .desktop also pins --session=gnome-login, so both the
+# readable and the unreadable case are covered.
+session-name='gnome-login'
+
+[org/gnome/settings-daemon/plugins/power]
+# Auto-brightness stays OFF on the login screen.  GNOME's own ALS handling
+# (gsd-power) is keyed on this setting, whose default is TRUE, and the greeter
+# session has no override -- so it runs there.  It starts with an UNANCHORED
+# curve (ambient_norm_value = -1 until something sets the brightness once), so
+# its ambient readings clamp to 0 and the running average decays onto 0, which
+# the shell then applies as the MINIMUM backlight: log out, leave the login
+# screen a while, and the panel drops to (and stays at) its lowest level.
+# erhai's own auto-brightness is erhai-alsd (org.erhai.sensors
+# ambient-enabled): per-session, off by default, and it only ever runs for the
+# logged-in user, so the greeter needs nothing in its place.  For the case where
+# even this db is unreadable, the same value is also a global GSettings DEFAULT
+# (99-erhai-no-gsd-ambient.gschema.override in oneplus-erhai-desktop).
+ambient-enabled=false

@@ -1,0 +1,12 @@
+#!/bin/bash
+set -e
+
+# Reload systemd + udev state after install/upgrade so the new rule and unit
+# are live without a reboot. The udev trigger itself only fires on Type-C
+# events, so nothing runs until the next detach/attach.
+if [ -d /run/systemd/system ]; then
+	systemctl daemon-reload >/dev/null 2>&1 || true
+	udevadm control --reload-rules >/dev/null 2>&1 || true
+fi
+
+exit 0

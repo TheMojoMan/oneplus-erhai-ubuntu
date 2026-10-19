@@ -1,0 +1,22 @@
+Package: oneplus-erhai-camera
+Version: 1.3
+Section: utils
+Priority: optional
+Architecture: arm64
+Maintainer: TheMojoMan <themojoman@gmx.net>
+Depends: i2c-tools, libgtk-4-1, gstreamer1.0-libcamera, gstreamer1.0-gtk4, gstreamer1.0-plugins-base
+Recommends: gnome-shell
+Description: Camera bring-up for the OnePlus Pad 3 (erhai)
+ Arms the CCI CSR and both camera sensors at boot (erhai-cam-arm.service +
+ erhai-cam-arm.sh) and ships the manual VCM focus / exposure helpers for the
+ SC1320CS rear camera (i2c-10 slaves 0x0c / 0x36).  Also ships
+ erhai-autofocus, a GTK4/GStreamer contrast-autofocus prototype that drives
+ the kernel cn3927 lens subdev (V4L2_CID_FOCUS_ABSOLUTE) with a Tenengrad
+ sharpness scan; run it with the Snapshot preview closed.
+ The erhai-cam-focus@erhai.local GNOME Shell extension is RETIRED (1.3 removes
+ it): ErhaiCam (oneplus-erhai-erhaicam >= 1.5) owns focus AND exposure
+ natively — an AE button (auto exposure on the NPU) and an AF button (auto
+ focus on the NPU), each with a vertical manual slider when turned off.  The
+ i2c helper scripts stay as manual CLI tools.
+ VCM writes are granted to the desktop user via the included udev uaccess
+ rules (CCI adapter + lens subdev); requires the kernel cn3927 module.

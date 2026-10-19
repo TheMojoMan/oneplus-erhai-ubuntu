@@ -1,0 +1,13 @@
+# erhai thermal profile; change with: erhai-thermal.sh <profile>
+# performance (Android-like, ~103C deep floor) | balanced (~90C) | cool (~80C) | cold (~70C)
+# Also switchable from the GNOME Quick Settings "Thermal" toggle.
+# The governor applies the profile to the HOTTEST SoC sensor (CPU, GPU, NPU or
+# DDR), so a full NPU load now throttles the CPU/GPU planes exactly like
+# Android does (see /usr/share/oneplus-erhai-thermal/README.md).
+ERHAI_THERMAL_PROFILE=performance
+
+# Governor tunables (optional; defaults shown):
+# ERHAI_THERMAL_POLL=1.5        seconds between whole-die envelope polls
+# ERHAI_THERMAL_SOAK=15         seconds below the release trip before release
+# ERHAI_THERMAL_BACKSTOP=109000 kernel step_wise switch-on trip (milli-C);
+#                               the kernel owns the 109-125C band only

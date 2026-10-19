@@ -1,0 +1,142 @@
+#!/bin/bash
+# oneplus-erhai-linux postrm: remove the UKI this kernel's postinst installed in
+# /boot.  Named to match postinst exactly -- <release>[-l1]-b<N>.efi when the deb
+# carries a "+b<N>" Debian revision (the "-l1" tag when it was installed from the
+# linux1 partition), or <release>-<root partlabel>.efi without one (base image
+# build) -- so an upgrade of a *different* kernel package never deletes the
+# running one's boot entry.  An install deletes no .efi at all; this script is the
+# only thing that removes one, and only its own.  The ESP is not touched any more
+# (2026-10-17; the retired ESP machinery is preserved in
+# /media/data/develop/erhai/tmp/esp-uki-machinery-backup-20261017/).
+set -e
+
+# 1. Only on real removal, not on the remove step of an upgrade.
+if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
+
+    # 2. Are we in a build CHROOT?  It decides ONE thing (2026-10-17, when the
+    #    ESP stopped being written): the root label used for the file name -- a
+    #    chroot is built for PARTLABEL=linux and must not take the HOST's cmdline
+    #    (same rule as postinst).  Nothing is skipped any more: the removal target
+    #    is /boot of THIS root filesystem, which inside a chroot IS the image's
+    #    own /boot -- exactly the file this package's postinst wrote there.
+    IN_CHROOT=false
+    ROOT_IDS="$(stat -c '%d:%i' / 2>/dev/null || true)"
+    PID1_IDS="$(stat -L -c '%d:%i' /proc/1/root 2>/dev/null || true)"
+    if [ "${ERHAI_FORCE_CHROOT:-0}" = 1 ]; then
+        IN_CHROOT=true
+    elif [ -z "$ROOT_IDS" ] || [ -z "$PID1_IDS" ] || [ "$ROOT_IDS" != "$PID1_IDS" ]; then
+        IN_CHROOT=true
+    fi
+
+    # 3. Kernel version of the package being removed. Strip the "+b<N>" Debian
+    #    revision that build-kernel.sh appends to the .deb Version (not part of
+    #    the kernelrelease; same derivation as postinst).
+    #
+    #    dpkg passes a version argument ONLY on the upgrade transitions
+    #    (`postrm upgrade <old-version>` etc.) -- `postrm remove` and
+    #    `postrm purge` get NO $2 at all (verified 2026-09-28:
+    #    `dpkg --remove <pkg>` runs the script with args "remove"). Falling back
+    #    to `uname -r` there was the bug: the RUNNING kernelrelease carries no
+    #    "+b<N>", so this script looked for "<release>-<root partlabel>.efi"
+    #    and left the real "<release>-b<N>.efi" on the ESP.
+    #
+    #    Sources, in order:
+    #      1. $2                -- the other version on upgrade/abort-upgrade
+    #                              (defensive: the block below is skipped for
+    #                              that transition anyway);
+    #      2. dpkg-query        -- still answers while the package is in
+    #                              config-files state, i.e. for remove/purge;
+    #                              this is the version whose UKI postinst wrote.
+    #    There is deliberately NO `uname -r` fallback: the RUNNING
+    #    kernelrelease is not the removed package's, and using it made this
+    #    script look for "<running release>-<root partlabel>.efi" AND rm -f the
+    #    depmod leftovers out of the RUNNING /lib/modules/<release>/ (the live
+    #    modules tree). Without a version, do nothing at all -- a stray .efi on
+    #    the ESP is harmless, a wrong delete is not.
+    FULLVER="${2:-}"
+    if [ -z "$FULLVER" ] && [ -n "${DPKG_MAINTSCRIPT_PACKAGE:-}" ]; then
+        FULLVER=$(dpkg-query --show --showformat='${Version}' \
+                      "$DPKG_MAINTSCRIPT_PACKAGE" 2>/dev/null || true)
+    fi
+    if [ -z "$FULLVER" ]; then
+        echo "Post-remove: cannot determine the version of" \
+             "${DPKG_MAINTSCRIPT_PACKAGE:-the removed package}" \
+             "(no \$2 and dpkg-query gave nothing); leaving /boot and /lib/modules alone."
+        exit 0
+    fi
+    KVER="${FULLVER%%+b*}"
+
+    # 4. Root partition label, same derivation as postinst (a chroot is always
+    #    `linux`; otherwise the booted cmdline first, then the partition backing
+    #    /).  It decides the "-l1" tag below, so it must come from the same
+    #    sources postinst used -- a mismatch only ever costs a no-op delete, never
+    #    a wrong file.
+    if [ "$IN_CHROOT" = true ]; then
+        ROOT_LABEL="${ERHAI_ROOT_LABEL:-linux}"
+    else
+        ROOT_LABEL="${ERHAI_ROOT_LABEL:-$(tr ' ' '\n' < /proc/cmdline 2>/dev/null \
+                         | sed -n 's/^root=PARTLABEL=//p' | head -n1)}"
+        if [ -z "$ROOT_LABEL" ]; then
+            ROOT_LABEL=$(lsblk -no PARTLABEL "$(findmnt -no SOURCE /)" 2>/dev/null | head -n1)
+        fi
+        if [ -z "$ROOT_LABEL" ]; then
+            ROOT_LABEL="linux"
+        fi
+    fi
+
+    # 5. Rebuild the filename postinst used. The "+b<N>" Debian revision (when
+    #    present) is part of the EFI filename (<release>[-l1]-b<N>.efi); postinst
+    #    falls back to <release>-<root partlabel>.efi only without it. Mirror
+    #    that exactly so removal finds the file postinst wrote.
+    CLEAN_KVER="${KVER//-sm8750-themojoman/}"
+    DEB_REV="${FULLVER##*+b}"
+    if [ "$DEB_REV" = "$FULLVER" ]; then
+        DEB_REV=""
+    fi
+
+    if [ "$ROOT_LABEL" = "linux1" ]; then
+        ROOT_TAG="-l1"
+    else
+        ROOT_TAG=""
+    fi
+
+    if [ -n "$DEB_REV" ]; then
+        TARGET_EFI="${CLEAN_KVER}${ROOT_TAG}-b${DEB_REV}.efi"
+    else
+        TARGET_EFI="${CLEAN_KVER}-${ROOT_LABEL}.efi"
+    fi
+
+    # 6. Delete our .efi from /boot of THIS root filesystem (2026-10-17: the ESP
+    #    is not involved any more -- no mount, no partlabel, no read-only
+    #    handling).  Only this package's own file is touched; every other kernel's
+    #    UKI in /boot stays exactly where it is.
+    DEST_FILE="/boot/$TARGET_EFI"
+    if [ ! -f "$DEST_FILE" ]; then
+        echo "Post-remove: $DEST_FILE not found, nothing to do."
+    elif [ "${ERHAI_POSTRM_DRY_RUN:-0}" = "1" ]; then
+        echo "Post-remove: DRY RUN -- would delete $DEST_FILE"
+    else
+        echo "Post-remove: Deleting $DEST_FILE..."
+        rm -f "$DEST_FILE"
+        sync
+    fi
+
+    # 7. Leftovers from depmod, which postinst ran.
+    if [ "${ERHAI_POSTRM_DRY_RUN:-0}" = "1" ]; then
+        echo "Post-remove: DRY RUN -- leaving /lib/modules/$KVER depmod leftovers alone."
+    else
+        rm -f "/lib/modules/$KVER/modules.dep" \
+            "/lib/modules/$KVER/modules.dep.bin" \
+            "/lib/modules/$KVER/modules.alias" \
+            "/lib/modules/$KVER/modules.alias.bin" \
+            "/lib/modules/$KVER/modules.symbols" \
+            "/lib/modules/$KVER/modules.symbols.bin" \
+            "/lib/modules/$KVER/modules.devname" \
+            "/lib/modules/$KVER/modules.softdep" \
+            "/lib/modules/$KVER/modules.builtin.alias.bin" \
+            "/lib/modules/$KVER/modules.builtin.bin"
+        rmdir "/lib/modules/$KVER" 2>/dev/null || true
+    fi
+fi
+
+exit 0

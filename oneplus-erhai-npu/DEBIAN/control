@@ -1,0 +1,46 @@
+Package: oneplus-erhai-npu
+Version: 0.5
+Section: utils
+Priority: optional
+Architecture: arm64
+Maintainer: TheMojoMan <themojoman@gmx.net>
+Depends: oneplus-erhai-fastrpc (>= 0.1)
+Recommends: oneplus-erhai-firmware (>= 1.2), oneplus-erhai-sensors, oneplus-erhai-llamacpp, oneplus-erhai-thermal
+Description: Hexagon NPU / compute-DSP (CDSP) workload layer for the OnePlus Pad 3 (erhai)
+ The NPU/HTP half of erhai's Hexagon stack: the file tree the CDSP is served,
+ the health report and the user front end.  The TRANSPORT layer (libcdsprpc,
+ cdsprpcd, the fastrpc group, the udev rule, the DSP payload trees) is
+ oneplus-erhai-fastrpc, which this package depends on; the ADSP path stays in
+ oneplus-erhai-sensors.
+  - the complete CDSP FastRPC remote-filesystem tree served to the DSP
+    (/var/lib/hexagonfs-cdsp/dsp/cdsp): fastrpc_shell_3 +
+    fastrpc_shell_unsigned_3 (the user-PD shells), the Hexagon CoProcessor
+    (HTP) runtime libs from the device's own dsp partition, the vendor QNN
+    HTP v79 skel (libQnnHtpV79Skel.so) and the C++ runtime the skels link
+    against -- all taken from OxygenOS 16.0.9.400;
+  - hexagonrpcd-cdsp.service: the DISABLED fallback daemon (our hexagonrpcd
+    fork, attaching to /dev/fastrpc-cdsp as the DSP's root PD).  The daemon that
+    works with this firmware is Qualcomm's cdsprpcd from oneplus-erhai-fastrpc;
+    the fallback stays for a kernel/firmware combination whose apps_std ABI is
+    the one the upstream RPC host expects;
+  - erhai-npu-status.sh: one-shot health report of the whole chain (kernel
+    DT/firmware, remoteproc, FastRPC nodes, transport, daemon, payload), with an
+    optional --pd-test proving the DSP executes a host-uploaded shell;
+  - npu-llm: an ollama-style front end (pull/run/chat/list/rm/doctor/models)
+    running GGUF models on the NPU through the GenieX SDK's llama.cpp backend,
+    hiding the two local quirks (the fastrpc group and the CDSP mapping space);
+  - erhai-cdsp-restart.sh: recovery for an exhausted FastRPC mapping arena
+    (restarts the CDSP remoteproc only -- NEVER the ADSP, that freezes the SoC).
+ .
+ Kernel side (NO dependency declared on purpose: the erhai kernel is mandatory
+ for Ubuntu on this tablet and ships in the image): the CDSP remoteproc must be
+ enabled, i.e. oneplus-erhai-linux from the 7.2 +b63 build on, or any 7.3-rc*
+ line, booting the OxygenOS cdsp.mdt/cdsp_dtb.mdt split image with the
+ OEM-identical carveouts (0x9d200000+0x1900000, 0x9eb00000+0x80000), plus
+ oneplus-erhai-firmware >= 1.2.
+ .
+ NOTE: the QNN *host* runtime (libQnnHtp.so / libQnnHtpV79Stub.so) is not
+ shippable -- Qualcomm distributes it for Android (bionic) and through the
+ account-gated QNN/Hexagon SDK.  The DSP side is complete here, and npu-llm
+ reaches the NPU through the GenieX SDK's own host runtime (pip install --user
+ geniex, which also fetches its SDK zip).

@@ -1,0 +1,27 @@
+#!/bin/bash
+set -e
+
+if [ -d /run/systemd/system ]; then
+	systemctl daemon-reload >/dev/null 2>&1 || true
+	systemctl enable erhai-cam-arm.service erhai-camera-acl.service >/dev/null 2>&1 || true
+fi
+udevadm control --reload >/dev/null 2>&1 || true
+udevadm trigger --subsystem-match=i2c-dev >/dev/null 2>&1 || true
+udevadm trigger --subsystem-match=video4linux >/dev/null 2>&1 || true
+
+# The erhai-cam-focus@erhai.local GNOME Shell extension is RETIRED since
+# 1.3 (ErhaiCam, oneplus-erhai-erhaicam >= 1.5, owns focus and exposure
+# natively).  dpkg already removed the system copy; also purge any user-level
+# copy that would shadow the removal, so no stale files keep the uuid
+# loadable.  The enabled-extensions dconf entry is best handled per session
+# (gnome-shell only logs it missing once the dir is gone).
+for home in /root /home/*; do
+	dir="$home/.local/share/gnome-shell/extensions/erhai-cam-focus@erhai.local"
+	[ -d "$dir" ] || continue
+	rm -f "$dir/extension.js" "$dir/metadata.json"
+	rmdir "$dir" 2>/dev/null || true
+	rmdir "$home/.local/share/gnome-shell/extensions" 2>/dev/null || true
+	rmdir "$home/.local/share/gnome-shell" 2>/dev/null || true
+done
+
+exit 0

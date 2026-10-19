@@ -1,0 +1,42 @@
+Package: oneplus-erhai-audio
+Version: 1.2
+Section: sound
+Priority: optional
+Architecture: all
+Maintainer: TheMojoMan <themojoman@gmx.net>
+Depends: alsa-ucm-conf
+Description: ALSA UCM profile and mixer routing for the OnePlus Pad 3 (erhai)
+ ALSA Use Case Manager profile for the q6apm/AudioReach sound card of the
+ OnePlus Pad 3 (card "OnePlus-Pad3-erhai-24976", driver sm8750).
+ .
+ The HiFi verb wires the MultiMedia front-ends to their back-ends
+ (MM1 -> SECONDARY_MI2S_RX speaker TDM, MM2 -> DisplayPort, MM3 -> headset
+ mic via TX_CODEC_DMA_TX_3, MM4 -> internal DMICs via VA_CODEC_DMA_TX_0) and
+ un-mutes the six AW88261 speaker amps.
+ .
+ Installing this package is all audio needs on the erhai image: PipeWire /
+ WirePlumber's ACP layer resolves the profile through
+ /usr/share/alsa/ucm2/conf.d/sm8750/ and applies the HiFi verb (and its
+ EnableSequence mixer writes) automatically when the desktop session starts.
+ .
+ A USB-C monitor that carries audio gets a selectable "DisplayPort" output
+ via the jack-gated UCM device; erhai-dp-audio-sync.service (triggered by a
+ udev rule on DRM connector changes) bounces WirePlumber when a monitor is
+ attached after boot, so the DP output appears without a manual restart.
+ .
+ The LPASS audio devices (lpass-lpi-pinctrl@7760000, rx/tx/va macros, both
+ SoundWire masters) can end up never probed when their kernel modules load
+ after the platform devices are created (late udev coldplug), which leaves
+ the snd-sc8280xp machine driver without its codec components and no sound
+ card at all. This package therefore also ships
+ erhai-audio-bringup.service (oneshot at boot): it binds the LPI pinctrl,
+ re-runs the ASoC module probe chain if needed, waits for card0 and applies
+ the HiFi verb.
+ .
+ WirePlumber's ACP opens the UCM with the ALSA card ID ("OnePlusPad3") rather
+ than "hw:0"; ALSA's UCM resolver does not match the card ID against the
+ card's driver/name/longname fields, so the conf.d/ lookup misses and no ctl
+ is opened (leaving ${CardId} undefined and the verb's mixer writes without a
+ cdev). This package therefore also ships a legacy-path fallback
+ (usr/share/alsa/ucm2/OnePlusPad3/) with a self-contained HiFi verb that
+ hardcodes card 0 and opens its own control device via "cdev hw:0".

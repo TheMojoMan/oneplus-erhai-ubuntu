@@ -1,0 +1,16 @@
+[Unit]
+Description=erhai pogo folio fold -> panel backlight off/on
+# Started and stopped by erhai-folio-gate.service with the pogo keyboard
+# attach state, so this unit has no [Install] section on purpose: enabling it
+# by hand would run the watcher with no keyboard attached.
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/erhai-folio-fold.py
+# Belt and braces: never leave the panel blanked when the watcher goes away
+# (the watcher itself restores on SIGTERM and removes the marker).
+ExecStopPost=/usr/local/sbin/erhai-folio-unblank.sh
+TimeoutStopSec=10
+Restart=always
+RestartSec=2

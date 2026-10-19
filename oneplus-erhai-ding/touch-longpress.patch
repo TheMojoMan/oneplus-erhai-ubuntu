@@ -1,0 +1,447 @@
+--- /usr/share/gnome-shell/extensions/ding@rastersoft.com/app/desktopGrid.js.erhai-orig	2026-09-11 14:51:47.000000000 +0200
++++ oneplus-erhai-ding/usr/share/gnome-shell/extensions/ding@rastersoft.com/app/desktopGrid.js	2026-10-15 12:58:42.778298984 +0200
+@@ -19,6 +19,7 @@
+ 'use strict';
+ const Gtk = imports.gi.Gtk;
+ const Gdk = imports.gi.Gdk;
++const GLib = imports.gi.GLib;   /* erhai: touch long-press timer */
+ 
+ const Prefs = imports.preferences;
+ const Enums = imports.enums;
+@@ -32,6 +33,11 @@
+ 
+ var elementSpacing = 2;
+ 
++/* erhai: touch-only long-press -> desktop context menu (see the note further
++ * down).  _initTouchLongPress marks the patched file for DEBIAN/postinst. */
++var TOUCH_LONGPRESS_MS = 500;
++var TOUCH_LONGPRESS_MAX_MOVE = 14;
++
+ var DesktopGrid = class extends SignalManager.SignalManager{
+     constructor(desktopManager, desktopName, desktopDescription, asDesktop) {
+         super();
+@@ -41,6 +47,17 @@
+         this._desktopName = desktopName;
+         this._asDesktop = asDesktop;
+         this._desktopDescription = desktopDescription;
++        /* erhai: touch long-press -> context menu state */
++        this._touchLongPressTimer = 0;
++        this._touchLongPressStartX = 0;
++        this._touchLongPressStartY = 0;
++        this._touchLongPressEvent = null;
++        /* erhai: live touch-point bookkeeping for the single-finger gate --
++         * a touch press arrives emulated as button 1, which looks identical
++         * with one or with three fingers down, so the raw GdkEventTouch
++         * (touch-event, needs TOUCH_MASK) is what tells them apart. */
++        this._touchPoints = 0;
++        this._touchMultiTouch = false;
+         this.updateWindowGeometry();
+         this.updateUnscaledHeightWidthMargins();
+         this.createGrids();
+@@ -110,21 +127,40 @@
+         this._eventBox.add_events(Gdk.EventMask.BUTTON_MOTION_MASK |
+                                   Gdk.EventMask.BUTTON_PRESS_MASK |
+                                   Gdk.EventMask.BUTTON_RELEASE_MASK |
+-                                  Gdk.EventMask.KEY_RELEASE_MASK);
++                                  Gdk.EventMask.KEY_RELEASE_MASK |
++                                  /* erhai: needed to see the raw touch points
++                                   * (the emulated button events do not say how
++                                   * many fingers are down) */
++                                  Gdk.EventMask.TOUCH_MASK);
+         this.connectSignal(this._eventBox, 'button-press-event', (actor, event) => {
+             let [a, x, y] = event.get_coords();
++            /* erhai: start the touch-only long-press detector on the RAW,
++             * window-local coordinates (before they are converted), so the
++             * context menu can be anchored at the finger. */
++            this._maybeStartTouchLongPress(event, x, y);
+             [x, y] = this.coordinatesLocalToGlobal(x, y);
+             this._desktopManager.onPressButton(x, y, event, this);
+             return false;
+         });
+         this.connectSignal(this._eventBox, 'motion-notify-event', (actor, event) => {
+             let [a, x, y] = event.get_coords();
++            /* erhai: a finger that moves is not a long press */
++            this._cancelTouchLongPressIfMoved(x, y);
+             [x, y] = this.coordinatesLocalToGlobal(x, y);
+             this._desktopManager.onMotion(x, y);
+         });
+         this.connectSignal(this._eventBox, 'button-release-event', (actor, event) => {
++            this._cancelTouchLongPress();
++            /* erhai: the emulated release ends the touch set on this widget */
++            this._touchPoints = 0;
++            this._touchMultiTouch = false;
+             this._desktopManager.onReleaseButton(this);
+         });
++        /* erhai: single-finger gate for the long press -- see _trackTouchEvent */
++        this.connectSignal(this._eventBox, 'touch-event', (actor, event) => {
++            this._trackTouchEvent(event);
++            return false;
++        });
+ 
+         this.connectSignal(this._window, 'key-press-event', (window, event) => {
+             this._desktopManager.onKeyPress(window, event, this);
+@@ -580,4 +616,118 @@
+ 
+         return [resColumn, resRow];
+     }
++
++    /** ******************************
++     * erhai: touch long-press -> context menu
++     ********************************/
++
++    /* The desktop background context menu is opened by a SECONDARY (mouse)
++     * button press -- `button == 3` in desktopManager.onPressButton().  A
++     * touch tap or long tap is delivered to GTK as an emulated PRIMARY
++     * (button 1) press, so the menu never opened with a finger.  This is a
++     * touch-ONLY shim: a finger held still over the desktop for
++     * TOUCH_LONGPRESS_MS opens the same menu the right mouse button would.
++     * Mouse and trackpad presses also carry button 1 but their device source
++     * is not the touchscreen, so they are never affected.
++     * `_initTouchLongPress` also appears here so DEBIAN/postinst can tell a
++     * patched file from Ubuntu's. */
++    _maybeStartTouchLongPress(event, x, y) {
++        this._cancelTouchLongPress();
++        if (event.get_button()[1] != 1) {
++            return;
++        }
++        let device = event.get_source_device();
++        /* NOTE: for a touch, GTK's emulated button event has
++         * get_device() == the "Wayland Touch Master Pointer" (source MOUSE);
++         * the touchscreen shows up as the SOURCE device.  A mouse/trackpad
++         * press has a MOUSE source device too, so this excludes it. */
++        if (!device || device.get_source() != Gdk.InputSource.TOUCHSCREEN) {
++            return;
++        }
++        /* erhai: the long press is a SINGLE-FINGER gesture: never arm it when
++         * more than one finger is (or was) down.  Measured 2026-10-15: with
++         * three fingers on the glass the desktop menu used to open 500 ms
++         * later, and the menu's popup grab then cancelled the shell's
++         * 3-finger workspace swipe (SwipeTracker._cancelPanGesture() restarts
++         * from the CURRENT workspace = "the swipe snaps back").
++         * The second finger's TOUCH_BEGIN arrives with the same finger-down
++         * batch as the emulated press, so this cancels the timer in time. */
++        if (this._touchMultiTouch || this._touchPoints > 1) {
++            return;
++        }
++        this._touchLongPressStartX = x;
++        this._touchLongPressStartY = y;
++        /* keep a COPY of the press event: the menu popup needs a trigger event
++         * (device + time), and the original is only valid inside this handler */
++        this._touchLongPressEvent = event.copy();
++        this._touchLongPressTimer = GLib.timeout_add(
++            GLib.PRIORITY_DEFAULT, TOUCH_LONGPRESS_MS, () => {
++                this._touchLongPressTimer = 0;
++                this._doTouchLongPress(x, y);
++                return GLib.SOURCE_REMOVE;
++            });
++    }
++
++    _cancelTouchLongPressIfMoved(x, y) {
++        if (!this._touchLongPressTimer) {
++            return;
++        }
++        if ((Math.abs(x - this._touchLongPressStartX) > TOUCH_LONGPRESS_MAX_MOVE) ||
++            (Math.abs(y - this._touchLongPressStartY) > TOUCH_LONGPRESS_MAX_MOVE)) {
++            this._cancelTouchLongPress();
++        }
++    }
++
++    _cancelTouchLongPress() {
++        if (this._touchLongPressTimer) {
++            GLib.source_remove(this._touchLongPressTimer);
++            this._touchLongPressTimer = 0;
++        }
++        this._touchLongPressEvent = null;
++    }
++
++    /* erhai: keep track of how many fingers are on this widget.
++     *
++     * A touch press reaches GTK as an emulated button-1 press (see
++     * _maybeStartTouchLongPress), which is indistinguishable from a mouse
++     * press and says nothing about the number of fingers; the RAW
++     * GdkEventTouch does -- GTK3 delivers one touch-event per finger (with a
++     * real GdkEventSequence) as long as the widget's window has
++     * Gdk.EventMask.TOUCH_MASK set (measured 2026-10-15: three fingers =>
++     * three TOUCH_BEGIN, and only ONE emulated press).
++     *
++     * TOUCH_CANCEL matters just as much: when the shell's 3-finger workspace
++     * gesture grabs the sequence, the compositor CANCELS the client's touch and
++     * NO button-release follows -- without this, the armed 500 ms timer
++     * survived the whole swipe and popped the context menu in the middle of it,
++     * which (through the menu's popup grab) aborted the swipe. */
++    _trackTouchEvent(event) {
++        let type = event.get_event_type();
++        if (type == Gdk.EventType.TOUCH_BEGIN) {
++            this._touchPoints++;
++            if (this._touchPoints > 1) {
++                this._touchMultiTouch = true;
++                this._cancelTouchLongPress();
++            }
++        } else if (type == Gdk.EventType.TOUCH_END ||
++                   type == Gdk.EventType.TOUCH_CANCEL) {
++            this._touchPoints = Math.max(0, this._touchPoints - 1);
++            if (this._touchPoints == 0) {
++                this._touchMultiTouch = false;
++            }
++            if (type == Gdk.EventType.TOUCH_CANCEL) {
++                this._cancelTouchLongPress();
++            }
++        }
++    }
++
++    _doTouchLongPress(x, y) {
++        let triggerEvent = this._touchLongPressEvent;
++        this._touchLongPressTimer = 0;
++        this._touchLongPressEvent = null;
++        /* drop the rubber-band state the primary press started, so a finger
++         * lifted after the menu grabbed the seat cannot leave it dangling */
++        this._desktopManager.onReleaseButton(this);
++        this._desktopManager.showDesktopContextMenu(x, y, this._eventBox, triggerEvent);
++    }
+ };
+--- /usr/share/gnome-shell/extensions/ding@rastersoft.com/app/desktopManager.js.erhai-orig	2026-09-11 14:51:47.000000000 +0200
++++ oneplus-erhai-ding/usr/share/gnome-shell/extensions/ding@rastersoft.com/app/desktopManager.js	2026-10-04 17:10:26.620445968 +0200
+@@ -697,6 +697,49 @@
+         }
+     }
+ 
++    /* erhai: open the desktop context menu anchored at a widget-local point.
++     * Used by the touch long-press shim in desktopGrid.js, which has no
++     * button-3 event to hand to popup_at_pointer.  `_initTouchLongPress` also
++     * appears here so DEBIAN/postinst can tell a patched file from Ubuntu's. */
++    showDesktopContextMenu(x, y, widget, triggerEvent) {
++        this._prepareMenu();
++        if (triggerEvent) {
++            /* the usual path: anchor the menu at the triggering event (the
++             * finger), exactly like the mouse button-3 branch */
++            this._menu.popup_at_pointer(triggerEvent);
++            this.guardMenuRelease(this._menu);
++            return;
++        }
++        let window = widget ? widget.get_window() : null;
++        if (window) {
++            let rect = new Gdk.Rectangle({x: Math.floor(x), y: Math.floor(y),
++                                          width: 1, height: 1});
++            this._menu.popup_at_rect(window, rect,
++                Gdk.Gravity.SOUTH_WEST, Gdk.Gravity.NORTH_WEST, null);
++        } else {
++            this._menu.popup_at_pointer(null);
++        }
++    }
++
++    /* erhai: swallow the ONE release that belongs to the long press that opened
++     * the menu.  The menu is shown while the finger is still down, and GTK
++     * treats the matching release as a normal click -- it is more than
++     * MENU_SHELL_TIMEOUT (500 ms, gtkmenushell.c) after the trigger event's
++     * time, so gtk_menu_shell_button_release activates the item under the
++     * finger (or deactivates the menu).  Returning TRUE from this handler
++     * stops the menu's default release handling, so the menu stays open until
++     * the NEXT touch (on an item, or outside).  Used by both the desktop menu
++     * (showDesktopContextMenu) and the icon menu (desktopIconItem). */
++    guardMenuRelease(menu) {
++        if (!menu) {
++            return;
++        }
++        let id = menu.connect('button-release-event', () => {
++            menu.disconnect(id);
++            return true;
++        });
++    }
++
+     _prepareMenu() {
+         let templates = this.templatesMonitor.createMenu();
+         if (templates === null) {
+--- /usr/share/gnome-shell/extensions/ding@rastersoft.com/app/desktopIconItem.js.erhai-orig	2026-09-11 14:51:47.000000000 +0200
++++ oneplus-erhai-ding/usr/share/gnome-shell/extensions/ding@rastersoft.com/app/desktopIconItem.js	2026-10-15 12:59:05.844215755 +0200
+@@ -41,6 +41,11 @@
+ 
+ const _ = Gettext.gettext;
+ 
++/* erhai: touch-only long-press -> icon context menu (see _doTouchLongPress).
++ * _initTouchLongPress marks the patched file for DEBIAN/postinst. */
++var TOUCH_LONGPRESS_MS = 500;
++var TOUCH_LONGPRESS_MAX_MOVE = 14;
++
+ var desktopIconItem = class desktopIconItem extends SignalManager.SignalManager {
+     constructor(desktopManager, fileExtra) {
+         super();
+@@ -60,6 +65,16 @@
+         this._dropCoordinates = null;
+         this._destroyed = false;
+         this._relativeX = 0.5;
++        /* erhai: touch long-press -> context menu state */
++        this._touchLongPressTimer = 0;
++        this._touchLongPressStartX = 0;
++        this._touchLongPressStartY = 0;
++        this._touchLongPressEvent = null;
++        this._longPressFired = false;
++        /* erhai: live touch-point bookkeeping for the single-finger gate --
++         * see _trackTouchEvent */
++        this._touchPoints = 0;
++        this._touchMultiTouch = false;
+     }
+ 
+     /** *********************
+@@ -177,6 +192,18 @@
+         this.connectSignal(this._shieldLabelEventBox, 'button-press-event', (actor, event) => {
+             return true;
+         });
++        /* erhai: the emulated button events do not say how many fingers are
++         * down; the raw touch events (touch-event) do -- see _trackTouchEvent */
++        this._eventBox.add_events(Gdk.EventMask.TOUCH_MASK);
++        this._labelEventBox.add_events(Gdk.EventMask.TOUCH_MASK);
++        this.connectSignal(this._eventBox, 'touch-event', (actor, event) => {
++            this._trackTouchEvent(event);
++            return false;
++        });
++        this.connectSignal(this._labelEventBox, 'touch-event', (actor, event) => {
++            this._trackTouchEvent(event);
++            return false;
++        });
+         this.connectSignal(this._eventBox, 'button-press-event', (actor, event) => this._onPressButton(actor, event));
+         this.connectSignal(this._eventBox, 'enter-notify-event', (actor, event) => this._onEnter(this._eventBox));
+         this.connectSignal(this._eventBox, 'leave-notify-event', (actor, event) => this._onLeave(this._eventBox));
+@@ -338,6 +365,9 @@
+         if (button == 3) {
+             this._doButtonThreePressed(event, shiftPressed, controlPressed);
+         } else if (button == 1) {
++            /* erhai: a touch held still over the icon opens the same menu a
++             * right mouse click would (see _doTouchLongPress) */
++            this._maybeStartTouchLongPress(event);
+             this._doButtonOnePressed(event, shiftPressed, controlPressed);
+         }
+         return false;
+@@ -346,6 +376,20 @@
+     _onReleaseButton(actor, event) {
+         let button = event.get_button()[1];
+         if (button == 1) {
++            this._cancelTouchLongPress();
++            /* erhai: the emulated release ends the touch set on this icon */
++            this._touchPoints = 0;
++            this._touchMultiTouch = false;
++            /* erhai: if the long press already opened the context menu, this
++             * release must not also be treated as a click (which would open
++             * the file).  Always reset the flag so a later mouse click is
++             * never swallowed. */
++            let longPressFired = this._longPressFired;
++            this._longPressFired = false;
++            if (longPressFired) {
++                this._primaryButtonPressed = false;
++                return false;
++            }
+             this._doButtonOneReleased(event);
+         }
+         return false;
+@@ -372,6 +416,103 @@
+     _doButtonOneReleased(event) {
+     }
+ 
++    /** ********************************
++     * erhai: touch long-press -> context menu
++     **********************************/
++
++    /* The icon context menu is opened by a SECONDARY (mouse) button press --
++     * `button == 3` in _onPressButton().  A touch tap or long tap is delivered
++     * to GTK as an emulated PRIMARY (button 1) press, so the menu never opened
++     * with a finger.  A finger held still over the icon for TOUCH_LONGPRESS_MS
++     * opens the same menu the right mouse button would.  Mouse and trackpad
++     * presses carry button 1 too but their device source is not the
++     * touchscreen, so they are never affected.
++     * `_initTouchLongPress` also appears here so DEBIAN/postinst can tell a
++     * patched file from Ubuntu's. */
++    _maybeStartTouchLongPress(event) {
++        this._cancelTouchLongPress();
++        /* NOTE: for a touch, GTK's emulated button event has
++         * get_device() == the "Wayland Touch Master Pointer" (source MOUSE);
++         * the touchscreen shows up as the SOURCE device.  A mouse/trackpad
++         * press has a MOUSE source device too, so this excludes it. */
++        let device = event.get_source_device();
++        if (!device || device.get_source() != Gdk.InputSource.TOUCHSCREEN) {
++            return;
++        }
++        /* erhai: single-finger gesture only -- a second finger (or one the
++         * compositor cancelled for the shell's workspace swipe) must never
++         * open the icon menu.  See the grid's twin comment for the measured
++         * behaviour. */
++        if (this._touchMultiTouch || this._touchPoints > 1) {
++            return;
++        }
++        this._longPressFired = false;
++        let [a, x, y] = event.get_coords();
++        this._touchLongPressStartX = x;
++        this._touchLongPressStartY = y;
++        /* keep a COPY of the press event: the menu popup needs a trigger event
++         * (device + time), and the original is only valid inside this handler */
++        this._touchLongPressEvent = event.copy();
++        this._touchLongPressTimer = GLib.timeout_add(
++            GLib.PRIORITY_DEFAULT, TOUCH_LONGPRESS_MS, () => {
++                this._touchLongPressTimer = 0;
++                this._doTouchLongPress();
++                return GLib.SOURCE_REMOVE;
++            });
++    }
++
++    _cancelTouchLongPress() {
++        if (this._touchLongPressTimer) {
++            GLib.source_remove(this._touchLongPressTimer);
++            this._touchLongPressTimer = 0;
++        }
++        this._touchLongPressEvent = null;
++    }
++
++    /* erhai: keep track of how many fingers are on this icon -- the emulated
++     * button-1 press of a touch says nothing about it, the raw GdkEventTouch
++     * does (one touch-event per finger; TOUCH_MASK must be set in the event
++     * mask for GTK3 to deliver them).  TOUCH_CANCEL is what the compositor
++     * sends when the shell's 3-finger workspace swipe grabs the sequence: no
++     * button-release follows, so without it a stale timer opened the icon menu
++     * in the middle of the swipe.  Same scheme as the desktop grid's. */
++    _trackTouchEvent(event) {
++        let type = event.get_event_type();
++        if (type == Gdk.EventType.TOUCH_BEGIN) {
++            this._touchPoints++;
++            if (this._touchPoints > 1) {
++                this._touchMultiTouch = true;
++                this._cancelTouchLongPress();
++            }
++        } else if (type == Gdk.EventType.TOUCH_END ||
++                   type == Gdk.EventType.TOUCH_CANCEL) {
++            this._touchPoints = Math.max(0, this._touchPoints - 1);
++            if (this._touchPoints == 0) {
++                this._touchMultiTouch = false;
++            }
++            if (type == Gdk.EventType.TOUCH_CANCEL) {
++                this._cancelTouchLongPress();
++            }
++        }
++    }
++
++    _doTouchLongPress() {
++        let triggerEvent = this._touchLongPressEvent;
++        this._touchLongPressTimer = 0;
++        this._touchLongPressEvent = null;
++        this._longPressFired = true;
++        this._primaryButtonPressed = false;
++        if (!this._isSelected) {
++            this._desktopManager.selected(this, Enums.Selection.RIGHT_BUTTON);
++        }
++        /* pop the menu at the finger, exactly like a right mouse click; pass
++         * the copied press event so GTK has a trigger event (device + time) */
++        this._desktopManager.fileItemMenu.showMenu(this, triggerEvent);
++        /* and swallow the release of the opening long press, so the menu does
++         * not close the instant the finger is lifted */
++        this._desktopManager.guardMenuRelease(this._desktopManager.fileItemMenu._menu);
++    }
++
+     /** *********************
+      * Drag and Drop *
+      ***********************/
+@@ -391,6 +532,8 @@
+ 
+     _onLeave(element) {
+         this._primaryButtonPressed = false;
++        /* erhai: the pointer left the icon (e.g. a touch started dragging) */
++        this._cancelTouchLongPress();
+         if (this._fullStyleContext.has_class('file-item-hover')) {
+             this._fullStyleContext.remove_class('file-item-hover');
+         }

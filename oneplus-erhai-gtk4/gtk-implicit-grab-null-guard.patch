@@ -1,0 +1,56 @@
+# erhai: do not dereference a MISSING touch in
+# _gdk_wayland_seat_get_implicit_grab_serial()
+#
+# The `else if (device == wayland_seat->logical_touch)` branch picks "the first
+# sequence" out of seat->touches WITHOUT checking that the table has one.  GDK
+# removes a touch when the compositor cancels it (wl_touch.cancel) -- which is
+# exactly what a GNOME Shell gesture does when it takes the sequence over, e.g.
+# the 3-finger workspace swipe.  A GtkDragSource that is still updating at that
+# moment (its internal GtkDragGesture gets one more update) then calls
+# gtk_drag_begin -> gdk_drag_begin with the now sequence-less touch device,
+# lands in this branch, and SEGVs on `touch->touch_down_serial' where
+# g_hash_table_iter_next() left `touch' untouched.
+#
+# Measured on erhai 2026-10-15 (GTK 4.22.4+ds-0ubuntu0.1): a Nautilus that
+# started a drag after the 3-finger swipe cancelled its touch crashed, fully
+# symbolized:
+#   gtk_drag_source_update        (gtk/gtkdragsource.c:296/313)
+#   -> gtk_drag_source_drag_begin (gtk/gtkdragsource.c:610)
+#   -> _gdk_wayland_surface_drag_begin (gdk/wayland/gdkdrag-wayland.c:419)
+#   -> _gdk_wayland_seat_get_implicit_grab_serial (gdkseat-wayland.c:4574)
+# Upstream's current main carries the same unguarded read.
+#
+# Returning 0 ("no implicit grab serial") is the correct answer: the draggers
+# pass it to wl_data_device.start_drag, which the compositor then ignores
+# (no grab matches serial 0).
+#
+# Apply with:  patch -p1 < gtk-implicit-grab-null-guard.patch
+#
+--- a/gdk/wayland/gdkseat-wayland.c
++++ b/gdk/wayland/gdkseat-wayland.c
+@@ -4568,10 +4568,22 @@
+       GdkWaylandTouchData *touch;
+       GHashTableIter iter;
+ 
+-      /* Pick the first sequence */
++      /* Pick the first sequence.
++       *
++       * [erhai] The touch may already be GONE: the compositor cancels it
++       * (wl_touch.cancel) when a shell gesture takes the sequence over -- the
++       * 3-finger workspace swipe does exactly that -- and GDK then removed it
++       * from seat->touches.  A drag that is still starting (a GtkDragSource
++       * gets one more update) walks this branch with an EMPTY table, so
++       * g_hash_table_iter_next() leaves `touch' unset and
++       * `touch->touch_down_serial' dereferences NULL.  Measured on erhai
++       * 2026-10-15 with GTK 4.22.4, reached from
++       * gtk_drag_source_drag_begin() -> gdk_drag_begin().  "No serial" (0) is
++       * the correct answer here: the compositor ignores a start_drag whose
++       * serial matches no grab.  See oneplus-erhai-gtk4/README.md. */
+       g_hash_table_iter_init (&iter, wayland_seat->touches);
+-      g_hash_table_iter_next (&iter, NULL, (gpointer *) &touch);
+-      return touch->touch_down_serial;
++      if (g_hash_table_iter_next (&iter, NULL, (gpointer *) &touch))
++        return touch->touch_down_serial;
+     }
+ 
+   for (l = wayland_seat->tablets; l; l = l->next)

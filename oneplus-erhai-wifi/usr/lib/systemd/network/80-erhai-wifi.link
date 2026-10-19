@@ -1,0 +1,19 @@
+# erhai-wifi.link — deterministic wifi interface naming
+#
+# The qcacld netdev registers as 'wlan0' and udev's predictable-names rule
+# then renames it to 'wlp1s0' seconds later. NetworkManager profiles created
+# inside that window pin connection.interface-name=wlan0 and never match
+# again ("profile is not compatible ... mismatching interface name").
+#
+# This link file fixes the name to 'wlan0' at the udev level: no rename ever
+# happens, so the name is stable from registration onward. Matched by PCI
+# path AND driver so it only ever hits the on-board WCN7880 station.
+
+[Match]
+Path=pci-0000:01:00.0
+Driver=cnss_pci
+
+[Link]
+NamePolicy=
+AlternativeNamesPolicy=
+Name=wlan0

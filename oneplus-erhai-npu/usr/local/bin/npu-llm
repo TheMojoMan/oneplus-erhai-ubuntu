@@ -1,0 +1,443 @@
+#!/bin/bash
+# npu-llm -- a small, ollama-style front end for the Hexagon NPU.
+#
+# Under the hood this is llama.cpp with the Hexagon (HTP) backend, driven by the
+# GenieX SDK.  Everything needed is already installed; this script hides two
+# local quirks (the fastrpc group and the CDSP mapping space).
+#
+#   npu-llm pull <hf-repo[:QUANT]>   download a GGUF (unsloth/Qwen3-4B-GGUF:Q4_0)
+#   npu-llm run  <model> ["prompt"] [--ngl N]   one-shot on the NPU (--ngl N = N
+#                                       layers on the NPU, rest on CPU: big models)
+#   npu-llm chat <model>              interactive chat on the NPU
+#   npu-llm list | rm <model>         manage the local cache
+#   npu-llm doctor [--restart-cdsp]   check (and fix) the NPU plumbing
+#   npu-llm models                    suggestions, incl. MoE notes
+#
+# <model> may be the full repo id or just the short name (Qwen3-0.6B).
+set -u
+
+GENIEX=${GENIEX:-$HOME/.local/bin/geniex-py}
+DEVICE=${NPU_LLM_DEVICE:-llama_cpp:HTP0}   # llama_cpp:CPU for CPU-only
+# Virtual-session layer split: NPU_LLM_SESSIONS=2 (or --sessions 2) runs the WHOLE
+# model on two virtual sessions of the SAME physical NPU -- their FastRPC mapping
+# arenas add up, which is what makes 7B/8B full offload possible where one session
+# caps out at ~3.1 GiB (npu-MEMORY-2026-09-21.md continuation 33).  It exports
+# GGML_HEXAGON_DEVICES=<n> (GenieX's plugin builds the sessions from it) and turns
+# the device into llama_cpp:HTP0,HTP1[,HTP2...].
+SESSIONS=${NPU_LLM_SESSIONS:-1}
+apply_sessions() {
+	[ "${SESSIONS:-1}" -ge 2 ] || return 0
+	export GGML_HEXAGON_DEVICES=$SESSIONS
+	# An explicit NPU_LLM_DEVICE always wins (e.g.
+	# NPU_LLM_DEVICE='llama_cpp:GPUOpenCL,HTP0,HTP1' = GPU + two NPU sessions);
+	# otherwise the session count builds the HTP list.
+	[ -n "${NPU_LLM_DEVICE:-}" ] && return 0
+	local d="llama_cpp:HTP0" i=1
+	while [ "$i" -lt "$SESSIONS" ]; do d="$d,HTP$i"; i=$((i + 1)); done
+	DEVICE=$d
+}
+apply_sessions
+TOKENS=${NPU_LLM_TOKENS:-2048}
+# (The old 256-token default was unusable for chat: it is a SAFETY CAP, not a
+# model limit -- geniex's own default is 512 and ollama-style frontends are
+# effectively unlimited, stopping at EOS.  The model ends replies by itself,
+# `stop: eos`; the cap only bounds runaway generation.  Bumped 256 -> 2048 on
+# 2026-09-24 after owner feedback.)
+CTX=${NPU_LLM_CTX:-0}                       # context window in tokens (0 = model default)
+# Thinking models (Qwen3-4B is one) spend their max-token budget on ` thinking`
+# blocks BEFORE answering (measured 2026-09-24: a "say hello" prompt = 96 chunks
+# of reasoning; at ~17 tok/s decode that is wall time too).  Default OFF = direct
+# answers; --reasoning on / NPU_LLM_REASONING=on restores reflection.
+REASONING=${NPU_LLM_REASONING:-off}
+# The chat/one-shot driver used when REASONING=off: it calls the GenieX Python
+# API with enable_thinking=False (geniex-py chat cannot -- it hardcodes True).
+CHAT_HELPER=${NPU_LLM_CHAT_HELPER:-/usr/local/lib/oneplus-erhai-npu/npu-llm-chat.py}
+CACHE=${NPU_LLM_CACHE:-$HOME/.cache/geniex/models}
+export FASTRPC_UNSIGNED_PD=1                # the QNN/llama.cpp skels are unsigned
+
+die() { echo "npu-llm: $*" >&2; exit 1; }
+
+# --- die budget (shipping policy 2026-09-25): the display/touch fails at die >=
+# ~97.5-98.5 C; the NPU cannot be throttled, so one-shot runs refuse to start
+# hot and are killed if the budget is breached for 15 s.  Interactive chat only
+# pre-checks (it must not be killed mid-answer).  NPU_LLM_DIE_BUDGET_MC=0 disables.
+DB_SH=${NPU_LLM_DB:-/usr/local/lib/oneplus-erhai-npu/die-budget.sh}
+NPU_LLM_DIE_BUDGET_MC=${NPU_LLM_DIE_BUDGET_MC:-94000}
+[ -f "$DB_SH" ] && . "$DB_SH"
+
+# --- proactive thermal pre-cap (2026-09-26): the die ramps ~1.5-2 C/s under NPU
+# full offload and the display/touch complex fails at die >= ~97.5 C, so instead
+# of WAITING for the governor to catch the spike, npu-llm asks it -- via the
+# world-writable /run/erhai-thermal.hold PID lease -- to raise the CPU cooling
+# ladder to NPU_LLM_THERMAL_STEP BEFORE this model loads.  The governor jumps to
+# that floor instantly and eases back by its own 65C-soak rule when the lease
+# dies (our PID IS the lease; `exec` of the model runner keeps the PID, so it
+# lives exactly as long as the run -- even a die-budget SIGKILL releases within
+# one governor poll).  The GPU devfreq plane stays untouched by default
+# (2026-09-24: a live-session GPU devfreq clamp produced display noise + an NVT
+# touch storm); NPU_LLM_THERMAL_GPU=2 opts into a mild devfreq level per-run.
+THERMAL=${NPU_LLM_THERMAL:-1}
+THERMAL_STEP=${NPU_LLM_THERMAL_STEP:-2}   # CPU ladder 0-4 (2 = 1363/2246 MHz)
+THERMAL_GPU=${NPU_LLM_THERMAL_GPU:--1}    # GPU devfreq level; -1 = leave alone
+THERMAL_HOLD=/run/erhai-thermal.hold
+
+# The pre-cap is a lease: the governor applies it only while `kill -0 <pid>`
+# succeeds, so release needs no bookkeeping on our side - the PID dies with the
+# model process (exec keeps it) and the governor eases back by its own rule.
+thermo_start() {
+	[ "${THERMAL:-1}" = 1 ] || { echo "npu-llm: thermal pre-cap DISABLED (NPU_LLM_THERMAL=0)" >&2; return 0; }
+	case "$DEVICE" in
+	llama_cpp:CPU|CPU) echo "npu-llm: CPU-only device - no thermal pre-cap (the CPU is the worker here)" >&2; return 0 ;;
+	esac
+	case "$THERMAL_STEP" in (''|*[!0-9]*) echo "npu-llm: bad NPU_LLM_THERMAL_STEP=$THERMAL_STEP (0-4)" >&2; return 0 ;; esac
+	[ "$THERMAL_STEP" -le 4 ] || { echo "npu-llm: bad NPU_LLM_THERMAL_STEP=$THERMAL_STEP (0-4)" >&2; return 0; }
+	case "$THERMAL_GPU" in (-1|0|1|2|3|4|5) : ;; *) echo "npu-llm: bad NPU_LLM_THERMAL_GPU=$THERMAL_GPU (-1..5)" >&2; return 0 ;; esac
+	if ! systemctl is-active --quiet erhai-thermal 2>/dev/null; then
+		echo "npu-llm: WARN erhai-thermal.service not running - no pre-cap (sudo systemctl start erhai-thermal)" >&2
+		return 0
+	fi
+	if ! { [ -w "$THERMAL_HOLD" ] && printf 'pid=%d step=%d gpu=%d\n' "$$" "$THERMAL_STEP" "$THERMAL_GPU" > "$THERMAL_HOLD" 2>/dev/null; }; then
+		echo "npu-llm: WARN cannot write $THERMAL_HOLD - continuing WITHOUT the thermal pre-cap" >&2
+		return 0
+	fi
+	echo "npu-llm: thermal pre-cap ON (cpu ladder step $THERMAL_STEP held for pid $$) - the governor raises the clamp before the NPU loads; it eases back when this process exits"
+}
+
+# doctor/status helper: the truth is the governor's own run-state (it validates
+# the lease with kill -0 every poll), not the raw hold file, which can go stale.
+thermo_status() {
+	local hs
+	hs=$(sed -n 's/.*hold=\([0-9/-]*\).*/\1/p' /run/erhai-thermal.state 2>/dev/null | tail -1)
+	if [ -n "$hs" ]; then
+		if [ "${hs%/*}" = 1 ]; then
+			echo "  thermal hold: ACTIVE - cpu ladder floor ${hs#*/} (lease $(sed -n '1s/pid=\([0-9]*\).*/\1/p' "$THERMAL_HOLD" 2>/dev/null), see /run/erhai-thermal.hold)"
+		else
+			echo "  thermal hold: none"
+		fi
+	else
+		echo "  thermal hold: governor state missing - erhai-thermal.service not running?"
+	fi
+}
+
+db_precheck() {
+	[ "$NPU_LLM_DIE_BUDGET_MC" -ne 0 ] || return 0
+	type die_wait_idle >/dev/null 2>&1 || return 0
+	die_wait_idle "$NPU_LLM_DIE_BUDGET_MC"
+	case $? in
+	2) die "die over budget ($(die_now_mc) mC / $NPU_LLM_DIE_BUDGET_MC mC) - charging? wait/unplug or NPU_LLM_DIE_BUDGET_MC=0" ;;
+	esac
+}
+db_run_guarded() {
+	# one-shot (non-interactive): pre-check, then run with a mid-run kill guard
+	db_precheck
+	if [ "$NPU_LLM_DIE_BUDGET_MC" -ne 0 ] && type die_watch >/dev/null 2>&1; then
+		"$@" &
+		local p=$!
+		die_watch "$p" "$NPU_LLM_DIE_BUDGET_MC" || { die "killed at pid $p by the die budget (see the die-budget line above)"; return 1; }
+		wait "$p"
+	else
+		exec "$@"
+	fi
+}
+need_geniex() { [ -x "$GENIEX" ] || die "geniex not found at $GENIEX"; }
+cached_names() {
+	need_geniex
+	"$GENIEX" ls 2>/dev/null | awk -F'|' 'NF>2 {gsub(/ /,"",$2); if ($2 != "" && $2 != "NAME") print $2}' | sort -u
+}
+resolve() {   # short name -> full repo id when cached, else pass through
+	local want=$1 n base short
+	while read -r n; do [ "$n" = "$want" ] && { echo "$n"; return; }; done < <(cached_names)
+	base=${want%%:*}
+	while read -r n; do
+		short=${n##*/}
+		[ "${short,,}" = "${base,,}" ] && { echo "$n"; return; }
+		[ "${short,,}" = "${base,,}-gguf" ] && { echo "$n"; return; }
+	done < <(cached_names)
+	echo "$want"
+}
+model_dir() {
+	local want=${1%%:*}   # repo id without the quant tag
+	# NOTE: `find -name` matches the BASENAME only, so a pattern containing '/'
+	# never matched and ensure_tokenizer silently returned for every repo whose
+	# name has an org prefix (found 2026-09-21 while pulling a 7B: the tokenizer
+	# was then missing and GenieX would have failed with -100004/-100201).
+	find "$CACHE" -maxdepth 3 -type d -path "*/$want" 2>/dev/null | head -1
+}
+ensure_tokenizer() {   # GenieX's pull does not fetch a tokenizer; the loader wants one
+	local repo=$1 dir name org cand url ok=0
+	dir=$(model_dir "$repo"); [ -n "$dir" ] || return 0
+	[ -f "$dir/tokenizer.json" ] && return 0
+	name=${repo##*/}; name=${name%-GGUF}; org=${repo%%/*}
+	for cand in "$org/$name" "Qwen/$name" "unsloth/$name" "meta-llama/$name" \
+	            "google/$name" "microsoft/$name" "openai/$name" "$repo"; do
+		url="https://huggingface.co/$cand/resolve/main/tokenizer.json"
+		if curl -fsSL --max-time 60 -o "$dir/tokenizer.json.tmp" "$url" 2>/dev/null; then
+			mv "$dir/tokenizer.json.tmp" "$dir/tokenizer.json"; ok=1
+			curl -fsSL --max-time 60 -o "$dir/tokenizer_config.json" \
+				"https://huggingface.co/$cand/resolve/main/tokenizer_config.json" 2>/dev/null
+			echo "  tokenizer: added from $cand"
+			break
+		fi
+	done
+	rm -f "$dir/tokenizer.json.tmp"
+	[ "$ok" = 1 ] || echo "  tokenizer: NOT found -- loading may fail with -100004"
+	python3 - "$dir" <<'PYMARK'
+import json, os, sys
+d = sys.argv[1]; p = os.path.join(d, 'geniex.json')
+if not os.path.exists(p):
+    sys.exit(0)
+m = json.load(open(p)); tk = os.path.join(d, 'tokenizer.json')
+m['TokenizerFile'] = {'Name': 'tokenizer.json', 'Downloaded': os.path.exists(tk),
+                      'Size': os.path.getsize(tk) if os.path.exists(tk) else 0}
+json.dump(m, open(p, 'w'))
+PYMARK
+}
+# A single HTP0 session tops out at ~3.1 GiB of FastRPC mappings (the 32-bit CDSP
+# IOVA arena) PLUS the KV cache on top of the weight file, so a GGUF above ~2 GiB
+# cannot load with SESSIONS=1: the loader dies with GenieXError(-100201) and
+# `map_attach: dma_buf_map_attachment failed (… err -12)` in dmesg, which looks
+# like a plumbing failure but is just the arena wall.  Measured 2026-09-24 with
+# Qwen3-4B-Q4_0 (2.375 GB): client held 11 maps / 2.84 GiB, the final 605 MiB
+# chunk was refused every time; the same model loads fine with two virtual
+# sessions (82 tok/s prefill / 17 tok/s decode).  Warn before the load so the
+# retry is one command instead of a second failed attempt.
+warn_one_session() {
+	[ "${SESSIONS:-1}" -ge 2 ] && return 0
+	local dir gguf size
+	dir=$(model_dir "${1%%:*}")
+	gguf=$(find "$dir" -maxdepth 1 -name '*.gguf' 2>/dev/null | head -1)
+	[ -n "$gguf" ] || return 0
+	size=$(stat -c %s "$gguf" 2>/dev/null || echo 0)
+	[ "$size" -gt 2100000000 ] || return 0   # ~2 GiB GGUF is too big for ONE session
+	cat >&2 <<WARN
+  NOTE: $size bytes of GGUF does NOT fit ONE HTP0 session (CDSP arena ~3.1 GiB,
+        then the KV cache on top) -- the load will die with -100201.  Retry with
+        two virtual sessions and a modest context:
+          NPU_LLM_SESSIONS=2 NPU_LLM_CTX=8192 npu-llm chat ${1%%:*}
+WARN
+}
+
+check_env() {
+	local restart=0
+	[ "${1:-}" = "--restart-cdsp" ] && restart=1
+	echo "npu-llm doctor"
+	if id -nG | tr ' ' '\n' | grep -qx fastrpc; then
+		echo "  OK    in the 'fastrpc' group"
+	elif [ -r /dev/fastrpc-cdsp ]; then
+		echo "  OK    /dev/fastrpc-cdsp readable"
+	else
+		echo "  FAIL  not in the 'fastrpc' group -> LOG OUT AND BACK IN once"
+		echo "        (one-off: sudo setpriv --reuid=\$UID --regid=\$UID --init-groups bash \$0 ...)"
+	fi
+	[ -c /dev/fastrpc-cdsp ] && echo "  OK    /dev/fastrpc-cdsp present" || echo "  FAIL  no /dev/fastrpc-cdsp"
+	systemctl is-active --quiet cdsprpcd && echo "  OK    cdsprpcd running" || echo "  WARN  cdsprpcd not running"
+	echo "  CDSP:       $(cat /sys/class/remoteproc/remoteproc1/state 2>/dev/null)"
+	echo "  cache:      $CACHE ($(du -sh "$CACHE" 2>/dev/null | cut -f1) used)"
+	thermo_status
+	echo "  disk free:  $(df -h "$CACHE" | awk 'NR==2 {print $4}')"
+	if [ $restart = 1 ]; then
+		echo "  restarting the CDSP (clears the exhausted FastRPC mapping space)..."
+		sudo /usr/local/sbin/erhai-cdsp-restart.sh >/dev/null 2>&1 && echo "  OK    CDSP restarted" || echo "  FAIL  restart failed"
+	fi
+}
+
+suggest_models() {
+	cat <<'NPMODELS'
+Suggested models -- Q4_0 is the precision that runs best on the Hexagon NPU:
+
+  npu-llm pull unsloth/Qwen3-0.6B-GGUF:Q4_0     0.4 GB   fastest, good for tests
+  npu-llm pull unsloth/Qwen3-1.7B-GGUF:Q4_0     1.1 GB   ~41 tok/s on the NPU
+  npu-llm pull unsloth/Qwen3-4B-GGUF:Q4_0       2.5 GB   slower, smarter
+  npu-llm pull unsloth/Qwen3-8B-GGUF:Q4_0       5.0 GB   fills more of the RAM
+  npu-llm pull ggml-org/gpt-oss-20b-GGUF:MXFP4 12.0 GB   MoE (fits in 16 GB RAM)
+
+Larger / mixture-of-experts models: llama.cpp mmaps weights from disk, so a model
+bigger than the 16 GB RAM still runs, but weights not in RAM get paged in --
+expect slow tokens and heavy disk I/O.  The Hexagon backend accelerates the dense
+matrix multiplies; MoE expert routing normally stays on the CPU, so MoE models
+benefit most from a fast disk, not from the NPU.
+
+K-quants (Q4_K_M, Q5_K_M, ...) are NOT Hexagon-optimised -- they usually run on
+the CPU.  Use Q4_0 when you want the NPU.
+
+Bigger models (7B/8B/9B, Q4_0 ~4-5 GB) do NOT fit ONE session's ~3.1 GiB of
+FastRPC mappings when fully offloaded (the load dies with -100201 "Model loading
+failed" and `failed to map buffer` in dmesg).  Three ways to still use them:
+  npu-llm run <model> "prompt" --sessions 2   TWO VIRTUAL SESSIONS OF THE SAME
+                                           PHYSICAL NPU: the whole model fits
+                                           (7B 74 prefill / 9-10 decode tok/s,
+                                           8B 74/8), see npu-MEMORY-2026-09-21.md
+                                           continuation 33.  Env:
+                                           NPU_LLM_SESSIONS=2
+  npu-llm run <model> "prompt" --ngl 17   17 of the model's layers on the NPU,
+                                          the rest on the CPU (7B: ~6 tok/s
+                                          decode, 57 tok/s prefill)
+  NPU_LLM_DEVICE=cpu npu-llm run <model>  pure CPU, no FastRPC involved
+Models up to ~2 GB of Q4_0 weights (<= ~3B params) fit fully in ONE session.
+
+GPU + NPU (hybrid): the Adreno is a llama.cpp device too now (Mesa rusticl), so a
+comma list splits the layers across BOTH accelerators in one process:
+  NPU_LLM_DEVICE='llama_cpp:GPUOpenCL,HTP0'      GPU + one NPU session
+  NPU_LLM_DEVICE='llama_cpp:GPUOpenCL,HTP0,HTP1' GPU + two NPU sessions (set
+                                                 NPU_LLM_SESSIONS=2 as well)
+  NPU_LLM_DEVICE='llama_cpp:GPUOpenCL'           the Adreno alone -- it can hold
+                                                 the whole 9B (11.5 prefill /
+                                                 6.5 decode t/s), which the NPU
+                                                 cannot
+Hybrid buys CAPACITY, not speed: the layer split is automatic and gives the NPU
+~70 % (it reports "0 MiB free" to llama.cpp), so a 2-device hybrid overloads the
+NPU on a 9B -- that model needs the 3-device form or the GPU alone.  Detailed
+tables: npu-MEMORY-2026-09-21.md continuation 34.
+
+Context window (`--ctx N`, env NPU_LLM_CTX): the KV cache is allocated up front
+and costs 56 KiB/token (7B), 128 KiB/token (8B), 336 KiB/token (9B), so the pad's
+14 GB of RAM and the CDSP's 4 GiB mapping arena cap what is usable.  Measured
+ceilings (2026-09-21, CPU-only with a memory cap, no swap):
+  7B  Qwen2.5-7B-Instruct   n_ctx_train  32 768   131 072 works (~11 GiB!), 256k NO
+  8B  DeepSeek-R1-8B        n_ctx_train 131 072   45 056 works, 56k NO   (KV 128 KiB/tok)
+  9B  gemma-2-9b-it         n_ctx_train   8 192   28 672 works, 32k NO   (KV 336 KiB/tok)
+On the NPU (llama_cpp:HTP0) the 4 GiB DSP arena leaves room for only a few
+thousand tokens of KV: 7B --ngl 17 fits n_ctx 6144, 8B --ngl 14 fits 8192.
+A load-only test is not enough -- generation also needs the batch buffers, so an
+11 GiB window may need --ctx lowered or n_batch/n_ubatch shrunk (NBATCH env in
+tmp/npu-backup/ctx-coding-run.py).  See tmp/npu-backup/ctx-window-summary.txt.
+NPMODELS
+}
+
+case "${1:-help}" in
+pull)
+	shift; repo=${1:?usage: npu-llm pull <hf-repo[:QUANT]>}
+	need_geniex
+	echo "downloading $repo ..."
+	"$GENIEX" pull "$repo" || die "pull failed"
+	ensure_tokenizer "$repo"
+	echo done
+	"$GENIEX" ls | tail -6
+	;;
+run)
+	shift; m=${1:?usage: npu-llm run <model> ["prompt"] [--ngl N] [--ctx N] [--reasoning on|off] [--sessions N]}; shift
+	ngl=""; ctx=$CTX; reasoning=$REASONING; prompt=""
+	while [ $# -gt 0 ]; do
+		case "$1" in
+		--ngl) ngl=${2:?--ngl needs a number of layers}; shift 2 ;;
+		--ctx) ctx=${2:?--ctx needs a token count}; shift 2 ;;
+		--reasoning) reasoning=${2:?--reasoning needs on or off}; shift 2 ;;
+		--sessions) SESSIONS=${2:?--sessions needs a count}; apply_sessions; shift 2 ;;
+		*) prompt="$prompt $1"; shift ;;
+		esac
+	done
+	prompt=${prompt# }
+	[ -n "$prompt" ] || prompt="Say hello in one friendly sentence."
+	# Pre-cap the CPU before the NPU loads (proactive, not reactive): the die
+	# ramps ~2 C/s under full offload and the display fails at >= ~97.5 C, so the
+	# clamp must be live before prefill, not after the governor catches the spike.
+	thermo_start
+	full=$(resolve "$m")
+	[ -f "$(model_dir "$full")/tokenizer.json" ] || ensure_tokenizer "$full"
+	if [ -n "$ngl" ] || [ "$SESSIONS" -ge 2 ]; then
+		# Partial offload: N layers on the HTP, the rest on the CPU.  Needed for
+		# 7B+ Q4_0 models, which do NOT fit ONE session's ~3.1 GiB of mappings
+		# (npu-MEMORY-2026-09-21.md cont. 31).  With --sessions/…
+		# NPU_LLM_SESSIONS >= 2 the default becomes ngl=-1 (the whole model),
+		# because the sessions' arenas ADD UP and 7B/8B then fit (cont. 33).
+		[ -n "$ngl" ] || ngl=-1
+		dir=$(model_dir "$full")
+		gguf=$(find "$dir" -maxdepth 1 -name '*.gguf' | head -1)
+		helper=${NPU_LLM_NGL_HELPER:-/usr/local/lib/oneplus-erhai-npu/geniex-ngl.py}
+		[ -f "$gguf" ] || die "no .gguf in $dir"
+		[ -f "$helper" ] || die "n_gpu_layers helper not found: $helper"
+		if [ "$ngl" = -1 ]; then
+			echo "model: $full | device: $DEVICE | ALL layers on the NPU ($SESSIONS session(s)) | n_ctx=$ctx"
+		else
+			echo "model: $full | device: $DEVICE | n_gpu_layers=$ngl <- rest on CPU | n_ctx=$ctx"
+		fi
+		PROMPT="$prompt" db_run_guarded python3 "$helper" "$gguf" "$TOKENS" "$DEVICE" "$ngl" "$ctx"
+	fi
+	warn_one_session "$full"
+	echo "model: $full | device: $DEVICE | n_ctx=$ctx | max-tokens=$TOKENS | reasoning=$reasoning"
+	if [ "$reasoning" = off ]; then
+		db_run_guarded python3 "$CHAT_HELPER" "$full" "$DEVICE" "$ctx" "$TOKENS" "" "$prompt"
+	fi
+	db_run_guarded "$GENIEX" chat "$full" --device "$DEVICE" --max-tokens "$TOKENS" --n-ctx "$ctx" -p "$prompt"
+	;;
+chat)
+	shift; m=${1:?usage: npu-llm chat <model> [--n-ctx N] [--max-tokens N] [--reasoning on|off] [--system TEXT]}; shift
+	# Parse the npu-llm-owned flags from "$@" so the banner tells the truth and
+	# exactly one --n-ctx/--max-tokens reaches geniex (previously these fell
+	# through as duplicate flags: `--n-ctx 0 --n-ctx 13312` -- argparse keeps the
+	# LAST one, which is why the value DID apply while the banner still said 0).
+	ctx=$CTX; toks=$TOKENS; reasoning=$REASONING; sysmsg=""; extra=()
+	while [ $# -gt 0 ]; do
+		case "$1" in
+		--n-ctx) ctx=${2:?--n-ctx needs a token count}; shift 2 ;;
+		--max-tokens) toks=${2:?--max-tokens needs a count}; shift 2 ;;
+		--reasoning|--thinking) reasoning=${2:?--reasoning needs on or off}; shift 2 ;;
+		--system) sysmsg=${2:?--system needs a prompt}; shift 2 ;;
+		--) shift; extra+=("$@"); break ;;
+		*) extra+=("$1"); shift ;;
+		esac
+	done
+	full=$(resolve "$m")
+	# Interactive chat holds the pre-cap for the whole session (same lease: our
+	# PID survives the exec below, so it releases when the chat process exits).
+	thermo_start
+	[ -f "$(model_dir "$full")/tokenizer.json" ] || ensure_tokenizer "$full"
+	warn_one_session "$full"
+	echo "model: $full | device: $DEVICE | n_ctx=$ctx | max-tokens=$toks | reasoning=$reasoning"
+	db_precheck
+	if [ "$reasoning" = off ]; then
+		exec python3 "$CHAT_HELPER" "$full" "$DEVICE" "$ctx" "$toks" "$sysmsg" "${extra[@]}"
+	fi
+	gen_args=("$full" --device "$DEVICE" --max-tokens "$toks" --n-ctx "$ctx")
+	[ -n "$sysmsg" ] && gen_args+=(--system "$sysmsg")
+	[ ${#extra[@]} -gt 0 ] && gen_args+=("${extra[@]}")
+	exec "$GENIEX" chat "${gen_args[@]}"
+	;;
+list)   need_geniex; "$GENIEX" ls ;;
+rm)     shift; need_geniex; "$GENIEX" rm "${1:?usage: npu-llm rm <model>}" ;;
+doctor) shift; check_env "${1:-}" ;;
+models) suggest_models ;;
+*)
+	cat <<'NPHELP'
+npu-llm -- llama.cpp on the Hexagon NPU (OnePlus Pad 3 / erhai)
+
+  npu-llm pull <hf-repo[:QUANT]>    download, e.g. unsloth/Qwen3-1.7B-GGUF:Q4_0
+  npu-llm run  <model> ["prompt"] [--ngl N] [--ctx N] [--reasoning on|off]
+                                    one-shot; N ctx = context window
+  npu-llm chat <model> [--n-ctx N] [--max-tokens N] [--reasoning on|off]
+                                    [--system TEXT]   interactive chat
+  npu-llm list | rm <model>         manage the local cache
+  npu-llm doctor [--restart-cdsp]   check/fix the NPU plumbing
+  npu-llm models                    suggestions (incl. the MoE notes)
+
+Env: NPU_LLM_TOKENS (default 2048; the per-reply safety cap.  The model stops at
+EOS by itself -- `stop: eos` -- ollama-style frontends are effectively unlimited;
+raise/lower freely), NPU_LLM_CTX (context window, default 0 =
+model default), NPU_LLM_DEVICE (default llama_cpp:HTP0), NPU_LLM_SESSIONS
+(default 1; 2+ = virtual-session layer split), NPU_LLM_REASONING (default off;
+see below).  Thermal (2026-09-26): the die ramps ~2 C/s under NPU load and the
+display/touch fails at >= ~97.5 C, so npu-llm proactively holds the thermal
+governor's CPU ladder at NPU_LLM_THERMAL_STEP (default 2 = 1363/2246 MHz) for
+the whole run instead of waiting for the governor to catch the spike.
+NPU_LLM_THERMAL=0 disables; NPU_LLM_THERMAL_GPU=<0-5> opts into a GPU devfreq
+clamp for the run (off by default - see the 2026-09-24 display-noise incident).
+
+Thinking: Qwen3-style models reason BEFORE answering (` thinking` blocks).
+At ~17 tok/s decode that costs real wall time AND eats the max-token budget
+(a "say hello" prompt produced 96 chunks of reasoning before any answer), so
+npu-llm defaults to REASONING=off = direct answers (via the Python API with
+enable_thinking=False -- geniex-py chat cannot do this).  Re-enable with
+--reasoning on or NPU_LLM_REASONING=on.
+
+Context window (--ctx / NPU_LLM_CTX): llama.cpp allocates the whole KV cache up
+front, and its size is linear in ctx:
+    KV bytes/token = 2 (K+V) x n_kv_heads x head_dim x 2 bytes x n_layers
+For the big Q4_0 models on this pad that is 56 KiB/token (7B Qwen2.5), 128
+KiB/token (8B Llama-3.1) and 336 KiB/token (9B gemma2), so 128k/256k tokens
+would need 7-42 GiB / 14-84 GiB of KV cache alone -- more than the 14 GiB of RAM
+and far more than the CDSP's 4 GiB FastRPC mapping arena.  Keep --ctx near the
+model's own training context (32k / 128k / 8k respectively) and check the
+measured table in tmp/npu-backup/ctx-window-summary.txt.
+NPHELP
+	;;
+esac

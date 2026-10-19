@@ -1,0 +1,16 @@
+[Unit]
+Description=WCN7880 hold RF rail floor through cold-boot cal (pwrseq unvote_rails=0)
+DefaultDependencies=no
+Before=sysinit.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Built-in pwrseq-qcom-wcn checks unvote_rails at SCHEDULE time (~15s, in power_on).
+# Writing 0 here (sysinit, ~6.5s) prevents the unvote -> rail held at 1312/876 through
+# the cold-boot cal, matching Android's measured cal-active corner. unvote_all=0 too
+# (belt-and-suspenders; moot once unvote_rails=0 stops the schedule).
+ExecStart=/bin/sh -c 'echo 0 > /sys/module/pwrseq_qcom_wcn/parameters/unvote_rails; echo 0 > /sys/module/pwrseq_qcom_wcn/parameters/unvote_all; echo "erhai-wcn-holdfloor: unvote_rails=$(cat /sys/module/pwrseq_qcom_wcn/parameters/unvote_rails) unvote_all=$(cat /sys/module/pwrseq_qcom_wcn/parameters/unvote_all) at uptime $(cut -d. -f1 /proc/uptime)s" > /dev/kmsg'
+
+[Install]
+WantedBy=sysinit.target

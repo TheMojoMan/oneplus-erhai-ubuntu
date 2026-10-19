@@ -1,0 +1,61 @@
+{
+  "config": {
+    "hw_platform": ["MTP", "Surf", "RCM", "QRD"],
+    "soc_id": ["557", "577", "618"]
+  },
+  "oplus_camera_aon":{
+    "owner": "oplus_camera_aon",
+    ".config":{
+      "owner": "oplus_camera_aon",
+      "is_available":{"type": "int", "ver": "0",
+        "data": "1"
+      },
+      "fusion_1_score_threshold":{"type": "flt", "ver": "0",
+        "data": "0.5"
+      },
+      "fusion_1_iou_threshold":{"type": "flt", "ver": "0",
+        "data": "0.7"
+      },
+      "face_box_scale":{"type": "flt", "ver": "0",
+        "data": "1.0"
+      },
+      "eye_box_scale":{"type": "flt", "ver": "0",
+        "data": "1.0"
+      },
+      "fusion_2_score_threshold":{"type": "flt", "ver": "0",
+        "data": "0.4"
+      },
+      "fusion_2_iou_threshold":{"type": "flt", "ver": "0",
+        "data": "0.3"
+      },
+      "fusion_2_face_score":{"type": "flt", "ver": "0",
+        "data": "0.3"
+      },
+      "hand_lmk_options_shift_x":{"type": "flt", "ver": "0",
+        "data": "0"
+      },
+      "hand_lmk_options_shift_y":{"type": "flt", "ver": "0",
+        "data": "-0.5"
+      },
+      "hand_lmk_scale_x":{"type": "flt", "ver": "0",
+        "data": "2.6"
+      },
+      "hand_lmk_scale_y":{"type": "flt", "ver": "0",
+        "data": "2.6"
+      },
+      "hand_lmk_score_threshold":{"type": "flt", "ver": "0",
+        "data": "0.5"
+      },
+      "hand_lmk_palm_scale_roi":{"type": "flt", "ver": "0",
+        "data": "1.0"
+      },
+      "hand_cls_palm_box_scale":{"type": "flt", "ver": "0",
+        "data": "3"
+      },
+      "dump_model_input_reg":{"type": "int", "ver": "0",
+        "data": "0"
+      }
+    }
+  }
+}
+

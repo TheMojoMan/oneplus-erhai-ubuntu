@@ -1,0 +1,8 @@
+# The pogo folio touchpad must NOT be paired with the tablet-mode switch:
+# the kernel pins SW_TABLET_MODE on (auto-rotation is gated in userspace),
+# and libinput suspends INTERNAL touchpads while a tablet-mode switch is
+# active — which would kill the folio touchpad permanently. External
+# touchpads are exempt from the tablet-mode suspension (and DWT pairing
+# with the folio keyboard works via the libinput quirk file shipped in the
+# same package).
+ACTION=="add|change", SUBSYSTEM=="input", ATTRS{name}=="OnePlus Pad 3 Touchpad", ENV{ID_INPUT_TOUCHPAD}=="1", ENV{ID_INPUT_TOUCHPAD_INTEGRATION}="external"

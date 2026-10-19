@@ -1,0 +1,16 @@
+[Unit]
+Description=WCN7880 disconnected-state discovery sweeper (PNO emulation)
+Documentation=file:/usr/share/doc/ubuntu-erhai-wifi.txt
+After=erhai-wcn-wifi.service
+Wants=erhai-wcn-wifi.service
+ConditionPathExists=/usr/local/sbin/erhai-wifi-discover.sh
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/erhai-wifi-discover.sh
+ExecStartPost=/usr/local/sbin/erhai-wifi-profile-normalize.sh
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

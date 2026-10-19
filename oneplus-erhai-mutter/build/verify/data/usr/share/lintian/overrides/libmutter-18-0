@@ -1,0 +1,3 @@
+# Ubuntu-only exported symbols that are outside public API for extensions usage
+libmutter-18-0 binary: symbols-file-contains-debian-revision on symbol meta_window_override_constraints@Base (libmutter-18.so.0) [symbols]
+

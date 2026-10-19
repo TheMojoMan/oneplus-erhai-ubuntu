@@ -1,0 +1,15 @@
+[Unit]
+Description=erhai folio-fold gate (start/stop the fold watcher with the pogo keyboard)
+# FALLBACK poller: kernels with the pogo-kbd uevent (71-erhai-folio-udev.rules)
+# drive erhai-folio-fold.service reactively; this unit covers kernels that
+# only flip the sysfs attribute.  Harmless no-op next to the uevents.
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/erhai-folio-gate.sh
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

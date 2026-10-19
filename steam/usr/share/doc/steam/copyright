@@ -1,0 +1,16 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: Steam
+Source: https://store.steampowered.com/about/
+
+Files: *
+Copyright: Valve Corporation
+License: Steam-Subscriber-Agreement
+ The Steam client binaries installed by this package are Valve Corporation's
+ proprietary software.  They are not covered by a free-software licence; use
+ of the client is governed by the Steam Subscriber Agreement, which the client
+ itself ships (steam_subscriber_agreement.txt) and which is published at
+ https://store.steampowered.com/subscriber_agreement/
+ .
+ This package merely repackages Valve's own published arm64 client payload and
+ adds a launcher; it is not affiliated with or endorsed by Valve Corporation.
+ Steam is a trademark of Valve Corporation.

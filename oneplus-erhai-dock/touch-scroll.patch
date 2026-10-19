@@ -1,0 +1,238 @@
+--- /usr/share/gnome-shell/extensions/ubuntu-dock@ubuntu.com/dash.js.erhai-orig	2026-09-11 14:51:47.000000000 +0200
++++ usr/share/gnome-shell/extensions/ubuntu-dock@ubuntu.com/dash.js	2026-10-04 12:56:21.116409112 +0200
+@@ -34,6 +34,12 @@
+ const DASH_ANIMATION_TIME = Dash.DASH_ANIMATION_TIME ?? 200;
+ const DASH_VISIBILITY_TIMEOUT = 3;
+ 
++// Kinetic (momentum) scrolling for a finger drag on the touchscreen, in the
++// spirit of the shell's own SwipeTracker deceleration curve.
++const TOUCH_SCROLL_TICK_MS = 16;
++const TOUCH_SCROLL_FRICTION = 0.94;      // velocity retained per 16 ms tick
++const TOUCH_SCROLL_MIN_VELOCITY = 0.02;  // px/ms below which we stop
++
+ const Labels = Object.freeze({
+     SHOW_MOUNTS: Symbol('show-mounts'),
+     FIRST_LAST_CHILD_WORKAROUND: Symbol('first-last-child-workaround'),
+@@ -182,9 +188,15 @@
+             x_expand: this._isHorizontal,
+             y_expand: !this._isHorizontal,
+             enable_mouse_scrolling: false,
++            // An St.ScrollView is reactive by default (its init() sets it and
++            // disabling mouse scrolling does not unset it); kept explicit so a
++            // finger drag anywhere over the dock reaches the touch-scroll
++            // gesture below, including the gaps between icons.
++            reactive: true,
+         });
+ 
+         this._scrollView.connect('scroll-event', this._onScrollEvent.bind(this));
++        this._initTouchScroll();
+ 
+         this._boxContainer = new St.BoxLayout({
+             name: 'dashtodockBoxContainer',
+@@ -323,6 +335,8 @@
+     _onDestroy() {
+         this.iconAnimator.destroy();
+ 
++        this._stopKineticScroll();
++
+         if (this._requiresVisibilityTimeout) {
+             GLib.source_remove(this._requiresVisibilityTimeout);
+             delete this._requiresVisibilityTimeout;
+@@ -465,18 +479,8 @@
+             return Clutter.EVENT_STOP;
+ 
+ 
+-        let adjustment, delta = 0;
+-
+-        if (this._isHorizontal) {
+-            adjustment = this._scrollView.get_hadjustment
+-                ? this._scrollView.get_hadjustment()
+-                : this._scrollView.get_hscroll_bar().get_adjustment();
+-        } else {
+-            adjustment = this._scrollView.get_vadjustment
+-                ? this._scrollView.get_vadjustment()
+-                : this._scrollView.get_vscroll_bar().get_adjustment();
+-        }
+-
++        let delta = 0;
++        const adjustment = this._getScrollAdjustment();
+         const increment = adjustment.step_increment;
+         const [dx, dy] = event.get_scroll_delta();
+ 
+@@ -496,6 +500,176 @@
+         return Clutter.EVENT_STOP;
+     }
+ 
++    /**
++     * Return the adjustment that scrolls the dash in its current orientation.
++     */
++    _getScrollAdjustment() {
++        if (this._isHorizontal) {
++            return this._scrollView.get_hadjustment
++                ? this._scrollView.get_hadjustment()
++                : this._scrollView.get_hscroll_bar().get_adjustment();
++        }
++        return this._scrollView.get_vadjustment
++            ? this._scrollView.get_vadjustment()
++            : this._scrollView.get_vscroll_bar().get_adjustment();
++    }
++
++    /**
++     * Let a finger drag on the touchscreen scroll the dash icons.
++     *
++     * The PanGesture is attached to the scroll view (which fills the dock) in
++     * the capture phase, so it sees the touch before the app icons'
++     * drag-and-drop gesture: a quick swipe scrolls the dash, while a
++     * press-and-hold (the drag-and-drop timeout) still starts an icon reorder
++     * drag. Mouse and trackpad drags are left untouched.
++     */
++    _initTouchScroll() {
++        // Never let the extra gesture break the whole dock: on any failure the
++        // dash simply behaves like the stock one.
++        try {
++            this._setupTouchScroll();
++        } catch (e) {
++            logError(e, 'erhai-dock: could not initialise touch scrolling');
++        }
++    }
++
++    _setupTouchScroll() {
++        if (!Clutter.PanGesture || !this.add_action_full)
++            return;
++
++        this._touchPanning = false;
++        this._touchKineticTimeoutId = 0;
++
++        this._touchPanGesture = new Clutter.PanGesture({
++            min_n_points: 1,
++            max_n_points: 1,
++        });
++        // Lock the gesture to the dock axis (X for a bottom/top dock, Y for a
++        // dock on the side).
++        this._touchPanGesture.pan_axis = this._isHorizontal
++            ? Clutter.PanAxis.X
++            : Clutter.PanAxis.Y;
++
++        this._touchPanGesture.connect('may-recognize',
++            gesture => this._canTouchScroll(gesture));
++        this._touchPanGesture.connect('recognize',
++            () => this._beginTouchScroll());
++        this._touchPanGesture.connect('pan-update',
++            () => this._updateTouchScroll());
++        this._touchPanGesture.connect('end',
++            () => this._endTouchScroll());
++        this._touchPanGesture.connect('cancel',
++            () => this._abortTouchScroll());
++
++        this._scrollView.add_action_full('erhai-dash-touch-scroll',
++            Clutter.EventPhase.CAPTURE, this._touchPanGesture);
++
++        log(`erhai-dock: touch drag scrolling armed (axis ${
++            this._isHorizontal ? 'X' : 'Y'})`);
++    }
++
++    _canTouchScroll(gesture) {
++        // Only a single finger on the touchscreen drags the dash, so that
++        // mouse and trackpad drags keep working for icon reordering.
++        //
++        // get_point_event() returns the *latest* event of the point, i.e. a
++        // TOUCH_UPDATE while a finger moves but a MOTION event while a mouse
++        // button is held down: exclude the pointer event types.
++        const event = gesture.get_n_points() > 0
++            ? gesture.get_point_event(0)
++            : null;
++        if (!event)
++            return false;
++
++        switch (event.type()) {
++        case Clutter.EventType.MOTION:
++        case Clutter.EventType.BUTTON_PRESS:
++        case Clutter.EventType.BUTTON_RELEASE:
++            return false;
++        default:
++            break;
++        }
++
++        const adjustment = this._getScrollAdjustment();
++        return adjustment.get_upper() - adjustment.get_page_size() >
++            adjustment.get_lower() + 0.5;
++    }
++
++    _beginTouchScroll() {
++        this._touchPanning = true;
++        this._stopKineticScroll();
++        // reset timeout to avoid conflicts with the mouse hover event
++        this._ensureItemVisibility(null);
++    }
++
++    _updateTouchScroll() {
++        if (!this._touchPanning)
++            return;
++
++        const delta = this._touchPanGesture.get_delta_abs();
++        const movement = this._isHorizontal ? delta.get_x() : delta.get_y();
++        // The icons follow the finger.
++        const adjustment = this._getScrollAdjustment();
++        adjustment.set_value(adjustment.get_value() - movement);
++    }
++
++    _endTouchScroll() {
++        if (!this._touchPanning)
++            return;
++
++        this._touchPanning = false;
++
++        const velocity = this._touchPanGesture.get_velocity_abs();
++        // The icons move opposite to the finger, so flip the sign.
++        const pxPerMs = -(this._isHorizontal
++            ? velocity.get_x()
++            : velocity.get_y());
++
++        if (Math.abs(pxPerMs) > TOUCH_SCROLL_MIN_VELOCITY)
++            this._startKineticScroll(pxPerMs);
++    }
++
++    _abortTouchScroll() {
++        this._touchPanning = false;
++        this._stopKineticScroll();
++    }
++
++    _startKineticScroll(velocity) {
++        this._stopKineticScroll();
++
++        const adjustment = this._getScrollAdjustment();
++        let speed = velocity;
++
++        this._touchKineticTimeoutId = GLib.timeout_add(
++            GLib.PRIORITY_DEFAULT, TOUCH_SCROLL_TICK_MS, () => {
++                speed *= Math.pow(TOUCH_SCROLL_FRICTION,
++                    TOUCH_SCROLL_TICK_MS / 16);
++
++                const lower = adjustment.get_lower();
++                const upper = Math.max(lower,
++                    adjustment.get_upper() - adjustment.get_page_size());
++                let value = adjustment.get_value() +
++                    speed * TOUCH_SCROLL_TICK_MS;
++                value = Math.min(Math.max(value, lower), upper);
++                adjustment.set_value(value);
++
++                if (Math.abs(speed) < TOUCH_SCROLL_MIN_VELOCITY ||
++                    value === lower || value === upper) {
++                    this._touchKineticTimeoutId = 0;
++                    return GLib.SOURCE_REMOVE;
++                }
++
++                return GLib.SOURCE_CONTINUE;
++            });
++    }
++
++    _stopKineticScroll() {
++        if (this._touchKineticTimeoutId) {
++            GLib.source_remove(this._touchKineticTimeoutId);
++            this._touchKineticTimeoutId = 0;
++        }
++    }
++
+     _ensureItemVisibility(actor) {
+         if (actor?.hover) {
+             const destroyId =

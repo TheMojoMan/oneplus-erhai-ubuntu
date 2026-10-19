@@ -1,0 +1,58 @@
+oneplus-erhai-video (erhai HW video decoding)
+=============================================
+
+Hardware video decoding stack for the OnePlus Pad 3 (SM8750, "erhai").
+The SoC's video block belongs to Qualcomm's Venus lineage; in this
+generation it enumerates as the "Iris Decoder" V4L2 node driven by the
+qcom_iris kernel module (kernel >= +b10 required for Firefox/Brave:
+decode-order output property HFI_PROP_DECODE_ORDER_OUTPUT).
+
+What ships in this package:
+
+  /usr/lib/aarch64-linux-gnu/dri/iris_drv_video.so
+      VA-API driver (iris-vaapi) for the Iris decoder. Discovers the
+      decoder node at runtime (the /dev/videoN index is NOT stable across
+      boots); override with IRIS_VAAPI_DEVICE=/dev/videoN if ever needed.
+      Supported: H.264, HEVC Main/Main10, VP9 Profile 0/2. No AV1.
+
+  /etc/udev/rules.d/99-iris-dmaheap.rules
+      0666 on /dev/dma_heap/system (also applied by postinst on upgrade).
+
+  /etc/environment.d/55-erhai-iris-vaapi.conf
+      LIBVA_DRIVER_NAME=iris -- libva cannot autodetect the driver on msm
+      platform devices. Takes effect at next login.
+
+  /etc/environment.d/56-erhai-firefox-rdd.conf
+      MOZ_DISABLE_RDD_SANDBOX=1 -- Firefox VA-API decode runs in the RDD
+      process, whose seccomp sandbox blocks /dev/dma_heap. Takes effect at
+      next login. (Do NOT set media.rdd-process.enabled=false instead: on
+      Firefox >= 155 VA-API is hard-tied to RDD; disabling RDD moves decode
+      to the Utility process which only has software codecs.)
+
+  /etc/firefox/policies/policies.json
+      Locked prefs: media.ffmpeg.vaapi.enabled,
+      media.hardware-video-decoding.enabled/force-enabled.
+
+  /etc/chromium.d/erhai-hw-video
+      --enable-features=AcceleratedVideoDecoder. Chromium's V4L2VideoDecoder
+      drives the iris node DIRECTLY (no VA-API, no libva); H.264 and VP9
+      only in the xtradeb build (no HEVC/AV1 proprietary codecs).
+
+  /etc/brave/policies/managed/erhai-hwvideo.json
+      HardwareAccelerationModeEnabled. Brave (USE_VAAPI build) decodes
+      through the iris VA-API driver. Brave has no /etc/brave.d-style flag
+      mechanism, but on kernel >= +b10 the managed policy alone is
+      sufficient -- no desktop-file flag edits needed.
+
+  /usr/src/oneplus-erhai-video/iris-vaapi/
+      Full source of the VA-API driver (GPL-2.0-or-later), with tests,
+      benchmarks and docs (docs/chromium-integration.md, docs/
+      video-decode-setup.en.md).
+
+Browser verification:
+  Firefox/Chromium/Brave: about:support / chrome://media-internals /
+  brave://media-internals -- Video Decode: "Hardware accelerated";
+  kVideoDecoderName V4L2VideoDecoder (Chromium) or VaapiVideoDecoder
+  (Firefox RDD / Brave).
+
+  Verify VA-API itself with:  LIBVA_DRIVER_NAME=iris vainfo

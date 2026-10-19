@@ -1,0 +1,13 @@
+[Unit]
+Description=erhai: set bypass charging %i (GNOME Quick Settings switch)
+Documentation=file:/usr/share/oneplus-erhai-desktop/README.md
+
+[Service]
+Type=oneshot
+# %i = on | off | toggle | apply — the switch's privileged entry point.  The
+# GNOME extension starts this as the desktop user; /etc/polkit-1/rules.d/
+# 50-erhai-bypass-charge.rules lets an active local user do that without a
+# password prompt, scoped to THIS template unit and the `start` verb only.  The
+# script rejects unknown modes, and a refused ADSP write exits non-zero, which
+# the extension reports as an error instead of a lie.
+ExecStart=/usr/local/sbin/erhai-bypass-charge.sh %i

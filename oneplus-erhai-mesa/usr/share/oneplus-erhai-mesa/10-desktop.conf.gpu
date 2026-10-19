@@ -1,0 +1,5 @@
+LIBGL_ALWAYS_SOFTWARE=0
+#MESA_LOADER_DRIVER_OVERRIDE=zink   # native gallium clean-reboot test 2026-06-16
+GALLIUM_DRIVER=freedreno   # native gallium clean-reboot test 2026-06-16
+#TU_ERHAI_COMPUTE_COPY=1   # native blit works under no_ifpc=1 (NC_MODE held) -- workaround redundant 2026-06-16
+#TU_DEBUG=noubwc   # disabled 2026-06-16 to let native UBWC blit run (revert if compositor regresses)

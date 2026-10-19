@@ -1,0 +1,14 @@
+[Unit]
+Description=erhai: refresh the PMK8550 PMIC RTC offset hourly
+Documentation=man:systemd.timer(5)
+
+[Timer]
+# The service itself already runs once at boot; this keeps the stored offset
+# current while a session is up (systemd-timesyncd fixes the clock after WiFi
+# and the RTC crystal drifts ~60 ppm = 5 s/day).
+OnUnitActiveSec=1h
+AccuracySec=5min
+Unit=erhai-rtc-sync.service
+
+[Install]
+WantedBy=timers.target

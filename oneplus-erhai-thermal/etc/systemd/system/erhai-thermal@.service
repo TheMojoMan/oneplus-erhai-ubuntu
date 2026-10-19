@@ -1,0 +1,10 @@
+[Unit]
+Description=erhai thermal profile %i
+# The GNOME Quick Settings toggle starts this as the desktop user, permitted without a
+# password prompt by /etc/polkit-1/rules.d/50-erhai-thermal.rules. The script persists the
+# choice to /etc/default/erhai-thermal; the running governor picks the switch up within its
+# poll interval, and the boot service re-applies it at boot.
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/erhai-thermal.sh %i

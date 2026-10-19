@@ -1,0 +1,16 @@
+// Let the desktop user switch the erhai thermal profile from GNOME Quick Settings without
+// a password prompt. Scoped to starting erhai-thermal@<profile>.service and nothing else;
+// the unit's ExecStart takes the profile name as its only argument and rejects unknown ones.
+polkit.addRule(function (action, subject) {
+    if (action.id !== "org.freedesktop.systemd1.manage-units")
+        return;
+
+    var unit = action.lookup("unit");
+    if (!unit || unit.indexOf("erhai-thermal@") !== 0)
+        return;
+    if (action.lookup("verb") !== "start")
+        return;
+
+    if (subject.local && subject.active && subject.isInGroup("sudo"))
+        return polkit.Result.YES;
+});

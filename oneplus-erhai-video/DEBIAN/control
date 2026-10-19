@@ -1,0 +1,32 @@
+Package: oneplus-erhai-video
+Version: 1.2
+Section: video
+Priority: optional
+Architecture: arm64
+Maintainer: TheMojoMan <themojoman@gmx.net>
+Depends: libva2
+Description: Hardware video decoding for the OnePlus Pad 3 (erhai, SM8750)
+ Userspace stack for the Qualcomm Iris hardware video decoder (the Venus
+ lineage, "Iris Decoder" V4L2 node, qcom_iris kernel module) of the OnePlus
+ Pad 3. Ships the iris-vaapi VA-API driver (iris_drv_video.so) so VA-API
+ clients drive /dev/videoN directly, plus all browser integration:
+ . - /etc/environment.d/55: LIBVA_DRIVER_NAME=iris (libva cannot autodetect
+   the driver on msm platform devices)
+ . - /etc/environment.d/56: MOZ_DISABLE_RDD_SANDBOX=1 (Firefox VA-API decode
+   runs in the RDD process, whose seccomp sandbox blocks /dev/dma_heap)
+ . - /etc/firefox/policies/policies.json: locked VA-API decode prefs
+ . - /etc/chromium.d/erhai-hw-video: AcceleratedVideoDecoder feature flag
+   (chromium's V4L2VideoDecoder drives the iris node directly, no VA-API)
+ . - /etc/brave/policies/managed/erhai-hwvideo.json: HardwareAccelerationMode
+ . - udev rule giving the video group access to /dev/dma_heap/system
+ Codecs: H.264, HEVC Main/Main10, VP9 Profile 0/2 (no AV1). Chromium
+ (xtradeb) decodes H.264/VP9 via V4L2; Firefox and Brave decode H.264/HEVC
+ Main (and Main10/VP9 P2 where the firmware exposes P010) via VA-API.
+ Needs an erhai kernel with the iris decode-order output property (the 7.2
+ line from +b10 on, or any 7.3-rc* line) for Firefox/Brave; the full erhai
+ image ships it. The package declares NO Recommends on purpose: the kernel,
+ the browsers and libva are provided by the image (or by the user), so
+ installing it drags nothing else in. After installing on a running desktop,
+ log out and back in once.
+ .
+ The iris-vaapi source tree ships in /usr/src/oneplus-erhai-video/iris-vaapi.

@@ -1,0 +1,20 @@
+[Unit]
+Description=erhai: charge from a powered USB-C source while USB data-host (auto-ramp ADSP input current limit)
+After=multi-user.target
+
+[Service]
+Type=simple
+# RAMP=1 binary-searches the highest input current the source sustains, starting
+# at START_MA and halving on breakdown (VBUS collapse / charger offline). This
+# auto-discovers the right limit for any source: ~1.3A from a powered hub, up to
+# ~3.1A (5V) from a SuperVOOC brick forced to fixed PD. Set RAMP=0 to use the old
+# fixed ICL_UA write instead.
+Environment=RAMP=1
+Environment=START_MA=3400
+Environment=ICL_UA=1500000
+ExecStart=/usr/local/sbin/erhai-host-charge.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

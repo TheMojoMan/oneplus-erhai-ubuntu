@@ -1,0 +1,66 @@
+#!/bin/bash
+# oneplus-erhai-fastrpc postinst: make the CDSP FastRPC path usable.
+#
+# The unit carries ConditionPathExists=/dev/fastrpc-cdsp, so on a kernel that
+# does not enable &remoteproc_cdsp the start is a SKIP, not a failure --
+# installing this package ahead of a kernel reboot is therefore safe.
+set -e
+
+# 1. The `fastrpc` group. usr/lib/sysusers.d/fastrpc.conf declares it (upstream's
+#    file), and systemd-sysusers creates it at boot; do it now so the udev trigger
+#    and the group membership below can rely on it. groupadd (passwd, essential)
+#    rather than addgroup keeps this dependency-free.
+if ! getent group fastrpc >/dev/null 2>&1; then
+	groupadd --system fastrpc
+	echo "oneplus-erhai-fastrpc: created the fastrpc group"
+fi
+
+# 2. Put the desktop accounts in it: /dev/fastrpc-* is root:fastrpc 0640, and
+#    neither uaccess nor polkit applies to a misc device. Uses the shared helper
+#    so the set of "desktop users" stays defined in one place; falls back to the
+#    first regular uid range when the helper (oneplus-erhai-desktop) is absent.
+add_fastrpc_group_to_desktop_users() {
+	local user entry
+	if [ -r /usr/local/sbin/erhai-desktop-users.sh ]; then
+		# shellcheck disable=SC1091
+		. /usr/local/sbin/erhai-desktop-users.sh
+		for entry in $(erhai_desktop_users); do
+			user=${entry%%:*}
+			id -nG "$user" 2>/dev/null | tr ' ' '\n' | grep -qx fastrpc && continue
+			usermod -aG fastrpc "$user" \
+				&& echo "oneplus-erhai-fastrpc: $user += fastrpc (re-login to use it)"
+		done
+		return 0
+	fi
+	for user in $(awk -F: '$3 >= 1000 && $3 < 1100 {print $1}' /etc/passwd); do
+		id -nG "$user" 2>/dev/null | tr ' ' '\n' | grep -qx fastrpc && continue
+		usermod -aG fastrpc "$user" \
+			&& echo "oneplus-erhai-fastrpc: $user += fastrpc (re-login to use it)"
+	done
+}
+add_fastrpc_group_to_desktop_users || true
+
+# The client libraries live in /usr/local/lib (in the default ld.so path through
+# /etc/ld.so.conf.d/libc.conf, and QNN/dlopen clients look there by absolute path).
+ldconfig >/dev/null 2>&1 || true
+
+# 3. Apply the udev rule to the already-probed nodes and let it wire the daemon.
+udevadm control --reload >/dev/null 2>&1 || true
+udevadm trigger --action=add --subsystem-match=misc >/dev/null 2>&1 || true
+
+# 4. The daemon. ConditionPathExists-gated, so "no CDSP on this kernel" is a SKIP.
+if [ -d /run/systemd/system ]; then
+	systemctl daemon-reload >/dev/null 2>&1 || true
+	systemctl enable cdsprpcd.service >/dev/null 2>&1 || true
+	if [ -c /dev/fastrpc-cdsp ]; then
+		echo "oneplus-erhai-fastrpc: /dev/fastrpc-cdsp present, (re)starting cdsprpcd"
+		systemctl restart cdsprpcd.service >/dev/null 2>&1 || true
+		sleep 1
+		echo "oneplus-erhai-fastrpc: cdsprpcd is $(systemctl is-active cdsprpcd.service 2>/dev/null)"
+	else
+		echo "oneplus-erhai-fastrpc: no /dev/fastrpc-cdsp yet (kernel without the"
+		echo "  CDSP? boot oneplus-erhai-linux >= +b63) -- unit enabled, start skipped"
+	fi
+fi
+
+exit 0

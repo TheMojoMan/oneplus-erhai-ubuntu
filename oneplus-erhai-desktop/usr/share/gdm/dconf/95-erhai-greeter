@@ -1,0 +1,25 @@
+# erhai: greeter-only dconf defaults.
+#
+# /usr/share/gdm/generate-config (gdm.service ExecStartPre) compiles this whole
+# directory -- `as_gdm dconf compile /var/lib/gdm3/greeter-dconf-defaults
+# /usr/share/gdm/dconf` -- into the greeter's file-db, so anything here lands in
+# the greeter's dconf chain at every gdm start.  The header of the packaged
+# 00-upstream-settings invites exactly this ("Instead create your own file next
+# to it with a higher numbered prefix").
+#
+# NOTE: this only helps while the greeter's dconf is READABLE.  GDM 50's dynamic
+# greeter user can end up with an unreadable HOME (see
+# erhai-greeter-brightness.py), which makes dconf fall back to schema defaults
+# and drops every db value -- hence the belt-and-braces alongside it: the greeter
+# dconf seed, the 99-erhai-no-gsd-ambient gschema default override, and the
+# greeter .desktop pinning --session=gnome-login.
+
+[org/gnome/desktop/session]
+# Never let the login screen come up as the distro desktop session: Ubuntu's
+# 10_ubuntu-settings.gschema.override makes "ubuntu" the default for this key.
+session-name='gnome-login'
+
+[org/gnome/settings-daemon/plugins/power]
+# erhai's auto-brightness is erhai-alsd; GNOME's own ALS handling stays off here
+# too (its unanchored curve collapses the panel to its minimum).
+ambient-enabled=false

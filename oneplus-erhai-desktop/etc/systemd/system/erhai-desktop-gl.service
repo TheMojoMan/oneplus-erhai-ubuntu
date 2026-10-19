@@ -1,0 +1,15 @@
+[Unit]
+Description=erhai: select desktop GL environment to match the booted kernel
+# Must land before the display manager comes up, because environment.d is read
+# once when the user manager starts. gdm itself is disabled here and started by
+# erhai-touchscreen.service, so ordering before that is what matters.
+After=basic.target
+Before=erhai-touchscreen.service display-manager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/erhai-desktop-gl.sh
+
+[Install]
+WantedBy=multi-user.target

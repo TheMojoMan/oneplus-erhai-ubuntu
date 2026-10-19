@@ -1,0 +1,9 @@
+# OnePlus Pad 3 pogo folio keyboard: the touchpad is tagged external via
+# the udev rule in this package (it must not be suspended by the pinned
+# tablet-mode switch). Tag the keyboard external as well so libinput
+# treats them as a matching external pair and disable-while-typing keeps
+# working while typing on the folio.
+[OnePlus Pogo Keyboard]
+MatchName=OnePlus Pad 3 Keyboard
+MatchUdevType=keyboard
+AttrKeyboardIntegration=external

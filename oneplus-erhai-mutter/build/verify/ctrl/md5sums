@@ -1,0 +1,7 @@
+fcb8a6c21a8d9820fc68b83b28dd2040  usr/lib/aarch64-linux-gnu/libmutter-18.so.0.0.0
+bb6a86c212a390a0e56b1278eeef109d  usr/lib/aarch64-linux-gnu/mutter-18/libmutter-clutter-18.so.0.0.0
+2db16c6e678023bd36a85c24b25335ac  usr/lib/aarch64-linux-gnu/mutter-18/libmutter-cogl-18.so.0.0.0
+a52cf0f5e1e41d69bf5234a482a98c76  usr/lib/aarch64-linux-gnu/mutter-18/libmutter-mtk-18.so.0.0.0
+6dfa71c84d71c72542daefc30e8fc0d8  usr/share/bug/libmutter-18-0/control
+9c4a5b425f5d1967504119b413738b8a  usr/share/doc/libmutter-18-0/copyright
+0cc2f1f10626eab24da4d194c8ff8bb4  usr/share/lintian/overrides/libmutter-18-0

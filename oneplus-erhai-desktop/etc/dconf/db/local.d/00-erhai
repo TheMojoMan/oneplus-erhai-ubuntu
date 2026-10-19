@@ -1,0 +1,38 @@
+# erhai (OnePlus Pad 3) desktop defaults. Compiled into /etc/dconf/db/local by
+# `dconf update`; users can still override any of these.
+
+[org/gnome/settings-daemon/plugins/power]
+# The power button is handled by erhai-power-toggle.service (evdev watcher ->
+# erhai-panel-power.sh: REAL internal-panel power-down with the GPU parked
+# first; backlight-only while a DP-1 external monitor is attached), so GNOME
+# must not pop its shutdown dialog. logind is likewise set to
+# HandlePowerKey=ignore; a long press still powers off.
+# GNOME's "Suspend" is ACTIVE and wired to the proven s2idle harness via
+# systemd-suspend.service ExecStart override (/usr/local/sbin/erhai-suspend-gnome.sh
+# -> erhai-suspend-s2idle.sh): manual power-button wake, display-off-first +
+# WLAN quiesce, full restore. Auto-sleep on idle stays OFF (nothing) so the
+# b29 POR-lottery is only ever entered by an explicit user action.
+power-button-action='nothing'
+sleep-inactive-ac-type='nothing'
+sleep-inactive-battery-type='nothing'
+# Auto-brightness here is erhai-alsd (org.erhai.sensors ambient-enabled, a
+# per-session user daemon), so GNOME's own ALS handling must stay OFF.  Besides
+# fighting our curve, gsd-power's implementation starts unanchored
+# (ambient_norm_value = -1 until something sets the brightness once) and decays
+# its target onto 0 percent, which the shell then applies as the minimum
+# backlight -- that is what dimmed the login screen to its floor.  The greeter
+# cannot use this db (its dconf profile is user-db:user + gdm's own file-db),
+# its copy of this key ships in the greeter dconf seed.
+ambient-enabled=false
+
+[org/gnome/shell]
+# Ubuntu images ship this as true, which switches every extension off — the
+# erhai Quick Settings toggles included.
+disable-user-extensions=false
+enabled-extensions=['erhai-thermal@erhai.local', 'erhai-sensors@erhai.local']
+
+[org/gnome/desktop/session]
+idle-delay=uint32 600
+
+[org/gnome/mutter]
+experimental-features=['scale-monitor-framebuffer']

@@ -1,0 +1,24 @@
+[Desktop Entry]
+Name=GNOME Greeter
+Comment=The GNOME Greeter session (erhai: session pinned explicitly)
+# erhai: the greeter MUST run the greeter session, never the distro desktop
+# session.  /usr/share/gdm/greeter/wayland-sessions/gnome-greeter.desktop has a
+# bare "Exec=gnome-session", and gnome-session then picks its session name from
+# dconf (org.gnome.desktop.session session-name), whose Ubuntu default override
+# is "ubuntu".  When the greeter's dconf cannot be read -- GDM 50 runs it as a
+# dynamic user whose HOME is not always accessible to that uid, so even
+# $HOME/.config/dconf/user gets "Permission denied" -- that default wins and the
+# login screen comes up as a FULL UBUNTU DESKTOP (2026-09-22).  Passing the
+# session explicitly makes the choice independent of dconf.
+#
+# /usr/local/share is ahead of /usr/share in the greeter's XDG_DATA_DIRS, so
+# this file shadows the packaged one; if it is ever not picked up, the packaged
+# file is used and behaviour is exactly what it is today (no worse).
+Exec=gnome-session --session=gnome-login
+TryExec=gnome-session
+Type=Application
+DesktopNames=GNOME-Greeter:GNOME
+NoDisplay=true
+X-GDM-SessionRegisters=true
+X-GDM-CanRunHeadless=true
+X-Ubuntu-Gettext-Domain=gdm

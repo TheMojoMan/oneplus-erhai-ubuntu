@@ -1,0 +1,7 @@
+# Larger console font — the panel is 3392x2400, the default 8x16 is unreadable.
+ACTIVE_CONSOLES="/dev/tty[1-6]"
+CHARMAP="UTF-8"
+CODESET="guess"
+FONTFACE="Terminus"
+FONTSIZE="16x32"
+VIDEOMODE=

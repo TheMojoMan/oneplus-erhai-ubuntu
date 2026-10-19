@@ -1,0 +1,63 @@
+{
+  "config":{
+    "hw_platform": ["MTP", "Surf", "RCM", "QRD", "HDK"],
+    "soc_id": ["618", "639"]
+  },
+  "free_fall_config": {
+    "owner": "sns_free_fall",
+    "is_available":{"type":"int", "ver":"0",
+      "data":"1"
+    },
+    "sup_fold_feature":{"type":"int", "ver":"0",
+      "data":"0"
+    },
+    "static_judge_length":{"type":"int", "ver":"0",
+      "data":"40"
+    },
+    "static_judge_acc_thresh":{"type":"flt", "ver":"0",
+      "data":"0.1"
+    },
+    "freefall_judge_length":{"type":"int", "ver":"0",
+      "data":"8"
+    },
+    "freefall_judge_acc_thresh":{"type":"flt", "ver":"0",
+      "data":"2.0"
+    },
+    "move_judge_length":{"type":"int", "ver":"0",
+      "data":"6"
+    },
+    "move_judge_acc_thresh":{"type":"flt","ver":"0",
+      "data":"0.1"
+    },
+    "freefall_start_judge_length":{"type":"int", "ver":"0",
+      "data":"5"
+    },
+    "freefall_start_acc_thresh":{"type":"flt", "ver":"0",
+      "data":"7.0"
+    },
+    "freefall_throw_judge_length":{"type":"int", "ver":"0",
+      "data":"70"
+    },
+    "freefall_throw_acc_thresh":{"type":"int", "ver":"0",
+      "data":"5"
+    },
+    "freefall_end_acc_thresh":{"type":"flt", "ver":"0",
+      "data":"3.0"
+    },
+    "freefall_valid_time_length":{"type":"int", "ver":"0",
+      "data":"100"
+    },
+    "freefall_peek_time_length":{"type":"int", "ver":"0",
+      "data":"20"
+    },
+    "freefall_peek_acc_thresh":{"type":"flt", "ver":"0",
+      "data":"9.8"
+    },
+    "freefall_material_thresh":{"type":"flt", "ver":"0",
+      "data":"90.0"
+    },
+    "valid_peek_interval_thresh":{"type":"int", "ver":"0",
+      "data":"1000"
+    }
+  }
+}

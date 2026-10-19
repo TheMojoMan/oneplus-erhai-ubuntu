@@ -1,0 +1,28 @@
+Package: oneplus-erhai-wifi
+Version: 1.4
+Section: net
+Priority: optional
+Architecture: all
+Maintainer: TheMojoMan <themojoman@gmx.net>
+Depends: network-manager, iw, iproute2
+Recommends: kmod
+Description: WCN7880 WiFi bring-up for the OnePlus Pad 3 (erhai)
+ Everything the internal WCN7880 (WCN7850-family) WiFi needs on the erhai
+ image: modprobe.d policy (blacklist ath12k, no cnss2 auto-load), the
+ erhai-wcn-holdfloor / erhai-wcn-devcd / erhai-wcn-wifi systemd units and
+ their scripts (erhai-wcn-wifi.sh, save-wcn-devcd.sh, wl_drvcmd), and the
+ qcacld config INI (scan_mode_6ghz=0 so 5GHz networks show at cold boot).
+ .
+ erhai-wcn-wifi.service (oneshot at boot, after NetworkManager) brings the
+ station up: wait for the PCIe endpoint, modprobe cnss2 until fs_ready
+ appears, trigger the cold-boot calibration, settle, modprobe wlan
+ (qcacld-3.0 mission driver from the kernel deb's extra/), detect the
+ managed-type netdev, set the country via wl_drvcmd and hand the interface
+ to NetworkManager for last-used autoconnect.
+ .
+ erhai-wifi-discover.service runs erhai-wifi-discover.sh: while the internal
+ station is disconnected it fires small-channel-list active scans every 30s
+ because the qcacld firmware never probes UNII-1 (ch36-48) in disconnected
+ full-band scans — without this, 5GHz APs on UNII-1 are found only by
+ passive beacon luck or after connecting on 2.4GHz first.
+

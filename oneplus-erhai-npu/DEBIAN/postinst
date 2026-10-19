@@ -1,0 +1,45 @@
+#!/bin/bash
+# oneplus-erhai-npu postinst: keep the CDSP daemon situation in the state that
+# works, and make sure the transport layer is there.
+#
+#   cdsprpcd            (oneplus-erhai-fastrpc)  = the daemon in use
+#   hexagonrpcd-cdsp    (this package)           = DISABLED fallback
+#
+# Both units are ConditionPathExists=/dev/fastrpc-cdsp gated, so on a kernel that
+# does not enable &remoteproc_cdsp a start is a SKIP, not a failure -- installing
+# this package ahead of the kernel reboot is therefore safe.
+set -e
+
+if [ -x /usr/local/sbin/cdsprpcd ]; then
+	transport=yes
+else
+	transport=no
+	echo "oneplus-erhai-npu: /usr/local/sbin/cdsprpcd (cdsprpcd) missing --" >&2
+	echo "  oneplus-erhai-fastrpc provides it and is a hard dependency." >&2
+fi
+
+if [ -d /run/systemd/system ]; then
+	systemctl daemon-reload >/dev/null 2>&1 || true
+
+	# The fallback daemon must stay OFF: two remotefs daemons on one
+	# /dev/fastrpc-cdsp fight over the DSP's one-shot shell load.
+	systemctl disable hexagonrpcd-cdsp.service >/dev/null 2>&1 || true
+	systemctl stop hexagonrpcd-cdsp.service >/dev/null 2>&1 || true
+
+	if [ "$transport" = yes ]; then
+		systemctl enable cdsprpcd.service >/dev/null 2>&1 || true
+		if [ -c /dev/fastrpc-cdsp ]; then
+			echo "oneplus-erhai-npu: CDSP is up, starting cdsprpcd"
+			systemctl restart cdsprpcd.service >/dev/null 2>&1 || true
+		else
+			echo "oneplus-erhai-npu: no /dev/fastrpc-cdsp yet (kernel built"
+			echo "  without the CDSP enable?) -- cdsprpcd enabled, start skipped"
+		fi
+	fi
+fi
+
+echo "oneplus-erhai-npu: run 'erhai-npu-status.sh' (sbin, needs root for"
+echo "  --pd-test) for the full chain report; 'npu-llm doctor' checks the"
+echo "  tool chain."
+
+exit 0

@@ -1,0 +1,18 @@
+[Unit]
+Description=Bring up internal WCN7880 WiFi (cnss2 cold-boot-cal + qcacld mission)
+# Needs rootfs (firmware/INI on sda17) and NetworkManager (for `nmcli con up`).
+# Do NOT order After=network-online.target: this service PROVIDES the network,
+# so waiting on it would stall the boot (~90s NM-wait-online) or deadlock when
+# the dongle is absent.
+After=NetworkManager.service local-fs.target
+Wants=NetworkManager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Worst case: fs_ready 30s + cal 60s + settle 10s + wlp1s0 30s -> cap at 180s.
+TimeoutStartSec=180
+ExecStart=/usr/local/sbin/erhai-wcn-wifi.sh
+
+[Install]
+WantedBy=multi-user.target

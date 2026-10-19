@@ -1,0 +1,36 @@
+# erhai: do not dereference a NULL focus_surface in touch_can_grab_surface()
+#
+# meta_wayland_touch_cancel() clears touch_info->focus_surface and leaves the
+# (cancelled) touch info in touch->touches; every other use of the field in this
+# file guards against that, this one did not -> a client starting a TOUCH drag
+# (wl_data_device.start_drag — e.g. one finger dragging a file row in Files)
+# while a cancelled touch was live dereferenced NULL and took gnome-shell down
+# (the "3-finger swipe = logout" report).  One 2-line guard, plus the context.
+#
+# Applied to Ubuntu's mutter 50.1-0ubuntu2.4 source (the debian/ patches of that
+# release are already applied); see oneplus-erhai-mutter/README.md.
+# Apply with:  patch -p1 < touch-drag-null-guard.patch
+#
+--- a/src/wayland/meta-wayland-touch.c
++++ b/src/wayland/meta-wayland-touch.c
+@@ -656,6 +656,20 @@
+ {
+   MetaWaylandSurface *subsurface;
+ 
++  /* [erhai] meta_wayland_touch_cancel() clears focus_surface and leaves the
++   * (cancelled) touch info in touch->touches, so focus_surface can be NULL
++   * here.  Every other use of the field in this file guards against that --
++   * this one did not, so a client starting a TOUCH drag
++   * (wl_data_device.start_drag, e.g. dragging a file in Files) while a
++   * cancelled touch was live dereferenced NULL and took the whole compositor
++   * down.  Measured on erhai 2026-10-15: SIGSEGV with pc inside
++   * touch_can_grab_surface(), the load of `focus_surface->surface' faulting at
++   * address 0, reached from wl_closure_invoke (a client's start_drag) ->
++   * meta_wayland_seat_get_grab_info() -> data_device_start_drag().
++   * See nautilus-MEMORY-2026-10-15.md section 5. */
++  if (touch_info->focus_surface == NULL)
++    return FALSE;
++
+   if (touch_info->focus_surface->surface == surface)
+     return TRUE;
+ 

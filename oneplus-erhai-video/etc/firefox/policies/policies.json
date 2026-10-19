@@ -1,0 +1,9 @@
+{
+  "policies": {
+    "Preferences": {
+      "media.ffmpeg.vaapi.enabled": {"Value": true, "Status": "locked"},
+      "media.hardware-video-decoding.enabled": {"Value": true, "Status": "locked"},
+      "media.hardware-video-decoding.force-enabled": {"Value": true, "Status": "locked"}
+    }
+  }
+}

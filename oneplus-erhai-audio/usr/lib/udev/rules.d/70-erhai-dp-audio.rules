@@ -1,0 +1,5 @@
+# erhai (OnePlus Pad 3): trigger the DP-audio hotplug sync on DRM connector
+# change uevents (monitor attach/detach over USB-C alt-mode). The service
+# script filters to real 'DP0 Jack' flips, so unrelated display changes only
+# cost one amixer read.
+ACTION=="change", SUBSYSTEM=="drm", TAG+="systemd", ENV{SYSTEMD_WANTS}="erhai-dp-audio-sync.service"

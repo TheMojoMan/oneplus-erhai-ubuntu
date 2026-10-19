@@ -1,0 +1,20 @@
+[Unit]
+Description=erhai audio bring-up (bind LPASS devices, register q6apm card, apply HiFi verb)
+# Fixes LPASS audio platform devices stuck unbound after late udev coldplug
+# (no sound card at all). MUST NOT wait for multi-user.target: the touch->gdm
+# chain starts desktop sessions BEFORE multi-user.target finishes (first-boot
+# snapd seeding can hold multi-user for ~80 s), and WirePlumber's first
+# front-end opens then race the HiFi verb (EINVAL "no backend DAIs enabled")
+# and are never retried -> "Dummy Output" / no sound card. The script waits
+# for the card itself, so only module loading needs to precede it.
+After=systemd-modules-load.service
+Before=wireplumber.service pipewire.service
+
+[Service]
+Type=oneshot
+TimeoutStartSec=150
+ExecStart=/usr/local/sbin/erhai-audio-bringup.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

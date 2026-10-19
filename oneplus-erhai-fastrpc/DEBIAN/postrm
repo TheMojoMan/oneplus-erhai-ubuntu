@@ -1,0 +1,22 @@
+#!/bin/bash
+# oneplus-erhai-fastrpc postrm: stop the daemon on remove.
+#
+# The `fastrpc` group and its memberships are LEFT ALONE: oneplus-erhai-sensors'
+# hexagonrpcd runs as User=fastrpc, so removing this package must not break the
+# ADSP sensor path. (The group is harmless when unused; delete it by hand if you
+# really want it gone.)
+set -e
+
+case "${1:-}" in
+remove|purge)
+	if [ -d /run/systemd/system ]; then
+		systemctl stop cdsprpcd.service >/dev/null 2>&1 || true
+		systemctl disable cdsprpcd.service >/dev/null 2>&1 || true
+		systemctl daemon-reload >/dev/null 2>&1 || true
+	fi
+	udevadm control --reload >/dev/null 2>&1 || true
+	ldconfig >/dev/null 2>&1 || true
+	;;
+esac
+
+exit 0

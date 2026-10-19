@@ -1,0 +1,38 @@
+Package: oneplus-erhai-erhaicam
+Version: 1.5
+Section: graphics
+Priority: optional
+Architecture: arm64
+Maintainer: TheMojoMan <themojoman@gmx.net>
+Provides: oneplus-erhai-cam
+Replaces: oneplus-erhai-cam (<< 1.3)
+Breaks: oneplus-erhai-cam (<< 1.3)
+Depends: libgtk-4-1, libgdk-pixbuf-2.0-0, gstreamer1.0-libcamera, gstreamer1.0-gtk4, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good
+Recommends: iio-sensor-proxy, gstreamer1.0-plugins-bad, python3-numpy
+Description: ErhaiCam — standalone camera app for the OnePlus Pad 3 (erhai)
+ GTK4/GStreamer camera app with NPU-driven autofocus and auto-exposure.  The
+ per-frame image analysis (Tenengrad focus metric + luminance statistics) runs
+ on the Hexagon NPU (HTP) as an ONNX graph executed by ONNX Runtime's QNN
+ execution provider (erhai-npu-analyze.py), with a CPU implementation of the
+ same metric as the automatic fallback.  The AF sweep drives the kernel
+ cn3927 lens subdev (V4L2_CID_FOCUS_ABSOLUTE, tap-to-focus, refocus on
+ sharpness drop); AE is a log-domain controller on the SC1320CS integration
+ time written straight to the sensor register 0x3e00.  AE (top left) and AF
+ (top right) buttons toggle the automatics; turning one off reveals the
+ matching vertical slider below the button for manual focus (VCM, 0..1023)
+ or exposure (sensor lines, 1..6396).  Also: photo capture into
+ ~/Pictures/ErhaiCam, video recording (v4l2h264enc/mp4mux with vp8/webm
+ fallback), front/rear camera switching (front streams once its Phase-B
+ driver work lands) and accelerometer orientation handling (upright preview
+ + upright snapshots).
+ Photo capture and autofocus are the focus; video is experimental.
+ .
+ This package takes over the renamed oneplus-erhai-cam (<= 1.2, the same app):
+ it Provides that name, and Replaces/Breaks the old versions so an installed
+ oneplus-erhai-cam upgrades here and its files (usr/bin/erhai-cam, the desktop
+ file, the shipped source) change hands cleanly.  The oneplus-erhai-cam 1.3
+ package is an empty transitional package that Depends on this one.
+ .
+ The manual-focus/exposure GNOME Shell extension (erhai-cam-focus@erhai.local)
+ is retired: the app owns both loops natively now (oneplus-erhai-camera 1.3
+ no longer ships it).

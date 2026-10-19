@@ -1,0 +1,29 @@
+Package: oneplus-erhai-pen
+Version: 0.5
+Section: misc
+Priority: optional
+Architecture: all
+Maintainer: TheMojoMan <themojoman@gmx.net>
+Depends: bluez, python3-gi
+Description: OnePlus pen (stylus) support for the OnePlus Pad 3 (erhai)
+ Linux/BlueZ port of the stock OxygenOS "OplusPen" service
+ (org.lineageos.pen in the LineageOS erhai open-source tree).  Auto-pairs,
+ trusts and connects the OnePlus pen over Bluetooth (BLE HID, Goodix OUI
+ F8:6F:DE / Maxeye OUI C0:87:06, HID vendor 22D9/330A) and keeps
+ /run/erhai-pen/{state,addr,soc} current.  Since 0.2 it toasts the pen's
+ state of charge for 5 s when the pen is attached to / detached from the
+ tablet's charging coil (kernel +b10, oplus_cps8601 debugfs).  Since 0.3 the
+ percentage itself is read from the pen over Bluetooth (GATT Battery Service
+ 0x180F / Battery Level 0x2A19, published as /run/erhai-pen/soc) -- the same
+ source stock Android's charger HAL feeds the driver as the writable rx_soc
+ attribute -- so the toast shows the real value instead of the coil's 0.
+ Since 0.4 the monitor watches the CPS8601 charger for the pen's ATTACH edge
+ and starts a BLE scan + reconnect the moment the pen is placed on the coil
+ (the coil is what wakes the pen's radio), learning the pen's BLE MAC from the
+ coil for instant reconnects; new `erhai-pen charger` CLI.  Since 0.5 the
+ monitor also feeds the pen's BLE SoC into the coil driver's writable rx_soc
+ knob, so the driver stops charging the pen at 100% and re-arms charging once
+ the pen has drained below the threshold (kernel +b17).  The pen
+ tip/position/pressure path stays in the NT36536 in-cell digitizer (touch
+ driver), as on stock.  Package README:
+ /usr/share/oneplus-erhai-pen/README.md

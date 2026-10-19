@@ -1,0 +1,11 @@
+[Unit]
+Description=Persist WCN7880 firmware devcoredump on cold-boot cal RDDM
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/save-wcn-devcd.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

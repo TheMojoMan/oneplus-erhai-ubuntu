@@ -1,0 +1,10 @@
+#!/bin/bash
+# oneplus-erhai-bluetooth postrm: best-effort cleanup of retired units.
+set -e
+
+if [ "$1" = "remove" ] && [ -d /run/systemd/system ]; then
+	systemctl disable erhai-bt-addr.service erhai-bt-up.service >/dev/null 2>&1 || true
+	systemctl daemon-reload >/dev/null 2>&1 || true
+fi
+
+exit 0

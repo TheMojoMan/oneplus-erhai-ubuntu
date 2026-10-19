@@ -1,0 +1,12 @@
+[Unit]
+Description=erhai: fixed backlight level on the GDM login screen
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/erhai-greeter-brightness.py
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,7 @@
+7f6baa21e0b0c5348cf1e5b4313d40c2  etc/erhai/pen.conf
+99725bbc829bbe3f7e26318e00bf9abe  etc/systemd/system/erhai-pen-notify.service
+85f3c698948527f1e2231f39bebc37fc  etc/systemd/system/erhai-pen.service
+acb58a821869e1b730f213d0c9fa05be  usr/local/sbin/erhai-pen
+dd2951f9c27147ff462d971f267a0d91  usr/local/sbin/erhai-pen-monitor.py
+e1b7a8692887e375f2c247bcf1bb3f40  usr/local/sbin/erhai-pen-notify.py
+6cb09eb4360d7f3de896c50c622301d7  usr/share/oneplus-erhai-pen/README.md

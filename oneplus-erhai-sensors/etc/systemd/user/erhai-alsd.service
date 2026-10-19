@@ -1,0 +1,14 @@
+[Unit]
+Description=erhai ambient-light auto-brightness (absolute log curve)
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+Environment=GSETTINGS_SCHEMA_DIR=/usr/share/gnome-shell/extensions/erhai-sensors@erhai.local/schemas
+ExecStart=/usr/bin/python3 /usr/local/sbin/erhai-alsd.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=graphical-session.target

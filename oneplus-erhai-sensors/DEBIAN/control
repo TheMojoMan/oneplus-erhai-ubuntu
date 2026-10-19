@@ -1,0 +1,48 @@
+Package: oneplus-erhai-sensors
+Version: 2.3
+Section: utils
+Priority: optional
+Architecture: arm64
+Maintainer: TheMojoMan <themojoman@gmx.net>
+Depends: iio-sensor-proxy, hexagonrpcd, tqftpserv, libqmi-glib5, libmbim-glib4, libqrtr-glib0, libprotobuf-c1
+Recommends: gnome-shell
+Description: SSC sensor stack for the OnePlus Pad 3 (erhai)
+ Brings the ADSP SSC sensors (BMI3x0 accelerometer, ambient light) up to
+ iio-sensor-proxy and the GNOME desktop:
+  - patched iio-sensor-proxy 3.9 with SSC support + startup-claim-race fix
+    (/usr/local/libexec/iio-sensor-proxy), monitor-sensor and ssccli helpers
+  - libssc 0.4.4 (/usr/local/lib/aarch64-linux-gnu/libssc.so.2)
+  - hexagonrpcd 0.4.0 with odm-sensor-config + nonfatal-dispatch patches
+    (/usr/local/bin/hexagonrpcd-erhai), an /etc/systemd/system/hexagonrpcd.service
+    override that replaces the distro unit (which is ordered after
+    multi-user.target and therefore started ~75 s late, waiting for the WiFi
+    bring-up -- with no accelerometer/ALS until then, i.e. no auto-rotate and
+    no auto-brightness for the first ~85 s of every boot), and the complete
+    /var/lib/hexagonfs-erhai remotefs tree
+    (acdb, fastrpc_shell_0 + libsns_* DSP libs, vendor sensor configs,
+    odm json_list). The tree must be complete BEFORE hexagonrpcd first
+    attaches: the ADSP sensor PD loads its configs exactly once.
+  - udev rule 90-erhai-ssc-sensors.rules: SSC sensor types + ACCEL_MOUNT_MATRIX
+    (rotated -90 deg so natural landscape classifies as "normal") on
+    fastrpc-adsp-secure, SYSTEMD_WANTS=iio-sensor-proxy.service
+  - iio-sensor-proxy.service drop-in redirecting ExecStart to the SSC build
+  - erhai-sensors@erhai.local GNOME Shell quick-settings extension
+    (auto-brightness toggle; auto-rotate toggle whose value is saved and
+    turned OFF when the pogo keyboard is attached and recovered on detach
+    (save persists across sessions) — the toggle itself stays enabled at
+    all times — plus suppression of the shell's built-in duplicate rotation
+    toggle)
+   - erhai-alsd (session auto-brightness) never writes brightness while the
+     panel is blanked — by the power button or by the folio-fold watcher in
+     oneplus-erhai-desktop — and re-applies its target once the panel is back
+   - ssccli gained `--rate HZ` (libssc 0.4.4 sample-rate property made
+     writable): the folio-fold watcher requests 1 Hz so the magnetometer is
+     not streamed at its 50 Hz ceiling all day (SSC hardware floors at 5 Hz)
+ Note on the Hexagon stack split: the ADSP path (hexagonrpcd-erhai, the
+ hexagonfs-erhai remotefs tree, this package) is separate from the CDSP/NPU
+ path. The shared FastRPC TRANSPORT (libcdsprpc, cdsprpcd, the `fastrpc`
+ group, the udev rule, the /usr/lib/rfsa payload trees) lives in
+ oneplus-erhai-fastrpc; hexagonrpcd runs as User=fastrpc, so this package's
+ postinst creates that group if it is missing and works standalone.
+ The source patches for the binary builds ship under
+ /usr/share/doc/oneplus-erhai-sensors/patches/.

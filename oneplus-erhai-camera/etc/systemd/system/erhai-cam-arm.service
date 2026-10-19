@@ -1,0 +1,13 @@
+[Unit]
+Description=erhai arm rear camera CCI CSR + sensor at boot
+After=systemd-udev-settle.service
+Wants=systemd-udev-settle.service
+Before=erhai-touchscreen.service gdm.service display-manager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/erhai-cam-arm.sh
+
+[Install]
+WantedBy=multi-user.target

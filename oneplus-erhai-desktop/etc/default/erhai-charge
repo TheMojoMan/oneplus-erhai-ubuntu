@@ -1,0 +1,12 @@
+# erhai bypass charging (GNOME Quick Settings switch); set with:
+#   erhai-bypass-charge.sh on|off      (also: toggle, status, limit [n])
+#
+# ERHAI_BYPASS_CHARGE=1 keeps the pack from charging while a charger is
+# attached and runs the tablet from the adapter (erhai-bypass-charge.service
+# holds it).  The in-kernel charge limit (erhai_otg_glink's max_soc, default
+# 80 %) ALSO engages the full bypass at the cap, so the pad no longer stops
+# charging and runs down on battery when the limit is reached.
+# ERHAI_MAX_SOC_SAVED is the in-kernel max_soc limiter value the helper parked
+# while bypass is on (the kernel drives the same ADSP charge-enable property,
+# so it must stand down); `off` restores it.
+ERHAI_BYPASS_CHARGE=0

@@ -1,0 +1,70 @@
+[Unit]
+Description=erhai ADSP SSC sensors daemon (hexagonrpcd-erhai)
+Documentation=man:hexagonrpcd(1)
+ConditionKernelVersion=>=6.12
+
+# This file REPLACES the distro unit (/usr/lib/systemd/system/hexagonrpcd.service,
+# owned by the `hexagonrpcd` package) -- an /etc unit of the same name wins
+# outright, which is the only way to drop the ordering described below.
+#
+# WHY: the distro unit is ordered `After=multi-user.target`, and on this pad
+# multi-user.target is only reached ~75 s after boot because it waits for
+# erhai-wcn-wifi.service (cnss2 cold-boot-cal + qcacld mission; measured 75.07 s
+# of an 82 s critical path).  Nothing about the ADSP sensor stack needs the
+# network: the ADSP remoteproc is already up at kernel-probe time, the fastrpc
+# char device (/dev/fastrpc-adsp-secure) exists with it, and the daemon only
+# serves its LOCAL remotefs tree (/var/lib/hexagonfs-erhai).  Being pulled in by
+# default.target is still fine -- that only orders us BEFORE graphical.target.
+#
+# The cost of the old ordering was user-visible on EVERY boot: iio-sensor-proxy
+# starts early (udev SYSTEMD_WANTS on the fastrpc-adsp-secure device) and polls
+# the SSC 'registry' once a second -- 76 failed polls -- until this daemon
+# answers.  Until then iio-sensor-proxy has NO accelerometer and NO light
+# sensor, so mutter's MetaOrientationManager cannot rotate
+# (panel_orientation_managed = touch_mode && has_accelerometer && builtin
+# monitor, meta-monitor-manager.c) and erhai-alsd has no lux -- i.e. no
+# auto-rotate and no auto-brightness for the first ~85 s of every boot
+# (observed 2026-10-18: iio-sensor-proxy 19:38:45, hexagonrpcd 19:40:00, first
+# `Emitted orientation changed` 19:40:01; identical in the previous boot at
+# 16:11:40 / 16:12:55).
+#
+# A drop-in CANNOT fix this: an empty `After=` is documented to reset the list,
+# but systemd 25x on this image does NOT clear an ordering that came from the
+# main unit file (tested with a scratch unit: with and without
+# DefaultDependencies=no the inherited `After=multi-user.target` stayed).
+# Keeping DefaultDependencies at its default gives us After=sysinit.target +
+# basic.target (and the tmp.mount/local-fs handling that the hardening below
+# needs), so this daemon now starts ~5-8 s after boot.
+
+[Service]
+Type=simple
+NoNewPrivileges=yes
+PrivateTmp=yes
+DevicePolicy=closed
+DeviceAllow=/dev/fastrpc-adsp
+DeviceAllow=/dev/fastrpc-sdsp
+DeviceAllow=/dev/fastrpc-cdsp
+DeviceAllow=/dev/fastrpc-adsp-secure
+DeviceAllow=/dev/fastrpc-sdsp-secure
+DeviceAllow=/dev/fastrpc-cdsp-secure
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+PrivateNetwork=yes
+RestrictAddressFamilies=none
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+MemoryDenyWriteExecute=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+ExecStart=/usr/local/bin/hexagonrpcd-erhai -f /dev/fastrpc-adsp-secure -d adsp -s -R /var/lib/hexagonfs-erhai
+Restart=always
+RestartSec=5
+User=fastrpc
+Group=fastrpc
+
+[Install]
+WantedBy=default.target

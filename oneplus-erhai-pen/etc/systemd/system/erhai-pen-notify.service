@@ -1,0 +1,16 @@
+[Unit]
+Description=erhai pen attach/detach SoC toast
+Documentation=file:/usr/share/oneplus-erhai-pen/README.md
+# Needs the CPS8601 charger debugfs (kernel +b10) to exist.
+ConditionPathExists=/sys/kernel/debug/cps-wls-charger
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/erhai-pen-notify.py
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=30
+
+[Install]
+WantedBy=multi-user.target

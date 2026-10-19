@@ -1,0 +1,4 @@
+# Prefer Mozilla's builds over Ubuntu's snap-transitional firefox package.
+Package: *
+Pin: origin packages.mozilla.org
+Pin-Priority: 1000

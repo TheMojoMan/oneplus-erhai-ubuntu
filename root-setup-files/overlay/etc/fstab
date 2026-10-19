@@ -1,0 +1,2 @@
+PARTLABEL=linux / ext4 errors=remount-ro,x-systemd.growfs 0 1
+#PARTLABEL=esp /boot/efi vfat umask=0077 0 1

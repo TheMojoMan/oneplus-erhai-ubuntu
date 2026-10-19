@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.erhai.sensors" path="/org/erhai/sensors/">
+    <key name="ambient-enabled" type="b">
+      <default>false</default>
+      <summary>Automatic brightness</summary>
+      <description>Adjust screen brightness from the ambient light sensor using an absolute log curve (erhai-alsd). The legacy gsd ambient handling stays off.</description>
+    </key>
+  </schema>
+</schemalist>

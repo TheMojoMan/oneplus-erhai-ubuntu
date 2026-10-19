@@ -1,0 +1,37 @@
+oneplus-erhai-mesa
+==================
+
+Payload lives entirely under /usr -- no ld.so.conf.d entry, no
+alternatives, no diversions. That is deliberate: putting these libraries on the
+default loader path would replace the system Mesa for every process on the
+machine, including ones that are happier on llvmpipe.
+
+To use it in a session, point the loader and the ICD/EGL registries at it:
+
+    LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu
+    VK_DRIVER_FILES=/usr/share/vulkan/icd.d/freedreno_icd.aarch64.json
+    VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/freedreno_icd.aarch64.json
+    __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json
+    GALLIUM_DRIVER=freedreno      # or MESA_LOADER_DRIVER_OVERRIDE=zink
+
+/usr/share/oneplus-erhai-mesa/10-desktop.conf.gpu is exactly that, in
+systemd environment.d format. erhai-desktop-gl.service copies it into the
+desktop user's ~/.config/environment.d/ when /proc/device-tree says the GPU
+node is enabled, and copies the llvmpipe variant when it is not -- a session
+that forces freedreno against a disabled GPU dies with "No GPUs found" and
+bounces gdm back to the greeter.
+
+environment.d is read once, when the user manager starts, so changes need a
+reboot (restarting gdm is not enough -- the user manager survives it).
+
+Notes
+-----
+* Native gallium is roughly 4x faster than zink here (glmark2-wayland ~11000 vs
+  ~2700), so it is the default. Blender is smoother on zink; launch it with
+  MESA_LOADER_DRIVER_OVERRIDE=zink (that variable wins over an inherited
+  GALLIUM_DRIVER=freedreno; setting GALLIUM_DRIVER=zink does not).
+* Never switch the compositor's GL driver on a live session -- change the env
+  and reboot. Switching live leaves two gnome-shells fighting over the GPU and
+  looks exactly like a driver hang.
+* If the system mesa-vulkan-drivers package is installed, GTK4's Vulkan
+  renderer may pick up the stale system turnip instead of this one.

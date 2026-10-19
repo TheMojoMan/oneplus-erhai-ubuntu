@@ -1,0 +1,11 @@
+{
+  "uuid": "erhai-torch@erhai.local",
+  "name": "erhai Torch",
+  "description": "Rear camera flash as a torch: on/off toggle and brightness slider in Quick Settings (leds-qcom-flash torch mode on white:flash-0/1).",
+  "shell-version": [
+    "48",
+    "49",
+    "50"
+  ],
+  "version": 1
+}

@@ -1,0 +1,27 @@
+#!/bin/bash
+set -e
+
+# The package only owns /usr/lib/steam, /usr/bin/steam and the desktop files.
+# The writable Steam root it seeds lives in the USER's home and is never
+# touched here -- removing a package must not delete somebody's games.
+# On purge we only say where that data is, and how much of it there is
+# (worst case ~2.6 GB per account).
+case "${1:-}" in
+	remove|purge)
+		if command -v update-desktop-database >/dev/null 2>&1; then
+			update-desktop-database -q /usr/share/applications 2>/dev/null || true
+		fi
+
+		if [ "${1}" = purge ]; then
+			for home in /root /home/*; do
+				[ -d "$home/.local/share/Steam" ] || continue
+				if [ -d "$home/.local/state/erhai-steam" ]; then
+					echo "steam: keeping $home/.local/share/Steam (your Steam data);" >&2
+					echo "steam: delete it by hand if you really want the games gone." >&2
+				fi
+			done
+		fi
+		;;
+esac
+
+exit 0

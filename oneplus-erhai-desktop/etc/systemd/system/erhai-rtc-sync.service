@@ -1,0 +1,11 @@
+[Unit]
+Description=erhai: store the system clock in the PMK8550 PMIC RTC
+Documentation=man:systemd.unit(5)
+After=systemd-timesyncd.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/erhai-rtc-sync.py
+
+[Install]
+WantedBy=multi-user.target

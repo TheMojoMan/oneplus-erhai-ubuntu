@@ -1,0 +1,44 @@
+Package: oneplus-erhai-llamacpp
+Version: 0.1
+Section: utils
+Priority: optional
+Installed-Size: 35444
+Architecture: arm64
+Maintainer: TheMojoMan <themojoman@gmx.net>
+Depends: libc6, libstdc++6, libgcc-s1, libssl3t64, ocl-icd-libopencl1
+Recommends: oneplus-erhai-mesa, oneplus-erhai-npu
+Description: Patched llama.cpp for the OnePlus Pad 3 (erhai): CPU + Adreno OpenCL + Hexagon NPU
+ llama.cpp (ggml 0.24.0, upstream 6f41ac5) built with the local erhai patch
+ set, installed under /opt/llama.cpp so it never shadows a distro build.
+ .
+ The patches are the price of running ggml on this device:
+  - OpenCL/Adreno (rusticl): accept the OpenCL 3.0 subgroup family instead of
+    the legacy cl_khr_subgroups name, empty REQD_SUBGROUP_SIZE_* for a compiler
+    that lacks cl_qcom_reqd_sub_group_size, keep the qcom shuffle mapping in
+    mul_mv_f16_f32_l4.cl conditional, portable float32 in the nine
+    gemm_moe_*_ns.cl kernels, and is_qualcomm_adreno_compiler() so the
+    unparsable Mesa driver version stops skipping the 1d_8x_flat decode
+    kernels the dispatch path still uses (without it every single-token decode
+    died with clSetKernelArg error -48);
+  - a hexagon backend loader fix: ggml-backend-reg.cpp also accepts the legacy
+    ggml_backend_<name>_reg() entry point, which is what the prebuilt Hexagon
+    backend exports;
+  - --offload-spec / -os (env LLAMA_ARG_OFFLOAD_SPEC): explicit device
+    placement ('HTP0:8', 'HTP0:layers=0-3,GPUOpenCL:layers=4-5,CPU:rest',
+    'HTP0:bytes=2G'), rules left to right, first match wins, unnamed layers
+    stay on the CPU.
+ .
+ The vendor Hexagon (HTP) backend that this build loads for NPU offload,
+ libggml-hexagon.so + libggml-htp-v79.so, is shipped under
+ /opt/llama.cpp/share/hexagon-v79/ (Qualcomm's public GenieX/qai_appbuilder
+ binaries -- DSP-side blobs, not built here).
+ .
+ llama-erhai and llama-erhai-server wrap the binaries with the environment the
+ device stack needs and REFUSE to run on the GPU by default: an Adreno OpenCL
+ fault on this pad takes the panel down with it (2026-09-22: ggml-opencl
+ GGML_ASSERT -> msm hangcheck -> drm recover loop -> hard reset).  The safe
+ local-LLM devices are the CPU and the Hexagon NPU.
+ .
+ NOTE the NPU route additionally needs the CDSP userspace stack (cdsprpcd,
+ libcdsprpc, /usr/lib/rfsa, the fastrpc group) -- see the README shipped in
+ /usr/share/doc/oneplus-erhai-llamacpp/.

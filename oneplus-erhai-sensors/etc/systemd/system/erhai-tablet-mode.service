@@ -1,0 +1,14 @@
+[Unit]
+Description=erhai pinned tablet-mode switch (virtual uinput SW_TABLET_MODE)
+# Must exist before the display manager starts so mutter sees the switch
+# with its state already set when it enumerates input devices.
+Before=display-manager.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/erhai-tablet-mode.py
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

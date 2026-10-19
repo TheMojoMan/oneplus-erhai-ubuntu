@@ -1,0 +1,14 @@
+#!/bin/bash
+# oneplus-erhai-pen postrm: stop + disable the pen BT service, clean state.
+set -e
+
+if [ "$1" = "remove" ] && [ -d /run/systemd/system ]; then
+	systemctl disable --now erhai-pen.service erhai-pen-notify.service >/dev/null 2>&1 || true
+	systemctl daemon-reload >/dev/null 2>&1 || true
+fi
+
+rm -f /run/erhai-pen/state /run/erhai-pen/addr /run/erhai-pen/updated \
+	/run/erhai-pen/soc /run/erhai-pen/soc_updated
+rmdir /run/erhai-pen 2>/dev/null || true
+
+exit 0

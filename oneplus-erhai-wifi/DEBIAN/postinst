@@ -1,0 +1,25 @@
+#!/bin/sh
+# Enable the three WCN7880 bring-up services after install/upgrade.
+set -e
+
+enable_unit() {
+	unit="$1"
+	wants="/etc/systemd/system/$2.target.wants/$unit"
+	ln -sf "../$unit" "$wants"
+}
+
+if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+	systemctl daemon-reload || true
+	systemctl enable erhai-wcn-holdfloor.service || true
+	systemctl enable erhai-wcn-devcd.service || true
+	systemctl enable erhai-wcn-wifi.service || true
+	systemctl enable erhai-wifi-discover.service || true
+else
+	# Image build chroot (no systemd running): enable via wants symlinks.
+	enable_unit erhai-wcn-holdfloor.service sysinit
+	enable_unit erhai-wcn-devcd.service multi-user
+	enable_unit erhai-wcn-wifi.service multi-user
+	enable_unit erhai-wifi-discover.service multi-user
+fi
+
+exit 0

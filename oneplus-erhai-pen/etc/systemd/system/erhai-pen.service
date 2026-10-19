@@ -1,0 +1,17 @@
+[Unit]
+Description=erhai pen (stylus) Bluetooth auto-pair/connect
+Documentation=file:/usr/share/oneplus-erhai-pen/README.md
+After=bluetooth.service
+Wants=bluetooth.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/erhai-pen-monitor.py
+Restart=on-failure
+RestartSec=5
+# Monitor sees the pen radio while BLE scanning; discovery windows are
+# bounded by the script, so no timeout is needed here.
+TimeoutStartSec=30
+
+[Install]
+WantedBy=multi-user.target

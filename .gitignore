@@ -1,0 +1,41 @@
+# ------------------------------------------------------------------ artifacts --
+# Every builder packs the .deb it produces into debs/ (ppa-common.sh DEB_DIR),
+# and no build artifact is ever committed -- neither from there nor from a
+# project directory (mesa payloads, gtk4/mutter rollback debs, ...).
+debs/*.deb
+*.deb
+build-root.log
+__pycache__/
+
+# ------------------------------------------------------- retired / stale trees --
+# the 7.2 kernel line is dead; the current 7.3 line stages its own payload
+# snapshot in oneplus-erhai-linux-7.3/.  BOTH 7.2 payload snapshots go: the
+# per-line one AND the canonical oneplus-erhai-linux/ (whose DEBIAN/control is
+# `Package: oneplus-erhai-linux-7.2`; only the retired build-linux-deb.sh reads
+# it -- build-kernel.sh picks the snapshot whose control names ITS package).
+/oneplus-erhai-linux-7.2/
+/oneplus-erhai-linux/
+
+# the 7.3 kernel payload snapshot IS committed (folder structure, DEBIAN/ and
+# boot/) -- except the compiled module tree, which only the .deb needs
+/oneplus-erhai-linux-7.3/usr/lib/modules/
+
+# bulky / dead build INPUTS that nobody needs from git (local copies stay for
+# the builders; a fresh clone re-fetches/regenerates them where it can):
+#   oneplus-erhai-firmware-1.0/  old firmware staging copy, referenced by nothing
+#   oneplus-erhai-mesa/opt/      the retired /opt mesa carrier payload
+#   oneplus-erhai-gtk4/build/    gtk4 build scratch (dbgsym .debug, 27 MiB)
+/oneplus-erhai-firmware-1.0/
+/oneplus-erhai-mesa/opt/
+/oneplus-erhai-gtk4/build/
+
+# postinst/postrm: build-kernel.sh takes them from the KERNEL TREE
+# (KERNEL_TREE=../oneplus-erhai-linux), so the copies here were stale duplicates.
+# switch-mesa-usr.sh: the /usr mesa replacement is delivered as the six
+# Ubuntu-named debs, so the in-place switch tool is retired.
+/postinst
+/postrm
+/switch-mesa-usr.sh
+
+# agent-local rules (contains credentials, never commit)
+.clinerules

@@ -1,0 +1,653 @@
+diff --git a/common/arg.cpp b/common/arg.cpp
+index 996ea75..69676e3 100644
+--- a/common/arg.cpp
++++ b/common/arg.cpp
+@@ -2850,6 +2850,18 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+             }
+         }
+     ).set_env("LLAMA_ARG_TENSOR_SPLIT"));
++    add_opt(common_arg(
++        {"-os", "--offload-spec"}, "SPEC",
++        "exact, deterministic layer placement across devices, comma-separated rules applied left to right:\n"
++        "  <dev>:N (next N layers), <dev>:layers=A-B, <dev>:bytes=N[K|M|G], <dev>:rest\n"
++        "e.g. 'HTP0:layers=0-7,GPUOpenCL:layers=8-9,CPU:rest' or 'HTP0:8,GPUOpenCL:bytes=2G'\n"
++        "<dev> is a name from --list-devices (HTP0, GPUOpenCL, CPU); layers no rule names stay on the CPU",
++        [](common_params & params, const std::string & value) {
++            // the spec is validated when the model is loaded (where the device list and the
++            // layer count are known) - see llama_offload_spec_parse() / llama_prepare_model_devices()
++            params.offload_spec = value;
++        }
++    ).set_env("LLAMA_ARG_OFFLOAD_SPEC"));
+     add_opt(common_arg(
+         {"-mg", "--main-gpu"}, "INDEX",
+         string_format("the GPU to use for the model (with split-mode = none), or for intermediate results and KV (with split-mode = row) (default: %d)", params.main_gpu),
+diff --git a/common/common.cpp b/common/common.cpp
+index d8319cd..535e111 100644
+--- a/common/common.cpp
++++ b/common/common.cpp
+@@ -1292,7 +1292,7 @@ common_init_result::common_init_result(common_params & params, bool model_only)
+     auto mparams = common_model_params_to_llama(params);
+     auto cparams = common_context_params_to_llama(params);
+ 
+-    if (params.fit_params) {
++    if (params.fit_params && params.offload_spec.empty()) {
+         COM_TRC("%s", "fitting params to device memory ...\n");
+         COM_TRC("%s", "(for bugs during this step try to reproduce them with -fit off, or provide --verbose logs if the bug only occurs with -fit on)\n");
+ 
+@@ -1689,6 +1689,7 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
+     mparams.load_mode       = params.load_mode;
+     mparams.lazy_mode = params.lazy_mode;
+     mparams.tensor_split    = params.tensor_split;
++    mparams.offload_spec    = params.offload_spec.empty() ? nullptr : params.offload_spec.c_str();
+     mparams.check_tensors   = params.check_tensors;
+     mparams.use_extra_bufts = !params.no_extra_bufts;
+     mparams.no_host         = params.no_host;
+diff --git a/common/common.h b/common/common.h
+index 63d0bad..cb208db 100644
+--- a/common/common.h
++++ b/common/common.h
+@@ -473,6 +473,7 @@ struct common_params {
+     int32_t n_gpu_layers       = -1;    // number of layers to store in VRAM, -1 is auto, <= -2 is all
+     int32_t main_gpu           = 0;     // the GPU that is used for scratch and small tensors
+     float   tensor_split[128]  = {0};   // how split tensors should be distributed across GPUs
++    std::string offload_spec;           // exact per-device layer placement, e.g. "HTP0:8,GPUOpenCL:2,CPU:rest"
+     bool    fit_params         = true;  // whether to fit unset model/context parameters to free device memory
+     bool    fit_params_print   = false; // print the estimated required memory to run the model
+     int32_t fit_params_min_ctx = 4096;  // minimum context size to set when trying to reduce memory use
+diff --git a/ggml/src/ggml-backend-reg.cpp b/ggml/src/ggml-backend-reg.cpp
+index 1c18b82..839ebcb 100644
+--- a/ggml/src/ggml-backend-reg.cpp
++++ b/ggml/src/ggml-backend-reg.cpp
+@@ -112,6 +112,8 @@ struct ggml_backend_reg_entry {
+     dl_handle_ptr handle;
+ };
+ 
++static std::string backend_name_from_path(const fs::path & path); // impl. after backend_filename_prefix()
++
+ struct ggml_backend_registry {
+     std::vector<ggml_backend_reg_entry> backends;
+     std::vector<ggml_backend_dev_t> devices;
+@@ -235,19 +237,33 @@ struct ggml_backend_registry {
+         }
+ 
+         auto backend_init_fn = (ggml_backend_init_t) dl_get_sym(handle.get(), "ggml_backend_init");
+-        if (!backend_init_fn) {
+-            if (!silent) {
+-                GGML_LOG_ERROR("%s: failed to find ggml_backend_init in %s\n", __func__, path_str(path).c_str());
++        ggml_backend_reg_t reg = nullptr;
++        bool via_legacy = false;
++        if (backend_init_fn) {
++            reg = backend_init_fn();
++        } else {
++            // Some out-of-tree backends (notably Qualcomm's Hexagon/HTP backend) do not
++            // export ggml_backend_init(); they only export the older-style
++            // ggml_backend_<name>_reg(), derived from the file name (libggml-<name>.so).
++            const std::string reg_sym = "ggml_backend_" + backend_name_from_path(path) + "_reg";
++            auto reg_fn = (ggml_backend_reg_t (*)()) dl_get_sym(handle.get(), reg_sym.c_str());
++            if (!reg_fn) {
++                if (!silent) {
++                    GGML_LOG_ERROR("%s: failed to find ggml_backend_init or %s in %s\n",
++                        __func__, reg_sym.c_str(), path_str(path).c_str());
++                }
++                return nullptr;
+             }
+-            return nullptr;
++            reg = reg_fn();
++            via_legacy = true;
++            GGML_LOG_INFO("%s: using %s from %s\n", __func__, reg_sym.c_str(), path_str(path).c_str());
+         }
+ 
+-        ggml_backend_reg_t reg = backend_init_fn();
+         if (!reg || reg->api_version != GGML_BACKEND_API_VERSION) {
+-            if (!silent) {
++            if (!silent || via_legacy) {
+                 if (!reg) {
+-                    GGML_LOG_ERROR("%s: failed to initialize backend from %s: ggml_backend_init returned NULL\n",
+-                        __func__, path_str(path).c_str());
++                    GGML_LOG_ERROR("%s: failed to initialize backend from %s: %s returned NULL\n",
++                        __func__, path_str(path).c_str(), via_legacy ? "the legacy backend registration" : "ggml_backend_init");
+                 } else {
+                     GGML_LOG_ERROR("%s: failed to initialize backend from %s: incompatible API version (backend: %d, current: %d)\n",
+                         __func__, path_str(path).c_str(), reg->api_version, GGML_BACKEND_API_VERSION);
+@@ -477,6 +493,28 @@ static fs::path backend_filename_extension() {
+ #endif
+ }
+ 
++// derive the backend name from a backend library file name, e.g.
++//   libggml-hexagon.so        -> hexagon
++//   libggml-opencl.so.0.24.0  -> opencl
++//   ggml-vulkan.dll           -> vulkan
++static std::string backend_name_from_path(const fs::path & path) {
++    std::string name = path.filename().u8string();
++    const std::string prefix = backend_filename_prefix().u8string();
++    if (name.compare(0, prefix.size(), prefix) == 0) {
++        name = name.substr(prefix.size());
++    }
++    const size_t dot = name.find('.');
++    if (dot != std::string::npos) {
++        name = name.substr(0, dot);
++    }
++    for (char & c : name) {
++        if (c == '-') {
++            c = '_';
++        }
++    }
++    return name;
++}
++
+ static ggml_backend_reg_t ggml_backend_load_best(const char * name, bool silent, const char * user_search_path) {
+     // enumerate all the files that match [lib]ggml-name-*.[so|dll] in the search paths
+     const fs::path name_path = fs::u8path(name);
+diff --git a/include/llama.h b/include/llama.h
+index 31bbf8b..4c5e61a 100644
+--- a/include/llama.h
++++ b/include/llama.h
+@@ -330,6 +330,15 @@ extern "C" {
+         // proportion of the model (layers or rows) to offload to each GPU, size: llama_max_devices()
+         const float * tensor_split;
+ 
++        // Exact, deterministic placement of the repeating layers across the devices, e.g.
++        //   "HTP0:layers=0-7,GPUOpenCL:layers=8-9,CPU:rest"
++        //   "HTP0:8;GPUOpenCL:bytes=2G"          (bare N == layers=N, ';' == ',')
++        // Rules are applied left to right, the first rule wins for a layer, and any layer
++        // not named by a rule stays on the CPU.  Devices named here are used even without
++        // setting `devices` above.  NULL (default) keeps the heuristics of n_gpu_layers /
++        // split_mode / tensor_split.
++        const char * offload_spec;
++
+         // Called with a progress value between 0.0 and 1.0. Pass NULL to disable.
+         // If the provided progress_callback returns true, model loading continues.
+         // If it returns false, model loading is immediately aborted.
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index afdaddc..58f37e0 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -36,6 +36,7 @@ set(LLAMA_CORE_SOURCES
+     llama-model-loader.cpp
+     llama-model-saver.cpp
+     llama-model.cpp
++    llama-offload-spec.cpp
+     llama-quant.cpp
+     llama-sampler.cpp
+     llama-vocab.cpp
+diff --git a/src/llama-model.cpp b/src/llama-model.cpp
+index e195f50..f9a99c9 100644
+--- a/src/llama-model.cpp
++++ b/src/llama-model.cpp
+@@ -7,6 +7,7 @@
+ #include "llama-mmap.h"
+ #include "llama-cparams.h"
+ #include "llama-model-loader.h"
++#include "llama-offload-spec.h"
+ 
+ #include "llama-kv-cache.h"
+ #include "llama-kv-cache-iswa.h"
+@@ -30,6 +31,9 @@
+ #include <cfloat>
+ #include <cstdint>
+ #include <cstring>
++#include <cctype>
++#include <cstdio>
++#include <cinttypes>
+ #include <cmath>
+ #include <functional>
+ #include <map>
+@@ -1518,10 +1522,170 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
+         splits[i] /= split_sum;
+     }
+ 
++    // ------------------------------------------------------------------
++    // exact placement plan (--offload-spec)
++    // ------------------------------------------------------------------
++    // Decides the device of every layer (0..n_layer_all, n_layer_all = output layer) up
++    // front, so placement no longer depends on n_gpu_layers, on tensor_split or on the
++    // free memory a backend reports.
++    std::vector<ggml_backend_dev_t> spec_dev;
++    if (params.offload_spec != nullptr && params.offload_spec[0] != '\0') {
++        std::string err;
++        const std::vector<llama_offload_spec_rule> rules = llama_offload_spec_parse(params.offload_spec, &err);
++        if (!err.empty() || rules.empty()) {
++            throw std::runtime_error(err.empty() ? std::string("offload-spec: no rules") : err);
++        }
++
++        auto iequals = [](const char * a, const char * b) {
++            while (*a != '\0' && *b != '\0') {
++                if (std::tolower((unsigned char) *a) != std::tolower((unsigned char) *b)) {
++                    return false;
++                }
++                ++a;
++                ++b;
++            }
++            return *a == *b;
++        };
++
++        // weight bytes per layer, straight from the GGUF metadata: every architecture names
++        // its repeating-layer tensors "blk.<il>.<name>", everything else belongs to the
++        // output-layer entry (index n_layer_all)
++        std::vector<int64_t> layer_bytes(n_layer_all + 1, 0);
++        for (const auto & w : ml.weights_map) {
++            int il = -1;
++            if (sscanf(w.first.c_str(), "blk.%d.", &il) == 1 && il >= 0 && il < n_layer_all) {
++                layer_bytes[il] += (int64_t) ggml_nbytes(w.second.tensor);
++            } else {
++                layer_bytes[n_layer_all] += (int64_t) ggml_nbytes(w.second.tensor);
++            }
++        }
++
++        spec_dev.assign(n_layer_all + 1, nullptr);
++
++        auto dev_by_name = [&](const std::string & name) -> ggml_backend_dev_t {
++            for (const auto & d : devices) {
++                if (iequals(ggml_backend_dev_name(d.dev), name.c_str())) {
++                    return d.dev;
++                }
++            }
++            return nullptr;
++        };
++
++        auto is_cpu_name = [&](const std::string & name) {
++            return iequals(name.c_str(), "cpu") || iequals(name.c_str(), "host") || iequals(name.c_str(), "none");
++        };
++
++        // layers and bytes taken per device, for the report
++        std::vector<std::pair<ggml_backend_dev_t, std::pair<int, int64_t>>> stat;
++
++
++        for (const auto & r : rules) {
++            ggml_backend_dev_t dev = is_cpu_name(r.device) ? cpu_dev : dev_by_name(r.device);
++            if (dev == nullptr) {
++                throw std::runtime_error(format("offload-spec: rule %d: unknown device '%s'", r.pos, r.device.c_str()));
++            }
++
++            auto assign = [&](int il) {
++                if (il < 0 || il > n_layer_all || spec_dev[il] != nullptr) {
++                    return false; // out of range, or an earlier rule already claimed the layer
++                }
++                spec_dev[il] = dev;
++                for (auto & s : stat) {
++                    if (s.first == dev) {
++                        s.second.first  += 1;
++                        s.second.second += layer_bytes[il];
++                        return true;
++                    }
++                }
++                stat.push_back({ dev, { 1, layer_bytes[il] } });
++                return true;
++            };
++
++            switch (r.kind) {
++                case llama_offload_spec_rule::KIND_REST:
++                    for (int il = 0; il <= n_layer_all; il++) {
++                        assign(il);
++                    }
++                    break;
++                case llama_offload_spec_rule::KIND_LAYERS_RANGE:
++                    if (r.layer_b > n_layer_all) {
++                        throw std::runtime_error(format(
++                            "offload-spec: rule %d: layer %d is out of range (this model has %d repeating layers: indices 0..%d, %d = output layer)",
++                            r.pos, r.layer_b, n_layer_all, n_layer_all, n_layer_all));
++                    }
++                    for (int il = r.layer_a; il <= r.layer_b; il++) {
++                        assign(il);
++                    }
++                    break;
++                case llama_offload_spec_rule::KIND_LAYERS_COUNT: {
++                    int left = r.count;
++                    for (int il = 0; il <= n_layer_all && left > 0; il++) {
++                        if (assign(il)) {
++                            left--;
++                        }
++                    }
++                    if (left > 0) {
++                        LLAMA_LOG_WARN("offload-spec: rule %d: only %d of the %d layers requested for %s were still unassigned\n",
++                            r.pos, r.count - left, r.count, r.device.c_str());
++                    }
++                    break;
++                }
++                case llama_offload_spec_rule::KIND_BYTES: {
++                    int64_t used = 0;
++                    int n = 0;
++                    for (int il = 0; il <= n_layer_all; il++) {
++                        if (spec_dev[il] != nullptr || used + layer_bytes[il] > r.bytes) {
++                            continue; // already claimed, or it would not fit this budget
++                        }
++                        if (assign(il)) {
++                            used += layer_bytes[il];
++                            n++;
++                        }
++                    }
++                    if (n == 0) {
++                        LLAMA_LOG_WARN("offload-spec: rule %d: no unassigned layer fits in %" PRId64 " bytes for %s\n",
++                            r.pos, r.bytes, r.device.c_str());
++                    }
++                    break;
++                }
++            }
++        }
++
++        LLAMA_LOG_INFO("offload-spec: '%s'\n", params.offload_spec);
++        LLAMA_LOG_INFO("offload-spec: n_gpu_layers/split_mode/tensor_split are ignored while a spec is set\n");
++        for (const auto & s : stat) {
++            LLAMA_LOG_INFO("offload-spec:   %-14s %3d layers, %9.2f MiB\n",
++                ggml_backend_dev_name(s.first), s.second.first, s.second.second / 1024.0 / 1024.0);
++        }
++        {
++            int n_cpu = 0;
++            int64_t bytes_cpu = 0;
++            for (int il = 0; il <= n_layer_all; il++) {
++                if (spec_dev[il] == nullptr || spec_dev[il] == cpu_dev) {
++                    n_cpu++;
++                    bytes_cpu += layer_bytes[il];
++                }
++            }
++            LLAMA_LOG_INFO("offload-spec:   %-14s %3d layers, %9.2f MiB\n",
++                "CPU (unassigned)", n_cpu, bytes_cpu / 1024.0 / 1024.0);
++        }
++    }
++
++
+     const int i_gpu_start = std::max(n_layer_all + 1 - n_gpu_layers, 0);
+     const int act_gpu_layers = devices.empty() ? 0 : std::min(n_gpu_layers, n_layer_all + 1);
+     auto get_layer_buft_list = [&](int il) -> llama_model::impl::layer_dev {
+         const bool is_swa = il < n_layer_all && hparams.is_swa(il);
++        if (!spec_dev.empty()) {
++            // exact placement: only what --offload-spec asked for leaves the CPU
++            auto * dev = spec_dev[il];
++            if (dev == nullptr || dev == cpu_dev) {
++                LLAMA_LOG_DEBUG("load_tensors: layer %3d assigned to device %s (offload-spec), is_swa = %d\n", il, ggml_backend_dev_name(cpu_dev), is_swa);
++                return {cpu_dev, &pimpl->cpu_buft_list};
++            }
++            LLAMA_LOG_DEBUG("load_tensors: layer %3d assigned to device %s (offload-spec), is_swa = %d\n", il, ggml_backend_dev_name(dev), is_swa);
++            return {dev, &pimpl->gpu_buft_list.at(dev)};
++        }
+         if (il < i_gpu_start || (il - i_gpu_start) >= act_gpu_layers) {
+             LLAMA_LOG_DEBUG("load_tensors: layer %3d assigned to device %s, is_swa = %d\n", il, ggml_backend_dev_name(cpu_dev), is_swa);
+             return {cpu_dev, &pimpl->cpu_buft_list};
+@@ -2794,6 +2958,7 @@ llama_model_params llama_model_default_params() {
+         /*.lazy_mode                   =*/ LLAMA_LAZY_MODE_AUTO,
+         /*.main_gpu                    =*/ 0,
+         /*.tensor_split                =*/ nullptr,
++        /*.offload_spec                =*/ nullptr,
+         /*.progress_callback           =*/ nullptr,
+         /*.progress_callback_user_data =*/ nullptr,
+         /*.kv_overrides                =*/ nullptr,
+diff --git a/src/llama.cpp b/src/llama.cpp
+index ad8e443..77b26f9 100644
+--- a/src/llama.cpp
++++ b/src/llama.cpp
+@@ -1,6 +1,8 @@
+ #include "llama.h"
+ 
+ #include "llama-impl.h"
++#include "llama-offload-spec.h"
++
+ #include "llama-version.h"
+ 
+ #include "llama-chat.h"
+@@ -157,7 +159,31 @@ int64_t llama_time_us(void) {
+ // returns true on success
+ static bool llama_prepare_model_devices(const llama_model_params & params, llama_model * model) {
+     // create list of devices to use with this model
+-    if (params.devices) {
++    if (params.offload_spec && params.offload_spec[0] != '\0') {
++        // the spec names its devices explicitly - use exactly those (the CPU is always
++        // available and takes every layer no rule assigns)
++        // out-of-tree backends (e.g. the Hexagon NPU via GGML_BACKEND_PATH) are only
++        // discovered by an explicit load, since the statically linked ones already make
++        // ggml_backend_reg_count() non-zero
++        ggml_backend_load_all();
++        for (const auto & name : llama_offload_spec_devices(params.offload_spec)) {
++            ggml_backend_dev_t dev = ggml_backend_dev_by_name(name.c_str());
++            if (dev == nullptr) {
++                LLAMA_LOG_ERROR("%s: offload-spec refers to unknown device '%s'\n", __func__, name.c_str());
++                LLAMA_LOG_ERROR("%s: available devices:\n", __func__);
++                for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
++                    ggml_backend_dev_t d = ggml_backend_dev_get(i);
++                    LLAMA_LOG_ERROR("%s:   - %s (%s)\n", __func__, ggml_backend_dev_name(d), ggml_backend_dev_description(d));
++                }
++                return false;
++            }
++            LLAMA_LOG_INFO("%s: offload-spec: using device %s (%s)\n", __func__, name.c_str(), ggml_backend_dev_description(dev));
++            model->devices.push_back({false, dev});
++        }
++        if (model->devices.empty()) {
++            LLAMA_LOG_INFO("%s: offload-spec: no accelerator in the spec - running on the CPU only\n", __func__);
++        }
++    } else if (params.devices) {
+         if (params.split_mode == LLAMA_SPLIT_MODE_TENSOR) {
+             size_t n_devs = 0;
+             while (params.devices[n_devs]) {
+diff --git a/src/llama-offload-spec.h b/src/llama-offload-spec.h
+new file mode 100644
+index 0000000..bd54cdf
+--- /dev/null
++++ b/src/llama-offload-spec.h
+@@ -0,0 +1,48 @@
++#pragma once
++
++// Exact placement of the repeating layers across devices ("--offload-spec").
++//
++// Grammar: rule[','|';' rule]*
++//   <device>[:]<N>              N consecutive, still unassigned layers (ascending index)
++//   <device>:layers=A-B         layer index range, inclusive and 0-based
++//   <device>:layers=N           same as the bare <N> form
++//   <device>:bytes=<N>[K|M|G]   consecutive unassigned layers until N bytes of weights
++//   <device>:rest               every layer not assigned by an earlier rule
++// <device> is a device name as printed by --list-devices (e.g. HTP0, GPUOpenCL, CPU),
++// matched case-insensitively; the output layer is index <n_layer_all> (usually you only
++// name the repeating layers and let it follow the CPU default).
++//
++// Rules are applied left to right and the first rule that claims a layer wins, so the
++// spec is fully deterministic - unlike n_gpu_layers/tensor_split, which depend on the
++// free memory the backends report (the Hexagon backend reports none).
++
++#include <cstdint>
++#include <string>
++#include <vector>
++
++struct llama_offload_spec_rule {
++    enum kind_t {
++        KIND_LAYERS_COUNT, // `N`   -> take the next `n` unassigned layers
++        KIND_LAYERS_RANGE, // `A-B` -> take exactly that range
++        KIND_BYTES,        // `bytes=N` -> fill with whole layers up to `bytes` weight bytes
++        KIND_REST,         // `rest` -> everything still unassigned
++    };
++
++    kind_t      kind = KIND_LAYERS_COUNT;
++    std::string device;       // as written by the user
++    int         layer_a = -1; // KIND_LAYERS_RANGE
++    int         layer_b = -1; // KIND_LAYERS_RANGE (inclusive)
++    int         count   = 0;  // KIND_LAYERS_COUNT
++    int64_t     bytes   = 0;  // KIND_BYTES
++    int         pos     = 0;  // 0-based position in the spec, for diagnostics
++};
++
++// Parse an offload spec.  Throws std::invalid_argument with a readable message on a
++// malformed rule; `err` (when given) receives that message instead of throwing.
++std::vector<llama_offload_spec_rule> llama_offload_spec_parse(const char * spec, std::string * err = nullptr);
++
++// The distinct non-CPU device names mentioned by a spec, in the order they appear.
++std::vector<std::string> llama_offload_spec_devices(const char * spec);
++
++// Human-readable byte budget, e.g. 3G -> 3*1024^3.
++int64_t llama_offload_spec_parse_bytes(const std::string & value);
+diff --git a/src/llama-offload-spec.cpp b/src/llama-offload-spec.cpp
+new file mode 100644
+index 0000000..16d3e8b
+--- /dev/null
++++ b/src/llama-offload-spec.cpp
+@@ -0,0 +1,174 @@
++#include "llama-offload-spec.h"
++
++#include "llama-impl.h"
++
++#include <cctype>
++#include <cstdlib>
++#include <stdexcept>
++
++static std::string trim(const std::string & s) {
++    size_t b = 0;
++    size_t e = s.size();
++    while (b < e && std::isspace((unsigned char) s[b])) {
++        b++;
++    }
++    while (e > b && std::isspace((unsigned char) s[e - 1])) {
++        e--;
++    }
++    return s.substr(b, e - b);
++}
++
++static std::string lower(const std::string & s) {
++    std::string r = s;
++    for (char & c : r) {
++        c = (char) std::tolower((unsigned char) c);
++    }
++    return r;
++}
++
++int64_t llama_offload_spec_parse_bytes(const std::string & value) {
++    if (value.empty()) {
++        throw std::invalid_argument("empty byte count");
++    }
++    size_t n = 0;
++    while (n < value.size() && std::isdigit((unsigned char) value[n])) {
++        n++;
++    }
++    if (n == 0) {
++        throw std::invalid_argument("byte count '" + value + "' does not start with a number");
++    }
++    const int64_t num  = std::strtoll(value.substr(0, n).c_str(), nullptr, 10);
++    const std::string suffix = lower(trim(value.substr(n)));
++    int64_t mul = 1;
++    if      (suffix.empty() || suffix == "b") { mul = 1; }
++    else if (suffix == "k" || suffix == "kb" || suffix == "kib") { mul = 1024; }
++    else if (suffix == "m" || suffix == "mb" || suffix == "mib") { mul = 1024 * 1024; }
++    else if (suffix == "g" || suffix == "gb" || suffix == "gib") { mul = 1024 * 1024 * 1024; }
++    else if (suffix == "t" || suffix == "tb" || suffix == "tib") { mul = (int64_t) 1024 * 1024 * 1024 * 1024; }
++    else {
++        throw std::invalid_argument("unknown byte suffix '" + suffix + "'");
++    }
++    return num * mul;
++}
++
++std::vector<llama_offload_spec_rule> llama_offload_spec_parse(const char * spec, std::string * err) {
++    std::vector<llama_offload_spec_rule> rules;
++    if (spec == nullptr || *spec == '\0') {
++        return rules;
++    }
++
++    auto fail = [&](const std::string & msg) {
++        const std::string full = std::string("offload-spec: ") + msg;
++        if (err) {
++            *err = full;
++            return std::vector<llama_offload_spec_rule>();
++        }
++        throw std::invalid_argument(full);
++    };
++
++    std::string s(spec);
++    for (char & c : s) {
++        if (c == ';') {
++            c = ',';
++        }
++    }
++
++    std::vector<std::string> parts;
++    {
++        std::string cur;
++        for (char c : s) {
++            if (c == ',') {
++                parts.push_back(cur);
++                cur.clear();
++            } else {
++                cur += c;
++            }
++        }
++        parts.push_back(cur);
++    }
++
++    for (size_t i = 0; i < parts.size(); i++) {
++        const std::string rule = trim(parts[i]);
++        if (rule.empty()) {
++            continue;
++        }
++        const size_t colon = rule.find(':');
++        if (colon == std::string::npos) {
++            return fail("rule '" + rule + "' has no device (expected <device>:<what>)");
++        }
++        llama_offload_spec_rule r;
++        r.device = trim(rule.substr(0, colon));
++        r.pos    = (int) i;
++        const std::string what = trim(rule.substr(colon + 1));
++        if (r.device.empty() || what.empty()) {
++            return fail("rule '" + rule + "' is incomplete");
++        }
++
++        const std::string what_l = lower(what);
++        if (what_l == "rest" || what_l == "all" || what_l == "leftover") {
++            r.kind = llama_offload_spec_rule::KIND_REST;
++        } else if (what_l.rfind("layers=", 0) == 0) {
++            const std::string v = trim(what.substr(7));
++            const size_t dash = v.find('-');
++            if (dash == std::string::npos) {
++                r.kind  = llama_offload_spec_rule::KIND_LAYERS_COUNT;
++                r.count = std::atoi(v.c_str());
++                if (r.count <= 0) {
++                    return fail("rule '" + rule + "': layer count must be > 0");
++                }
++            } else {
++                r.kind    = llama_offload_spec_rule::KIND_LAYERS_RANGE;
++                r.layer_a = std::atoi(v.substr(0, dash).c_str());
++                r.layer_b = std::atoi(v.substr(dash + 1).c_str());
++                if (r.layer_a < 0 || r.layer_b < r.layer_a) {
++                    return fail("rule '" + rule + "': bad layer range");
++                }
++            }
++        } else if (what_l.rfind("bytes=", 0) == 0) {
++            r.kind = llama_offload_spec_rule::KIND_BYTES;
++            try {
++                r.bytes = llama_offload_spec_parse_bytes(trim(what.substr(6)));
++            } catch (const std::exception & e) {
++                return fail("rule '" + rule + "': " + e.what());
++            }
++            if (r.bytes <= 0) {
++                return fail("rule '" + rule + "': byte budget must be > 0");
++            }
++        } else {
++            // bare number == layers=N
++            char * end = nullptr;
++            const long n = std::strtol(what.c_str(), &end, 10);
++            if (end == what.c_str() || (end && *end != '\0') || n <= 0) {
++                return fail("rule '" + rule + "': expected N, layers=A-B, layers=N, bytes=N[KMG] or rest");
++            }
++            r.kind  = llama_offload_spec_rule::KIND_LAYERS_COUNT;
++            r.count = (int) n;
++        }
++
++        rules.push_back(r);
++    }
++
++    return rules;
++}
++
++std::vector<std::string> llama_offload_spec_devices(const char * spec) {
++    std::vector<std::string> devs;
++    std::string err;
++    for (const auto & r : llama_offload_spec_parse(spec, &err)) {
++        const std::string l = lower(r.device);
++        if (l == "cpu" || l == "none" || l == "host") {
++            continue;
++        }
++        bool seen = false;
++        for (const auto & d : devs) {
++            if (lower(d) == l) {
++                seen = true;
++                break;
++            }
++        }
++        if (!seen) {
++            devs.push_back(r.device);
++        }
++    }
++    return devs;
++}

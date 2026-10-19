@@ -1,0 +1,12 @@
+[Unit]
+Description=Arm Adreno 830 GMU and pin the GPU always-active (runtime-PM on)
+DefaultDependencies=no
+After=local-fs.target
+Before=display-manager.service gdm.service
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/erhai-gpu-pin.sh
+TimeoutStartSec=30
+[Install]
+WantedBy=multi-user.target

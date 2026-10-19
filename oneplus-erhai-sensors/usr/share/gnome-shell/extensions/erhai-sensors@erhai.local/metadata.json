@@ -1,0 +1,11 @@
+{
+  "uuid": "erhai-sensors@erhai.local",
+  "name": "erhai Sensor Toggles",
+  "description": "Quick Settings toggles for auto-rotate and automatic brightness (SSC sensors via iio-sensor-proxy); also suppresses the shell's built-in rotation toggle.",
+  "shell-version": [
+    "48",
+    "49",
+    "50"
+  ],
+  "version": 11
+}

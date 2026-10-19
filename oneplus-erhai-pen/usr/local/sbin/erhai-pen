@@ -1,0 +1,148 @@
+#!/bin/bash
+# erhai-pen — OnePlus pad 3 (erhai) pen (stylus) Bluetooth helper.
+#
+#   status          service + connected-pen state
+#   soc             pen state of charge (BLE + charger coil) and its source
+#   charger         wireless-charger (CPS8601) debugfs: fw/chip/attach/BLE MAC
+#   gatt            dump the connected pen's BLE GATT tree (discovery)
+#   scan [secs]     discovery window (default 8 s) then list pen-OUI radios
+#   pair [addr]     pair + trust the given address (default: the pen found
+#                   by a quick scan); connect it afterwards
+#   connect [addr]  connect a paired pen
+#   forget [addr]   unpair / forget
+#   info [addr]     bluetoothctl info
+set -u
+
+CONF=/etc/erhai/pen.conf
+STATE=/run/erhai-pen
+HERE="$(cd "$(dirname "$0")" && pwd)"
+MON="$HERE/erhai-pen-monitor.py"
+[ -f "$MON" ] || MON=/usr/local/sbin/erhai-pen-monitor.py
+
+OUIS=$(awk -F= '/^PEN_OUIS=/{print $2}' "$CONF" 2>/dev/null | tr -s ' ')
+[ -z "$OUIS" ] && OUIS='F8:6F:DE C0:87:06'
+
+is_pen() { # $1 = MAC
+    local m o
+    m="$(printf '%s' "$1" | tr 'a-f' 'A-F' | tr -d ':')"
+    [ -z "$m" ] && return 1
+    for o in $OUIS; do
+        o="$(printf '%s' "$o" | tr 'a-f' 'A-F' | tr -d ':')"
+        case "$m" in
+            "$o"*) return 0 ;;
+        esac
+    done
+    return 1
+}
+
+find_pen() { # echo the first pen radio known to BlueZ
+    bluetoothctl devices 2>/dev/null | awk '{print $2" "$3}' | while read -r a n; do
+        if is_pen "$a"; then echo "$a"; return 0; fi
+    done
+    return 1
+}
+
+case "${1:-}" in
+    status)
+        echo "-- service --"
+        systemctl is-active erhai-pen.service 2>/dev/null || echo inactive
+        echo "-- state files --"
+        for f in state addr updated; do
+            printf '  %s: %s\n' "$f" "$(cat "$STATE/$f" 2>/dev/null || echo -)"
+        done
+        echo "-- pen radios --"
+        found=0
+        while read -r a n; do
+            [ -n "$a" ] || continue
+            if is_pen "$a"; then
+                found=1
+                bti=$(bluetoothctl info "$a" 2>/dev/null | awk -F': ' '/Paired|Trusted|Connected|Name:/{gsub(/ /,"",$2); printf "%s=%s " ,$1,$2}')
+                echo "  $a ($n)  $bti"
+            fi
+        done < <(bluetoothctl devices 2>/dev/null)
+        [ "$found" = 0 ] && echo "  (none in range — pen sleeps when idle; run 'erhai-pen scan')"
+        ;;
+    scan)
+        s="${2:-8}"
+        echo "-- scanning ${s}s (pen must be awake/near) --"
+        timeout "${s}" bluetoothctl -t "${s}" scan on >/dev/null 2>&1
+        found=0
+        while read -r a n; do
+            if is_pen "$a"; then
+                echo "  PEN: $a ($n)"
+                found=1
+            fi
+        done < <(bluetoothctl devices 2>/dev/null)
+        [ "$found" = 0 ] && echo "  no pen radio found"
+        ;;
+    pair)
+        a="${2:-$(find_pen)}"
+        [ -z "$a" ] && { echo "no pen address given / found"; exit 1; }
+        echo "pairing $a ..."
+        bluetoothctl pair "$a"
+        bluetoothctl trust "$a" >/dev/null 2>&1
+        bluetoothctl connect "$a" >/dev/null 2>&1
+        ;;
+    connect)
+        a="${2:-$(find_pen)}"
+        [ -z "$a" ] && { echo "no pen address given / found"; exit 1; }
+        bluetoothctl connect "$a"
+        ;;
+    forget)
+        a="${2:-}"
+        [ -z "$a" ] && { echo "usage: erhai-pen forget <addr>"; exit 1; }
+        bluetoothctl remove "$a"
+        ;;
+    info)
+        a="${2:-}"
+        [ -z "$a" ] && a="$(find_pen)"
+        [ -n "$a" ] && bluetoothctl info "$a" || { echo "usage: erhai-pen info [addr]"; exit 1; }
+        ;;
+    soc)
+        echo "-- BLE state of charge (erhai-pen.service) --"
+        for f in state addr soc soc_updated; do
+            printf '  %-12s %s\n' "$f:" "$(cat "$STATE/$f" 2>/dev/null || echo -)"
+        done
+        echo "-- charger coil debugfs --"
+        if [ -r /sys/kernel/debug/cps-wls-charger/soc ]; then
+            printf '  coil soc: %s  (vendor uses this only for a charge-full check)\n' \
+                "$(cat /sys/kernel/debug/cps-wls-charger/soc 2>/dev/null)"
+        elif [ -d /sys/kernel/debug/cps-wls-charger ]; then
+            echo "  coil soc: present but root-only - run 'sudo erhai-pen soc'"
+        else
+            echo "  coil soc: unreadable here; run 'sudo erhai-pen soc' to tell"
+            echo "            'no permission' from 'driver debugfs absent'"
+        fi
+        ;;
+    gatt)
+        echo "-- BlueZ GATT tree (pen must be connected; run 'erhai-pen connect') --"
+        [ -x "$MON" ] || [ -f "$MON" ] || { echo "monitor helper not found: $MON"; exit 1; }
+        python3 "$MON" --gatt
+        ;;
+    charger)
+        echo "-- wireless pen charger (CPS8601) debugfs --"
+        D=/sys/kernel/debug/cps-wls-charger
+        if [ ! -d "$D" ]; then
+            if [ ! -r /sys/kernel/debug ]; then
+                echo "  root-only - run: sudo erhai-pen charger"
+            else
+                echo "  charger debugfs absent (kernel without oplus_cps8601?)"
+            fi
+            exit 0
+        fi
+        for f in chip_id fw_version state enable pen_present soc ble_mac_addr ept_reason; do
+            printf '  %-14s %s\n' "$f:" "$(cat "$D/$f" 2>/dev/null || echo '?')"
+        done
+        raw=$(cat "$D/ble_mac_addr" 2>/dev/null || echo 0)
+        [ -n "$raw" ] && [ "$raw" != 0 ] && printf '  %-14s %s\n' "ble_mac:" \
+            "$(python3 -c 'import sys;v=int(sys.argv[1],16);print(":".join("%02X"%((v>>(8*i))&0xff) for i in range(5,-1,-1)))' "$raw")"
+        echo "-- attach trigger state (erhai-pen.service) --"
+        printf '  %-14s %s\n' "charger_present:" "$(cat "$STATE/charger_present" 2>/dev/null || echo -)"
+        printf '  %-14s %s\n' "charger_mac:" "$(cat "$STATE/charger_mac" 2>/dev/null || echo -)"
+        ;;
+    *)
+        sed -n '2,12p' "$0"
+        exit 1
+        ;;
+esac
+exit 0

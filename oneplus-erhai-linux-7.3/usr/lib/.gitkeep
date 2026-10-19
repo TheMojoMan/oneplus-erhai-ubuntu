@@ -1,0 +1,5 @@
+Kernel payload snapshot for the 7.3 line (oneplus-erhai-linux-7.3 + package
+metadata).  Committed: DEBIAN/, boot/ and the folder structure.  NOT committed:
+usr/lib/modules/** -- the compiled module tree (see ../../.gitignore); it is
+reproduced by the kernel build (build-kernel.sh / repack-kernel-deb.sh) and only
+the packaged .deb needs it.

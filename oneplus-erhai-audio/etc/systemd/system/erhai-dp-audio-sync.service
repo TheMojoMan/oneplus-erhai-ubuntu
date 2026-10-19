@@ -1,0 +1,8 @@
+[Unit]
+Description=erhai DP audio hotplug sync (re-probe DisplayPort output on monitor attach)
+# Triggered by udev rule 70-erhai-dp-audio.rules on DRM connector change.
+# The script itself filters to actual 'DP0 Jack' state flips.
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/erhai-dp-audio-sync.sh

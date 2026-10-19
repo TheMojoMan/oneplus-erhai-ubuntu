@@ -1,0 +1,44 @@
+[Unit]
+Description=Hexagon DSP compute daemon (CDSP, host of the Hexagon NPU / HTP)
+Documentation=man:hexagonrpcd(1)
+# The FastRPC device node only exists once the CDSP remoteproc is up (kernel
+# with &remoteproc_cdsp enabled). On an older kernel this unit is SKIPPED, not
+# failed -- installing the package before the kernel reboot is safe.
+ConditionPathExists=/dev/fastrpc-cdsp
+Conflicts=shutdown.target
+After=systemd-journald.socket
+Before=shutdown.target
+
+[Service]
+Type=simple
+# "rootpd" equivalent of Android's `cdsprpcd rootpd cdsp`: attach to the
+# CDSP's root PD (plain INIT_ATTACH, no -s, no -c) and serve
+# /var/lib/hexagonfs-cdsp as the DSP's remote filesystem. -d cdsp selects
+# <root>/dsp/cdsp as the served "dsp libraries" directory (hexagonrpcd's
+# rpcd_builder appends DSP "/libs/" + the -d argument to -R).
+ExecStart=/usr/local/bin/hexagonrpcd-erhai -f /dev/fastrpc-cdsp -d cdsp -R /var/lib/hexagonfs-cdsp
+Restart=always
+RestartSec=5
+User=fastrpc
+Group=fastrpc
+NoNewPrivileges=yes
+PrivateTmp=yes
+DevicePolicy=closed
+DeviceAllow=/dev/fastrpc-cdsp
+DeviceAllow=/dev/fastrpc-cdsp-secure
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+PrivateNetwork=yes
+RestrictAddressFamilies=none
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+MemoryDenyWriteExecute=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

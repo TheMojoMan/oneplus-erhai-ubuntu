@@ -1,0 +1,37 @@
+#!/bin/bash
+# oneplus-erhai-nautilus postinst: divert Ubuntu's /usr/bin/nautilus and the
+# Nautilus gschema (originals kept as *.erhai-orig) and install the patched
+# files.  Uses --no-rename --divert <file>.erhai-orig so `dpkg -V` stays clean
+# (dpkg's file list then expects the original at the diverted name).
+set -e
+
+PAYLOAD=/usr/share/oneplus-erhai-nautilus
+BIN=/usr/bin/nautilus
+SCHEMA=/usr/share/glib-2.0/schemas/org.gnome.nautilus.gschema.xml
+SCHEMA_DIR=/usr/share/glib-2.0/schemas
+PKG=oneplus-erhai-nautilus
+
+# Never overwrite a running binary (cp: "Text file busy").
+pkill -x nautilus >/dev/null 2>&1 || true
+sleep 1
+
+install_diverted() {
+	local sys="$1" pay="$2" mode="$3"
+	local bak="$sys.erhai-orig"
+	if [ ! -f "$bak" ]; then
+		cp -a "$sys" "$bak"
+		dpkg-divert --package "$PKG" --add --no-rename --divert "$bak" "$sys" >/dev/null
+	fi
+	install -m "$mode" "$pay" "$sys"
+}
+
+install_diverted "$BIN" "$PAYLOAD/nautilus" 0755
+install_diverted "$SCHEMA" "$PAYLOAD/org.gnome.nautilus.gschema.xml" 0644
+
+if command -v glib-compile-schemas >/dev/null 2>&1; then
+	glib-compile-schemas "$SCHEMA_DIR" >/dev/null 2>&1 || true
+fi
+
+echo "oneplus-erhai-nautilus: patched GNOME Files installed."
+echo "  Enable: Files > Preferences > General > Show Select Boxes"
+exit 0

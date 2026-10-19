@@ -1,0 +1,23 @@
+#!/bin/sh
+# Enable the audio bring-up service (binds LPASS devices, registers the
+# q6apm sound card and applies the UCM HiFi verb) and the DP-audio hotplug
+# sync (re-probes the DisplayPort output when a USB-C monitor is attached).
+set -e
+
+if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+	systemctl daemon-reload || true
+	systemctl enable --now erhai-audio-bringup.service || true
+	systemctl enable erhai-dp-audio-sync.service || true
+	if command -v udevadm >/dev/null 2>&1; then
+		udevadm control --reload || true
+	fi
+else
+	# Image build chroot: enable via the wants symlinks directly.
+	mkdir -p /etc/systemd/system/multi-user.target.wants
+	ln -sf ../erhai-audio-bringup.service \
+		/etc/systemd/system/multi-user.target.wants/erhai-audio-bringup.service
+	ln -sf ../erhai-dp-audio-sync.service \
+		/etc/systemd/system/multi-user.target.wants/erhai-dp-audio-sync.service
+fi
+
+exit 0

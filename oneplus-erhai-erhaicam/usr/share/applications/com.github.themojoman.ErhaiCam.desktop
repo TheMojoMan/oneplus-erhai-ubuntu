@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=ErhaiCam
+GenericName=Camera
+Comment=Photos, videos, NPU autofocus and auto-exposure for the erhai cameras
+Exec=erhai-cam
+Icon=camera-photo-symbolic
+Terminal=false
+Categories=Camera;AudioVideo;GNOME;GTK;
+Keywords=camera;photo;video;autofocus;exposure;
+StartupNotify=true
