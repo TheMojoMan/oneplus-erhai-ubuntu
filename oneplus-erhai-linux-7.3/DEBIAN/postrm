@@ -13,19 +13,73 @@ set -e
 # 1. Only on real removal, not on the remove step of an upgrade.
 if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
 
-    # 2. Are we in a build CHROOT?  It decides ONE thing (2026-10-17, when the
-    #    ESP stopped being written): the root label used for the file name -- a
-    #    chroot is built for PARTLABEL=linux and must not take the HOST's cmdline
-    #    (same rule as postinst).  Nothing is skipped any more: the removal target
-    #    is /boot of THIS root filesystem, which inside a chroot IS the image's
-    #    own /boot -- exactly the file this package's postinst wrote there.
+    # 2. Are we in a build CHROOT / CONTAINER?  It decides ONE thing (2026-10-17,
+    #    when the ESP stopped being written): the root label used for the file
+    #    name -- such a namespace is built for PARTLABEL=linux and must not take
+    #    the HOST's cmdline (same rule as postinst, and the SAME THREE tests, so
+    #    the two scripts always agree on the name they are looking for).  Nothing
+    #    is skipped any more: the removal target is /boot of THIS root filesystem,
+    #    which inside a namespace IS the image's own /boot -- exactly the file this
+    #    package's postinst wrote there.
+    #
+    #    The PID-1 comparison alone is NOT enough (2026-10-20): `systemd-nspawn -D
+    #    rootfs` gives the guest its own PID namespace, so its PID 1 root equals
+    #    ours and only the container markers / the "the booted cmdline's root is
+    #    not this root" comparison reveal the truth.  See postinst step 2 for the
+    #    measurements.
     IN_CHROOT=false
+    CHROOT_WHY=""
     ROOT_IDS="$(stat -c '%d:%i' / 2>/dev/null || true)"
     PID1_IDS="$(stat -L -c '%d:%i' /proc/1/root 2>/dev/null || true)"
-    if [ "${ERHAI_FORCE_CHROOT:-0}" = 1 ]; then
+    if [ -z "$ROOT_IDS" ] || [ -z "$PID1_IDS" ]; then
         IN_CHROOT=true
-    elif [ -z "$ROOT_IDS" ] || [ -z "$PID1_IDS" ] || [ "$ROOT_IDS" != "$PID1_IDS" ]; then
+        CHROOT_WHY="no readable /proc/1/root"
+    elif [ "$ROOT_IDS" != "$PID1_IDS" ]; then
         IN_CHROOT=true
+        CHROOT_WHY="/ ($ROOT_IDS) is not this namespace's PID 1 root ($PID1_IDS)"
+    elif [ "${ERHAI_FORCE_CHROOT:-0}" = 1 ]; then
+        IN_CHROOT=true
+        CHROOT_WHY="ERHAI_FORCE_CHROOT=1"
+    fi
+
+    # (b) container markers and (c) "is the booted cmdline's root OUR root?"
+    #     -- only when (a) said "live".
+    if [ "$IN_CHROOT" = false ]; then
+        IN_CONTAINER=false
+        if [ -n "${container:-}" ] || [ -e /run/systemd/container ] \
+           || tr '\0' '\n' < /proc/1/environ 2>/dev/null | grep -q '^container='; then
+            IN_CONTAINER=true
+        fi
+
+        OUR_DEV=""
+        OUR_SRC="$(findmnt -no SOURCE / 2>/dev/null || true)"
+        if [ -n "$OUR_SRC" ]; then
+            OUR_DEV="$(readlink -f "$OUR_SRC" 2>/dev/null || true)"
+        fi
+
+        CMD_ROOT_SPEC="$(tr ' ' '\n' < /proc/cmdline 2>/dev/null \
+                         | sed -n 's/^root=//p' | head -n1 || true)"
+        case "$CMD_ROOT_SPEC" in
+            PARTLABEL=*) CMD_DEV_PATH="/dev/disk/by-partlabel/${CMD_ROOT_SPEC#PARTLABEL=}" ;;
+            UUID=*)      CMD_DEV_PATH="/dev/disk/by-uuid/${CMD_ROOT_SPEC#UUID=}" ;;
+            LABEL=*)     CMD_DEV_PATH="/dev/disk/by-label/${CMD_ROOT_SPEC#LABEL=}" ;;
+            "")          CMD_DEV_PATH="" ;;
+            *)           CMD_DEV_PATH="$CMD_ROOT_SPEC" ;;
+        esac
+        CMD_DEV=""
+        if [ -n "$CMD_DEV_PATH" ] && [ -e "$CMD_DEV_PATH" ]; then
+            CMD_DEV="$(readlink -f "$CMD_DEV_PATH" 2>/dev/null || true)"
+        fi
+
+        if [ -n "$CMD_DEV" ] && [ -n "$OUR_DEV" ]; then
+            if [ "$CMD_DEV" != "$OUR_DEV" ]; then
+                IN_CHROOT=true
+                CHROOT_WHY="the booted cmdline's root ($CMD_ROOT_SPEC -> $CMD_DEV) is not this root ($OUR_DEV)"
+            fi
+        elif [ "$IN_CONTAINER" = true ]; then
+            IN_CHROOT=true
+            CHROOT_WHY="container (${container:-container marker}): the booted cmdline's root is not resolvable here${CMD_ROOT_SPEC:+ (root=$CMD_ROOT_SPEC)}"
+        fi
     fi
 
     # 3. Kernel version of the package being removed. Strip the "+b<N>" Debian
@@ -82,6 +136,10 @@ if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
         if [ -z "$ROOT_LABEL" ]; then
             ROOT_LABEL="linux"
         fi
+    fi
+    if [ "$IN_CHROOT" = true ]; then
+        echo "Post-remove: build chroot/container detected${CHROOT_WHY:+ ($CHROOT_WHY)}" \
+             "-- using root label $ROOT_LABEL."
     fi
 
     # 5. Rebuild the filename postinst used. The "+b<N>" Debian revision (when

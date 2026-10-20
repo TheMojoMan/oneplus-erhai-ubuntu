@@ -41,31 +41,105 @@ if [ "$DEB_REV" = "$FULLVER" ]; then
     DEB_REV=""
 fi
 
-# 2. Are we running inside a build CHROOT (build-root.sh's image build) instead
+# 2. Are we running inside a build CHROOT / CONTAINER (build-root.sh's image
+#    build, or a `systemd-nspawn -D rootdir` session on an image rootfs) instead
 #    of on a live system?
 #
 #    It decides ONE thing now that the ESP is no longer written (2026-10-17):
 #    which root label -- and therefore which file name and which root= -- the UKI
-#    gets.  Inside a chroot NOTHING describes this machine: mountinfo and
+#    gets.  Inside such a namespace NOTHING describes this machine: mountinfo and
 #    /proc/cmdline are the HOST's (findmnt -no SOURCE / answers /dev/sda18, or
-#    nothing at all when /sys is not bound), so a chrooted install would bake the
-#    developer machine's root= into the IMAGE's UKI -- measured 2026-09-29, when
-#    a `linux1` machine produced a `linux`-labelled UKI for the image.
+#    nothing at all when /sys is not bound), so such an install would bake the
+#    developer machine's root= into the IMAGE's UKI -- measured 2026-09-29 (a
+#    `linux1` machine produced a `linux`-labelled UKI for the image) and again
+#    2026-10-20, when a `systemd-nspawn -D rootfs` session leaked
+#    root=PARTLABEL=linux1 into an image update.
 #
-#    Detect it by comparing OUR root filesystem with the root of the namespace's
-#    PID 1: on a live system they are the same (measured: / and -L /proc/1/root
-#    both 66307:2), in a chroot they differ (66308:9975279 vs 66307:2).  An
-#    unreadable/absent /proc/1/root is treated as a chroot -- the safe direction,
-#    because a chroot must never take the host's cmdline for its own.
+#    THREE independent tests; any one of them means "NOT the booted root":
+#
+#    (a) The root filesystem of this namespace's PID 1 differs from ours.  A
+#        plain `chroot` (what build-root.sh uses) keeps the HOST's PID 1 visible,
+#        so this is the classic test: on a live system / and -L /proc/1/root are
+#        the same (measured 66307:2), in a chroot they differ (66308:9975279 vs
+#        66307:2).
+#    (b) We are inside a CONTAINER.  This is exactly what a PID-1 comparison
+#        CANNOT see: systemd-nspawn (and docker/podman/LXC) give the guest its
+#        own PID namespace, so PID 1 there has the CONTAINER's root and (a)
+#        reports "live" -- measured 2026-10-20 inside `systemd-nspawn -D rootdir`:
+#        / and /proc/1/root are BOTH 1803:2 while /proc/cmdline is still the
+#        host's `root=PARTLABEL=linux1` (and the container's private /dev has no
+#        /dev/disk/by-partlabel at all).  Detected from the markers systemd
+#        itself uses: the `container=` environment variable (nspawn passes it to
+#        the payload AND to PID 1) or /run/systemd/container (written by PID 1 in
+#        a container).  A container ALONE is not proof -- see (c).
+#    (c) The root= the booted cmdline names is not OUR root filesystem.  Resolve
+#        it (PARTLABEL=/UUID=/LABEL= through /dev/disk/by-*) and compare the
+#        device with the one backing /.  On a live system both are /dev/sda18; in
+#        a container the image is a loop or a bind mount (/dev/loop11) or its
+#        backing store, so they differ.  When the cmdline's device cannot even be
+#        resolved HERE -- the nspawn case above, where /dev/disk/by-partlabel does
+#        not exist (the very thing that used to abort the install with "root
+#        label 'linux1' has no /dev/disk/by-partlabel entry") -- a container
+#        marker is taken as the proof instead.
+#
+#    A container whose root IS the booted root (e.g. `systemd-nspawn --boot` on
+#    the live rootfs) stays LIVE on purpose: (c) finds the devices identical.
+#    Otherwise the safe direction is unchanged: an unreadable /proc, an
+#    unresolvable comparison inside a container and ERHAI_FORCE_CHROOT=1 all mean
+#    "build", where ERHAI_ROOT_LABEL always wins (a `systemd-nspawn` session on
+#    an image destined for the linux1 partition passes ERHAI_ROOT_LABEL=linux1).
 IN_CHROOT=false
+CHROOT_WHY=""
 ROOT_IDS="$(stat -c '%d:%i' / 2>/dev/null || true)"
 PID1_IDS="$(stat -L -c '%d:%i' /proc/1/root 2>/dev/null || true)"
-if [ "${ERHAI_FORCE_CHROOT:-0}" = 1 ]; then
+if [ -z "$ROOT_IDS" ] || [ -z "$PID1_IDS" ]; then
     IN_CHROOT=true
-elif [ -z "$ROOT_IDS" ] || [ -z "$PID1_IDS" ]; then
-    IN_CHROOT=true
+    CHROOT_WHY="no readable /proc/1/root"
 elif [ "$ROOT_IDS" != "$PID1_IDS" ]; then
     IN_CHROOT=true
+    CHROOT_WHY="/ ($ROOT_IDS) is not this namespace's PID 1 root ($PID1_IDS)"
+elif [ "${ERHAI_FORCE_CHROOT:-0}" = 1 ]; then
+    IN_CHROOT=true
+    CHROOT_WHY="ERHAI_FORCE_CHROOT=1"
+fi
+
+# (b) and (c) only when (a) said "live", so a plain chroot/force costs nothing.
+if [ "$IN_CHROOT" = false ]; then
+    IN_CONTAINER=false
+    if [ -n "${container:-}" ] || [ -e /run/systemd/container ] \
+       || tr '\0' '\n' < /proc/1/environ 2>/dev/null | grep -q '^container='; then
+        IN_CONTAINER=true
+    fi
+
+    OUR_DEV=""
+    OUR_SRC="$(findmnt -no SOURCE / 2>/dev/null || true)"
+    if [ -n "$OUR_SRC" ]; then
+        OUR_DEV="$(readlink -f "$OUR_SRC" 2>/dev/null || true)"
+    fi
+
+    CMD_ROOT_SPEC="$(tr ' ' '\n' < /proc/cmdline 2>/dev/null \
+                     | sed -n 's/^root=//p' | head -n1 || true)"
+    case "$CMD_ROOT_SPEC" in
+        PARTLABEL=*) CMD_DEV_PATH="/dev/disk/by-partlabel/${CMD_ROOT_SPEC#PARTLABEL=}" ;;
+        UUID=*)      CMD_DEV_PATH="/dev/disk/by-uuid/${CMD_ROOT_SPEC#UUID=}" ;;
+        LABEL=*)     CMD_DEV_PATH="/dev/disk/by-label/${CMD_ROOT_SPEC#LABEL=}" ;;
+        "")          CMD_DEV_PATH="" ;;
+        *)           CMD_DEV_PATH="$CMD_ROOT_SPEC" ;;
+    esac
+    CMD_DEV=""
+    if [ -n "$CMD_DEV_PATH" ] && [ -e "$CMD_DEV_PATH" ]; then
+        CMD_DEV="$(readlink -f "$CMD_DEV_PATH" 2>/dev/null || true)"
+    fi
+
+    if [ -n "$CMD_DEV" ] && [ -n "$OUR_DEV" ]; then
+        if [ "$CMD_DEV" != "$OUR_DEV" ]; then
+            IN_CHROOT=true
+            CHROOT_WHY="the booted cmdline's root ($CMD_ROOT_SPEC -> $CMD_DEV) is not this root ($OUR_DEV)"
+        fi
+    elif [ "$IN_CONTAINER" = true ]; then
+        IN_CHROOT=true
+        CHROOT_WHY="container (${container:-container marker}): the booted cmdline's root is not resolvable here${CMD_ROOT_SPEC:+ (root=$CMD_ROOT_SPEC)}"
+    fi
 fi
 
 # 3. Root partition label, so the cmdline follows whichever partition this kernel
@@ -88,11 +162,14 @@ else
 fi
 
 if [ "$IN_CHROOT" = true ]; then
-    # Build chroot: the image is built for build-root.sh's own root partition,
-    # PARTLABEL=linux, and the host's cmdline must not leak in.
+    # Build chroot/container: the image is built for build-root.sh's own root
+    # partition, PARTLABEL=linux, and the host's cmdline must not leak in.  An
+    # image that is destined for another partition says so with
+    # ERHAI_ROOT_LABEL=<partlabel> (e.g. linux1).
     [ -n "$ROOT_LABEL" ] || ROOT_LABEL="linux"
-    echo "Notice: build chroot detected -- the image's UKI goes to /boot with"
-    echo "        root=$ROOT_LABEL (the host's cmdline is ignored)."
+    echo "Notice: build chroot/container detected${CHROOT_WHY:+ ($CHROOT_WHY)}"
+    echo "        -- the image's UKI goes to /boot with root=PARTLABEL=$ROOT_LABEL"
+    echo "        (the host's cmdline is ignored; ERHAI_ROOT_LABEL=<label> overrides)."
 elif [ -z "$ROOT_LABEL" ]; then
     echo "Error: cannot determine the root partition label of this system" >&2
     echo "       (neither the cmdline nor findmnt/lsblk answered). Not guessing:" >&2
@@ -163,7 +240,9 @@ BOOT_DIR="/boot"
 KERNEL_IMG="$BOOT_DIR/vmlinuz-$KVER"
 DTB_FILE="$BOOT_DIR/dtb-$KVER"
 
-UKIFY_BIN=$(which ukify)
+# `command -v`, not `which`: a shell builtin needs no external binary (this runs
+# in an image rootfs too, where PATH is whatever the caller had).
+UKIFY_BIN="$(command -v ukify 2>/dev/null || true)"
 
 # 5. Module dependencies for the new kernel.
 if [ -d "/lib/modules/$KVER" ] && command -v depmod > /dev/null; then
@@ -179,17 +258,34 @@ echo " - Cmdline: $CMDLINE"
 
 # 7. Build the UKI. The DTB is always embedded: Mu-erhai hands us no device
 #    tree, so a kernel without one gets nowhere.
+# ukify decompresses the kernel into a ~46 MB temporary in $TMPDIR and does NOT
+# remove it on this build (measured 2026-10-20: /tmp/linux-decompressed* from the
+# b19 image build had shipped INSIDE the image, 45 660 672 B).  Give it a private
+# directory and clean that up explicitly -- an image must not carry build scratch.
+UKIFY_TMP="$(mktemp -d)"
 if [ -f "$KERNEL_IMG" ] && [ -x "$UKIFY_BIN" ]; then
-    "$UKIFY_BIN" build \
+    TMPDIR="$UKIFY_TMP" "$UKIFY_BIN" build \
         --linux "$KERNEL_IMG" \
         --devicetree "$DTB_FILE" \
         --efi-arch aa64 \
         --cmdline "$CMDLINE" \
         --output "$OUTPUT_EFI"
 else
-    echo "Error: Kernel image or ukify not found. Skipping UKI generation."
+    # Say WHICH one is missing -- "kernel image or ukify" cost a debugging round
+    # on 2026-10-20.
+    if [ ! -f "$KERNEL_IMG" ]; then
+        echo "Error: kernel image $KERNEL_IMG not found. Skipping UKI generation." >&2
+    elif [ -z "$UKIFY_BIN" ] || [ ! -x "$UKIFY_BIN" ]; then
+        echo "Error: ukify not found in PATH (is systemd-ukify installed?)." >&2
+        echo "       Skipping UKI generation." >&2
+    else
+        echo "Error: cannot build the UKI with $UKIFY_BIN. Skipping UKI generation." >&2
+    fi
     exit 0
 fi
+# drop ukify's private scratch (explicit paths, never rm -rf)
+rm -f "$UKIFY_TMP"/* 2>/dev/null || true
+rmdir "$UKIFY_TMP" 2>/dev/null || true
 
 # 8. Publish the UKI into /boot of THIS root filesystem.
 #
