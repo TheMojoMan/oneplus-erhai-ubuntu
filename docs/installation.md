@@ -88,6 +88,19 @@ After Dry-run:
 * Run `adb shell "/tmp/erhai-setup_partitions.sh"` again.
 * Repeat above procedure with **Dry-Run = No**.
 
+> **If the script stops with `!! No 'userdata' partition in /dev/block/by-name.`**
+> then Android's data partition is not on the tablet — a previous Linux-only
+> partitioning deleted it (or a re-partitioned stock ROM left a different layout).
+> `erhai-setup_partitions.sh` **v1.2 or newer** reports that and keeps working:
+> menu option **1** creates the Linux layout out of the free space, menu option
+> **2** re-creates a `userdata` partition.  Anything older aborts.  Check what
+> TWRP sees with:
+> ```bash
+> adb shell "ls -l /dev/block/by-name"
+> ```
+> (a completely empty listing means the device nodes are not up yet — run
+> `adb shell mdev -s` or reboot TWRP and retry).
+
 8. **Rebuild Android's data partition.** In TWRP: **Wipe** → **Format Data** → type `yes`. This is what makes Android bootable again.
 9. Tap **Home** icon and then **Reboot** button → tap on your currently active slot → tap on **Reboot** → tablet reboots into Android setup → setup Android.
 
