@@ -53,12 +53,12 @@
   battery gauge (**TI bq27z561** vs **Qualcomm QBG**).
 * **Bypass charging**: run from the charger with the battery held (quick
   settings; also automatic at the charge limit).
-* Honest **battery percentage**, temperature and current; configurable charge
-  limit.
+* Honest **battery percentage**, temperature and current; configurable charge limit.
 
 **Sound & camera**
-* **Six speakers** (stereo), plus sound through USB-C monitors.
-* Rear and front camera; use **ErhaiCam** app (autofocus, upright photos, video).
+* **Six speakers** (stereo), plus sound through USB-C/DP monitors.
+* **Internal microphones** (stereo).
+* **Rear and front camera** -> use shipped app **ErhaiCam** (autofocus, autoexposure, camera switching, video with sound).
 
 **System**
 * **dual-boot with Android**.
@@ -81,7 +81,6 @@
   The manual **Suspend** in the power menu is experimental and auto-sleep is
   off: shut the tablet down overnight instead.
 * **144 Hz** — removed on purpose (the panel misbehaves sometimes at this rate).
-* **Internal microphones** -> no video recording with sound.
 * **USB-C headphones** — untested with real hardware.
 
 ## Tips & known quirks
