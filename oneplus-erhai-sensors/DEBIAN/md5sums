@@ -8,8 +8,9 @@
 07c1513b89257f9d52dd58883953224d  usr/local/bin/ssccli
 7bd11e9f40f4438c3608034cdf0db9b8  usr/local/lib/aarch64-linux-gnu/libssc.so.2
 99ad18e2ad57dfca2f65d8b4d8dd2b72  usr/local/libexec/iio-sensor-proxy
-96599df7b9a8cf82f3169724fb880cfb  usr/local/sbin/erhai-alsd.py
+e348cfcd3a7f91a7357c37b810927e0a  usr/local/sbin/erhai-alsd.py
 278d43ba3cef2d9529dc6e836d98821a  usr/local/sbin/erhai-tablet-mode.py
+48b617c2a5bc84c806a741d8929002d5  usr/local/sbin/__pycache__/erhai-alsd.cpython-314.pyc
 e1ef56bc4d69091d1f3f4e1137a76834  usr/share/doc/oneplus-erhai-sensors/patches/hexagonrpcd-0.4.0-odm-sensor-config.patch
 5a6d79fa69545e69ffb236b8515126e4  usr/share/doc/oneplus-erhai-sensors/patches/iio-sensor-proxy-3.9-ssc-startup-claim-race.patch
 d4c5007d3a95ed6de1141024595e8d24  usr/share/doc/oneplus-erhai-sensors/patches/libssc-0.4.4-erhai-sample-rate.patch

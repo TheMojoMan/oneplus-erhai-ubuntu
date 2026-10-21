@@ -13,11 +13,25 @@
 #   STEAM_SRC=<dir>      source installation (default /media/data/PC-Games/Steam)
 #   DEB_COMPRESS='-Zzstd -z3'   dpkg-deb compression flags
 #
-# WHY THE VERSION IS NOT 0.1: Ubuntu's steam-devices package declares
-# "Breaks: steam (<< 1.0.0.51-1~)", so a lower version makes dpkg REFUSE to
-# configure this package on any system that has steam-devices installed
-# (measured: "dependency problems prevent configuration of steam").  The
-# 1.0.0.51 floor is therefore a hard requirement, not a versioning choice.
+# WHY THE VERSION IS 1:2.0-1erhai1 (owner request, 2026-10-20: "bump the version
+# to 2.0 so that a Ubuntu update e.g. to 1.0.0.52 does not overwrite our steam
+# version"):
+#  * The EPOCH 1 is what actually protects the package.  Ubuntu's steam FAMILY
+#    (steam-devices / steam-installer in resolute = 1:1.0.0.85~ds-2build1, the
+#    same source package their `steam` binary would come from) carries epoch 1,
+#    and an epoch beats ANY epoch-less version: measured with dpkg
+#    --compare-versions, a plain "2.0-1erhai1" is NOT greater than
+#    1:1.0.0.85~ds-2build1, while "1:2.0-1erhai1" is greater than it AND than
+#    1.0.0.52.  If Ubuntu ever raises its epoch, ours has to be raised above it.
+#  * The upstream part is 2.0 so that a later steam 1.0.0.52 (or any 1.0.0.x)
+#    cannot sort above ours either.
+#  * The revision is this project's build counter (-<n>erhai1); the next build
+#    of the same upstream version is -2erhai1, -3erhai1, ...
+#  * NEVER go back to a bare 1.0.0.x: Ubuntu's steam-devices declares
+#    "Breaks: steam (<< 1.0.0.51-1~)", so anything below that floor makes dpkg
+#    REFUSE to configure this package wherever steam-devices is installed
+#    (measured: "dependency problems prevent configuration of steam").
+#    1:2.0-1erhai1 satisfies it (epoch 1 > 0), so both constraints hold at once.
 #
 # WHAT IS SHIPPED: the BOOTSTRAP ONLY -- steamrtarm64/steam (a 10 MB aarch64
 # binary), the steamrt3c sentinel, the beta selector and an empty Steam-root
@@ -206,6 +220,30 @@ PY
 			{ echo "GUARD FAIL: $p not executable" >&2; fail=1; }
 	done
 
+	# 6. The erhai-forget-location block is SHARED between postinst and postrm:
+	#    dpkg runs the ALREADY-INSTALLED package's postrm on a removal, so the
+	#    install path has to clean the same state, and the two copies must not
+	#    drift apart.
+	local blk fi_blk fr_blk
+	blk=$(mktemp -d "${HERE}/../tmp/steam-guard.XXXXXX")
+	fi_blk="$blk/postinst"
+	fr_blk="$blk/postrm"
+	sed -n '/^# >>> erhai-forget-location$/,/^# <<< erhai-forget-location$/p' \
+		"$SRC/DEBIAN/postinst" >"$fi_blk"
+	sed -n '/^# >>> erhai-forget-location$/,/^# <<< erhai-forget-location$/p' \
+		"$SRC/DEBIAN/postrm" >"$fr_blk"
+	if [ ! -s "$fi_blk" ] || [ ! -s "$fr_blk" ]; then
+		echo "GUARD FAIL: erhai-forget-location block missing from postinst or postrm" >&2
+		fail=1
+	elif ! diff -q "$fi_blk" "$fr_blk" >/dev/null; then
+		echo "GUARD FAIL: postinst and postrm erhai-forget-location blocks differ" >&2
+		fail=1
+	else
+		echo "guards: forget-location block identical in postinst/postrm ($(wc -l <"$fi_blk") lines)"
+	fi
+	rm -f "$fi_blk" "$fr_blk"
+	rmdir "$blk" 2>/dev/null || true
+
 	[ "$fail" = 0 ] || { echo "refusing to build" >&2; exit 1; }
 	echo "guards: clean"
 }
@@ -216,7 +254,14 @@ guards
 ( cd "$SRC" && find . -path ./DEBIAN -prune -o -type f -print0 |
 	sed -z 's|^\./||' | sort -z | xargs -0 -r md5sum > DEBIAN/md5sums )
 
-DEB="$DEB_DIR/${PKG}_${VER}_${ARCH}.deb"
+# The .deb FILE is named WITHOUT the epoch -- the archive convention, and the
+# reason the epoch stays in the control field only: Ubuntu files their own
+# epoch-1 package as steam-devices_1.0.0.85~ds-2build1_all.deb while its
+# Version: reads "1:1.0.0.85~ds-2build1" (see /var/lib/apt/lists/*_Packages).
+# A literal ':' in the name would travel into the PPA's download URL, and apt
+# compares the VERSION FIELD, so the epoch still wins every comparison.
+DEB_VER="${VER#*:}"
+DEB="$DEB_DIR/${PKG}_${DEB_VER}_${ARCH}.deb"
 rm -f "$DEB"
 echo "packing $(find "$SRC" -type f | wc -l) files, $(du -sh "$SRC" | cut -f1) staged..."
 dpkg-deb --build --root-owner-group ${DEB_COMPRESS:--Zzstd -z3} "$SRC" "$DEB"

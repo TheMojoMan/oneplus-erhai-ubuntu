@@ -14,14 +14,26 @@
  * CFM880/nabu-camera's nabu-autofocus.  Continuous AF with tap-to-focus and
  * refocus-on-sharpness-drop; toggled off, a vertical slider takes over for
  * manual focus.  Auto exposure is a log-domain controller on the sensor's
- * integration time, written straight to the sc1320cs register 0x3e00 (the
- * kernel's V4L2_CID_EXPOSURE is a no-op); toggled off, a vertical slider
- * takes over there too.  Both loops run on the rear camera only (the only
- * one with a lens and a known exposure register).  The live preview is
+ * integration time, written straight to the sensor register 0x3e00 (the
+ * kernel's V4L2_CID_EXPOSURE is a no-op) — since 2.8 on BOTH cameras, each
+ * with its own register and limits (rear sc1320cs 6396 lines, front sc820cs
+ * 3120); toggled off, a vertical slider takes over there too.  That ownership
+ * is what keeps the software ISP out of the picture: with no exposure model
+ * for either sensor it could only brighten in SOFTWARE, which lifts the black
+ * level and yellows a dark scene ("the yellowish taint", 2026-10-21).  The AF
+ * loop stays rear-only (the lens is).  The live preview is
  * counter-rotated T*90 deg ccw at mutter transform T (1..3, both cameras —
  * see the ORIENTATION MODEL comment) while photo capture saves the frame
  * UNROTATED (the raw chassis-fixed frame is the world record and stays
  * upright as a photo at every orientation); video is recorded as streamed.
+ *
+ * Video recording (2026-10-20): the hardware encoder (v4l2h264enc / Iris, whose
+ * only raw format is NV12 — asking it for I420 silently fails the link and the
+ * old pipeline fell back to software VP8) muxes H.264 + AAC into MP4, with an
+ * automatic VP8/Opus WebM fallback.  The bottom-bar note button picks the
+ * soundtrack: "No audio" (silent video, the default) or "Microphone" — the
+ * PipeWire default source (the pad's Internal Mics), captured as a second
+ * branch of the SAME pipeline so the muxer keeps the two streams in sync.
  */
 
 #include <gst/app/gstappsink.h>
@@ -83,20 +95,51 @@ constexpr double kTapHoldSeconds = 5.0;
  * the RELATIVE test next to it; this only rejects scenes with nothing at all. */
 constexpr double kAfMinDetail = 5e-5;
 
-/* ---- exposure / the sc1320cs register interface -------------------------
+/* ---- exposure / the sensor register interface --------------------------
  * Integration time is 0x3e00..0x3e02 as a 3-byte big-endian burst (the
- * sensor auto-increments), holding lines << 5.  VTS is fixed at 6404 lines,
- * so the register's usable range is 0..6396 and the sensor must stay below
- * the frame length.  The soft ISP can invert ("negative") frames if the raw
- * saturates near the top, so AUTO exposure keeps itself below kExposureAeMax
- * and leaves the last quarter of the range to the manual slider. */
-constexpr int kSensorAddr = 0x36;
+ * sensor auto-increments), holding lines << 5.  BOTH cameras use the same
+ * register layout and the same encoding — only the ranges differ, because VTS
+ * is fixed per sensor and the integration time must stay below the frame
+ * length:
+ *
+ *   rear  sc1320cs   VTS 6404  ->  usable 0..6396, mode-table default 3196
+ *   front sc820cs    VTS 3128  ->  usable 0..3120, mode-table default 3124
+ *
+ * The front therefore sits AT its ceiling in any normal room, which is the
+ * whole reason the software ISP used to brighten it in SOFTWARE (and yellow
+ * the picture doing it): libcamera has no exposure/gain model for either
+ * sensor ("Failed to create camera sensor helper"), the kernel's
+ * V4L2_CID_EXPOSURE / ANALOGUE_GAIN are no-ops on both, and the ISP's AGC can
+ * then only express its target as DIGITAL gain.  The app owns BOTH registers
+ * (2026-10-21, ErhaiCam 2.8) and the ISP's AGC is pinned off by default, so
+ * brightness comes from real integration time instead.
+ *
+ * The soft ISP can invert ("negative") frames if the raw saturates near the
+ * top, so AUTO exposure keeps itself below the sensor's AE ceiling and leaves
+ * the top of the range to the manual slider. */
+struct SensorSpec {
+	const char *name;      /* i2c client name — the bus is never hardcoded */
+	int addr;              /* its i2c address */
+	int vts_default;       /* mode-table frame length (VTS, 0x320e/0f) */
+	int vts_max;           /* how far the low-light ladder may lengthen it */
+	int ae_reserve;        /* lines kept free below the frame's end */
+	int default_lines;     /* the mode table's default exposure */
+};
+/* rear  sc1320cs: VTS 0x1904 = 6404 (driver SC1320CS_VTS_DEF) */
+constexpr SensorSpec kRearSensor = { "sc1320cs", 0x36, 6404, 25616, 1596, 3196 };
+/* front sc820cs: VTS 0x0c38 = 3128 (driver SC820CS_VTS_DEF) — and this sensor
+ * is the reason the ladder exists: at 3128 lines its exposure ceiling is 3120,
+ * so in a dim room it was simply out of light (measured luma 43, signal band 18
+ * of 255) with NO ISP option able to help. */
+constexpr SensorSpec kFrontSensor = { "sc820cs", 0x10, 3128, 12512, 0, 3124 };
+/* VTS registers (both sensors, 16-bit big-endian pair) */
+constexpr int kVtsRegHi = 0x320e;
+constexpr int kVtsRegLo = 0x320f;
 constexpr int kExposureShift = 5;
 constexpr int kExposureMin = 1;
-constexpr int kExposureMax = 6396;       /* VTS(6404) - 8 */
-constexpr int kExposureAeMax = 4800;     /* auto exposure stays clear of the
-					  * raw-saturation/ISP-inversion zone */
-constexpr int kExposureDefault = 3196;   /* sensor mode-table default */
+constexpr int kExposureMax = 6396;       /* rear VTS(6404) - 8: fader fallback */
+constexpr int kExposureAeMax = 4800;     /* rear AE ceiling: AE fallback */
+constexpr int kExposureDefault = kRearSensor.default_lines;
 constexpr double kRawExposureEpsilon = 0.02;  /* highlight window before the
 					       * controller refuses to brighten */
 
@@ -114,20 +157,280 @@ constexpr double kAeDeadband = 0.06;     /* |log2(target/luma)| below this: hold
 constexpr double kAeGain = 0.5;          /* log2 step per log2 error */
 constexpr double kAeMaxStep = 0.25;      /* <= ~19 % change per update */
 constexpr int kSliderDebounceMs = 60;
+/* The manual AE/AF faders are stretched to the window and their tracks stop
+ * this many pixels above the window's bottom edge: the note button sits in the
+ * bottom-RIGHT corner (kNoteButtonBottomGap, the same 16 px the AF button uses
+ * on the right edge) and is 52 px tall, so the fader must clear it — the gap is
+ * 16 + 52 + 8 (box spacing) so BOTH faders stay the same length and mirror each
+ * other (owner request 2026-10-20: "make the AF and AE fader longer, stop 50px
+ * over bottom window edge", then "put the note button at the very right (same
+ * margin as AF button) and make it round" — the button wins, the faders stay
+ * symmetric). */
+constexpr int kFaderBottomGap = 76;
+constexpr int kNoteButtonBottomGap = 16;
+constexpr int kNoteButtonSize = 52;   /* .togbtn min-width/height */
 
-/* Negotiation fallbacks. The soft ISP GPU-debayers and scales to any
- * standard size at ~30 fps — ask for 8MP photos first, fall back to proven
- * sizes. NOTE: never ask for the bare native sizes (front 3264x2448, rear
- * 4152x3120) — the soft-ISP streams are 3256/4152 wide-cropped and the bare
- * native width fails caps negotiation. */
-const std::vector<std::pair<int, int>> kRearResolutions = {
-	{ 3200, 2400 },
-	{ 1280, 960 },
+/* How long the picture waits for the microphone's first real audio before the
+ * recording starts anyway (the pad's capture path needs ~0.15-0.25 s to wake;
+ * see rec_audio_probe_cb / on_new_sample). */
+constexpr auto kRecAudioWait = std::chrono::milliseconds(1500);
+
+/* ---- the resolution menu -------------------------------------------------
+ * ONE stream feeds everything (preview, video recording, photos, AF/AE), so
+ * the size the user picks here is the size of the preview AND of the recorded
+ * video (and of a snapshot).  The choice is stored PER CAMERA and the two
+ * cameras do not offer the same list, because their sensors differ:
+ *
+ *   rear  = sc1320cs, 4160x3120 ; the software ISP scales to anything up to
+ *           the sensor's own size, so 4152x3120 (its cropped native) is the
+ *           largest entry — measured on the pad, every size below negotiates.
+ *   front = sc820cs, 3264x2448 ; its BARE native width does NOT negotiate
+ *           (measured: 3264x2448 fails caps negotiation), 3200x2400 is the
+ *           largest usable size.
+ *
+ * Every offered size is verified to negotiate at 30 fps on this hardware; a
+ * stored/forced size that does not work falls back to the other entries (see
+ * preview_pipeline_start).  The DEFAULT is 1920x1080 (Full HD) for both
+ * cameras (kDefaultW/kDefaultH below). */
+struct ResOption {
+	int w;
+	int h;
+	const char *label;   /* menu text, after the "WxH" pair */
 };
-const std::vector<std::pair<int, int>> kFrontResolutions = {
-	{ 3200, 2400 },
-	{ 1600, 1200 },
+
+const std::vector<ResOption> kRearResolutions = {
+	{ 4152, 3120, "Max (4:3, sensor native)" },
+	{ 3840, 2160, "4K UHD (16:9)" },
+	{ 3200, 2400, "8 MP (4:3)" },
+	{ 2560, 1920, "5 MP (4:3)" },
+	{ 1920, 1080, "Full HD (16:9)" },
+	{ 1280, 720, "HD (16:9)" },
+	{ 640, 480, "SD (4:3)" },
 };
+const std::vector<ResOption> kFrontResolutions = {
+	{ 3200, 2400, "8 MP (4:3)" },
+	{ 2560, 1920, "5 MP (4:3)" },
+	{ 1920, 1080, "Full HD (16:9)" },
+	{ 1600, 1200, "2 MP (4:3)" },
+	{ 1280, 960, "1.2 MP (4:3)" },
+	{ 640, 480, "SD (4:3)" },
+};
+/* 1920x1080 ("Full HD") is the entry both lists share, i.e. the DEFAULT of the
+ * app (used when nothing is stored yet) — owner decision 2026-10-20: Full HD is
+ * the sane default for video, and the picker's own button always shows which
+ * size is in use. */
+constexpr int kDefaultW = 1920;
+constexpr int kDefaultH = 1080;
+
+/* ---- persisted settings --------------------------------------------------
+ * The owner asked for BOTH cameras' chosen resolutions to survive a restart,
+ * so they live in a small GKeyFile under the XDG config dir:
+ *
+ *     ~/.config/erhai/erhaicam.conf
+ *     [resolution]
+ *     rear=1920x1080
+ *     front=1920x1080
+ *
+ * GKeyFile (not GSettings): no schema package/glib-compile-schemas step in the
+ * deb, no D-Bus session needed, and the file is trivially inspectable — the app
+ * has no other persisted state.  Every failure mode (missing file, bad value,
+ * read-only HOME) falls back to the default and never blocks the UI. */
+constexpr char kConfigSubdir[] = "erhai";
+constexpr char kConfigName[] = "erhaicam.conf";
+constexpr char kConfigGroup[] = "resolution";
+
+std::string config_path()
+{
+	const char *xdg = std::getenv("XDG_CONFIG_HOME");
+	const char *home = std::getenv("HOME");
+	std::string base;
+
+	if (xdg && *xdg)
+		base = xdg;
+	else if (home && *home)
+		base = std::string(home) + "/.config";
+	else
+		return {};
+
+	return base + "/" + kConfigSubdir + "/" + kConfigName;
+}
+
+/* "3200x2400" -> {3200, 2400}; anything else -> nullopt. */
+std::optional<std::pair<int, int>> parse_res(const std::string &text)
+{
+	const auto x = text.find('x');
+
+	if (x == std::string::npos || x == 0 || x + 1 >= text.size())
+		return std::nullopt;
+	try {
+		const int w = std::stoi(text.substr(0, x));
+		const int h = std::stoi(text.substr(x + 1));
+		if (w <= 0 || h <= 0)
+			return std::nullopt;
+		return std::make_pair(w, h);
+	} catch (const std::exception &) {
+		return std::nullopt;
+	}
+}
+
+/* Index of the entry that EXACTLY matches w x h, else -1. */
+int res_index_of(const std::vector<ResOption> &opts, int w, int h)
+{
+	for (size_t i = 0; i < opts.size(); i++)
+		if (opts[i].w == w && opts[i].h == h)
+			return int(i);
+	return -1;
+}
+
+int default_res_index(const std::vector<ResOption> &opts)
+{
+	const int i = res_index_of(opts, kDefaultW, kDefaultH);
+
+	return i >= 0 ? i : 0;
+}
+
+/* Read one camera's stored choice ("" / unknown values -> the default). */
+int load_res_choice(const std::vector<ResOption> &opts, const char *key)
+{
+	const std::string path = config_path();
+
+	if (path.empty())
+		return default_res_index(opts);
+	GKeyFile *kf = g_key_file_new();
+	int idx = default_res_index(opts);
+
+	if (g_key_file_load_from_file(kf, path.c_str(), G_KEY_FILE_NONE,
+				      nullptr)) {
+		gchar *value = g_key_file_get_string(kf, kConfigGroup, key,
+						    nullptr);
+
+		if (value) {
+			if (const auto parsed = parse_res(value)) {
+				if (const int i = res_index_of(opts, parsed->first,
+							      parsed->second);
+				    i >= 0)
+					idx = i;
+			}
+			g_free(value);
+		}
+	}
+	g_key_file_unref(kf);
+	return idx;
+}
+
+/* Store ONE camera's choice, leaving the other camera's entry alone (best
+ * effort; a read-only HOME is not worth interrupting the camera with). */
+void save_res_choice(bool rear, const ResOption &opt)
+{
+	const std::string path = config_path();
+
+	if (path.empty())
+		return;
+	GKeyFile *kf = g_key_file_new();
+	std::error_code ec;
+	const std::string value =
+		std::to_string(opt.w) + "x" + std::to_string(opt.h);
+
+	std::filesystem::create_directories(
+		std::filesystem::path(path).parent_path(), ec);
+	g_key_file_load_from_file(kf, path.c_str(), G_KEY_FILE_NONE, nullptr);
+	g_key_file_set_string(kf, kConfigGroup, rear ? "rear" : "front",
+			      value.c_str());
+	g_key_file_set_comment(kf, nullptr, nullptr,
+			       "ErhaiCam settings (video/preview/photo resolution "
+			       "per camera)", nullptr);
+	gchar *text = g_key_file_to_data(kf, nullptr, nullptr);
+
+	if (text)
+		g_file_set_contents(path.c_str(), text, -1, nullptr);
+	g_free(text);
+	g_key_file_unref(kf);
+}
+
+/* ---- the ISP controls (libcamera camera controls) -----------------------
+ * libcamerasrc exposes EVERY libcamera control as a GObject property
+ * (`gst-inspect-1.0 libcamerasrc`): ae-enable, ae-exposure-mode,
+ * ae-metering-mode, ae-flicker-period, analogue-gain, exposure-time, gamma,
+ * saturation, sharpness, awb-enable, awb-mode, colour-gains, brightness,
+ * contrast …  They are the software ISP's levers, and the owner asked for them
+ * MANUALLY (2026-10-20): in LOW light the ISP's `Adjust` algorithm compensates
+ * IN SOFTWARE for the analogue gain it cannot give the sensor (the sc1320cs's
+ * s_ctrl is a no-op), and that compensation (gamma + saturation boost) yellows
+ * the picture; in a bright room the compensation is 1.0 and the image is fine.
+ *
+ * 2.8 — the ISP's luminance-dependent compensation is OFF BY DEFAULT, because
+ * it IS the owner's "yellowish taint" (measured 2026-10-21): in a dark scene
+ * the frame's black floor rose 4x (luma p1 10.5 -> 42.2 on his own two photos)
+ * while the highlights barely moved — a fog, not a colour cast (the colour
+ * temperature was unchanged, 4657 K vs 4686 K).  Pinning libcamera's `gamma`
+ * and `saturation` stops the `Adjust` algorithm from re-curving the picture;
+ * the app's own AE (which now owns BOTH cameras' exposure registers) provides
+ * the brightness instead.  No `Ccm` exists for these sensors (uncalibrated
+ * tuning), so nothing else in the pipeline can be pinned.
+ *
+ * So they can be forced from
+ * The default is therefore the two PINS (kIspDefault) — they only take the
+ * freedom away from `Adjust`, they cannot make a dark room darker.  What 2.8
+ * deliberately does NOT do by default is switch the ISP's own AE off
+ * (`lowlight`): with the front sensor's ceiling already at its maximum, that
+ * would only darken a dark scene further while the fix for the tone is the
+ * curve, not a second gain stage.  Every knob stays reachable.
+ *
+ *   ERHAI_CAM_ISP="key=value,key=value,…"      (a complete override)
+ *   ERHAI_CAM_ISP=default|on|pins|gain         (the 2.8 default, kIspDefault)
+ *   ERHAI_CAM_ISP=lowlight                     (the pins PLUS
+ *                                               ae-enable=false: no second
+ *                                               gain stage at all)
+ *   ERHAI_CAM_ISP=none|off|raw|isp             (2.7 behaviour: touch nothing)
+ * and from ~/.config/erhai/erhaicam.conf `[isp] key=value` lines, which are
+ * APPENDED to the default (a config key therefore overrides it). */
+constexpr char kIspDefault[] = "saturation=1.0,gamma=2.2";
+constexpr char kIspLowLight[] =
+	"ae-enable=false,saturation=1.0,gamma=2.2";
+
+std::string isp_spec()
+{
+	if (const char *env = std::getenv("ERHAI_CAM_ISP")) {
+		const std::string spec(env);
+
+		if (spec == "lowlight")
+			return kIspLowLight;
+		if (spec == "default" || spec == "on" || spec == "pins" ||
+		    spec == "gain")
+			return kIspDefault;
+		if (spec == "none" || spec == "off" || spec == "raw" ||
+		    spec == "isp")
+			return {};
+		return spec;
+	}
+	const std::string path = config_path();
+	std::string spec = kIspDefault;
+
+	if (path.empty())
+		return spec;
+	GKeyFile *kf = g_key_file_new();
+
+	if (g_key_file_load_from_file(kf, path.c_str(), G_KEY_FILE_NONE,
+				      nullptr)) {
+		gsize n = 0;
+		gchar **keys = g_key_file_get_keys(kf, "isp", &n, nullptr);
+
+		for (gsize i = 0; keys && i < n; i++) {
+			gchar *v = g_key_file_get_string(kf, "isp", keys[i],
+							nullptr);
+
+			if (v) {
+				if (!spec.empty())
+					spec += ",";
+				spec += std::string(keys[i]) + "=" + v;
+				g_free(v);
+			}
+		}
+		g_strfreev(keys);
+	}
+	g_key_file_unref(kf);
+	return spec;
+}
 
 using Steady = std::chrono::steady_clock;
 
@@ -203,27 +506,34 @@ private:
 
 /* ---------------------- sensor register access (exposure) ---------------- */
 
-/* Manual/auto exposure writes the sc1320cs integration-time register
- * directly.  The kernel driver accepts V4L2_CID_EXPOSURE but its s_ctrl is a
- * no-op ("accepted but not yet written to hardware", drivers/media/i2c/
- * sc1320cs.c), so the control is useless and the app is the register's owner.
+/* Manual/auto exposure writes the sensor's integration-time register
+ * directly.  The kernel drivers accept V4L2_CID_EXPOSURE but their s_ctrl is
+ * a no-op ("accepted but not yet written to hardware", drivers/media/i2c/
+ * sc1320cs.c and sc820cs.c), so the control is useless and the app is the
+ * register's owner.
+ *
+ * Both cameras are supported (2.8): the app resolves the i2c client of the
+ * sensor the CURRENT camera streams from — "sc1320cs" for the rear,
+ * "sc820cs" for the front — and carries that sensor's own limits.  Before
+ * 2.8 only the rear was owned, which left the front camera entirely to the
+ * software ISP's in-software gain (the yellow veil).
  *
  * The sensor's rails are only powered while it streams, so every write must
  * be guarded by app->camera_ok or the CCI transaction NAKs.  udev rule
  * 70-erhai-cam-i2c.rules grants the session user rw on the CCI adapter
- * (uaccess); the two CCI masters enumerate in probe order (i2c-10 and i2c-11
- * swap between boots), so the bus is resolved from the i2c client named
- * "sc1320cs" — never hardcoded. */
+ * (uaccess); the CCI masters enumerate in probe order and the bus numbers
+ * swap between boots, so the bus is resolved from the i2c client's NAME —
+ * never hardcoded. */
 class Sensor {
 public:
-	static std::optional<std::string> find()
+	static std::optional<std::string> find(const SensorSpec &spec)
 	{
 		const std::filesystem::path bus("/sys/bus/i2c/devices");
 		std::error_code ec;
 
 		for (const auto &entry :
 		     std::filesystem::directory_iterator(bus, ec)) {
-			if (read_text_file(entry.path() / "name") != "sc1320cs")
+			if (read_text_file(entry.path() / "name") != spec.name)
 				continue;
 			const std::string dev = entry.path().filename();
 			const auto dash = dev.find('-');
@@ -234,7 +544,9 @@ public:
 		return std::nullopt;
 	}
 
-	explicit Sensor(const std::string &path) : path_(path)
+	explicit Sensor(const std::string &path, const SensorSpec &spec)
+		: path_(path), spec_(spec), exposure_(spec.default_lines),
+		  vts_(spec.vts_default)
 	{
 		fd_ = open(path.c_str(), O_RDWR | O_CLOEXEC);
 		if (fd_ < 0)
@@ -251,9 +563,39 @@ public:
 	Sensor(const Sensor &) = delete;
 	Sensor &operator=(const Sensor &) = delete;
 
+	/* This sensor's own limits (the fader and the AE ask for them).  Both are
+	 * DYNAMIC: the integration time can never exceed the frame length, so
+	 * lengthening the frame (set_frame_lines) raises them. */
+	int max_lines() const { return vts_ - 8; }
+	int ae_max() const
+	{
+		return std::max(kExposureMin, max_lines() - spec_.ae_reserve);
+	}
+	const char *name() const { return spec_.name; }
+	int frame_lines() const { return vts_; }
+	int vts_default() const { return spec_.vts_default; }
+	int vts_max() const { return spec_.vts_max; }
+
+	/* LENGTHEN (or restore) the frame: VTS is the sensor's frame length and the
+	 * ceiling of its integration time, so a longer frame is how a dark scene
+	 * gets more light at a lower frame rate (0x320e/0f, 16-bit big-endian).
+	 * Takes effect on the running stream (measured 2026-10-21: VTS 3128->6240
+	 * on the front moved luma 43.4 -> 48.7 and the signal band 17.9 -> 24.3,
+	 * i.e. real light with the contrast intact).  Exposure is clamped to the
+	 * new frame by the caller. */
+	bool set_frame_lines(int vts)
+	{
+		vts = std::clamp(vts, spec_.vts_default, spec_.vts_max);
+		if (!write_reg(kVtsRegHi, vts >> 8) ||
+		    !write_reg(kVtsRegLo, vts & 0xff))
+			return false;
+		vts_ = vts;
+		return true;
+	}
+
 	bool set_exposure_lines(int lines)
 	{
-		lines = std::clamp(lines, kExposureMin, kExposureMax);
+		lines = std::clamp(lines, kExposureMin, max_lines());
 		const unsigned value = unsigned(lines) << kExposureShift;
 		unsigned char msg[5] = {
 			0x3e, 0x00,
@@ -264,11 +606,11 @@ public:
 		struct i2c_msg m = {};
 		struct i2c_rdwr_ioctl_data xfer = { &m, 1 };
 
-		m.addr = kSensorAddr;
+		m.addr = spec_.addr;
 		m.flags = 0;
 		m.len = sizeof(msg);
 		m.buf = msg;
-		/* I2C_RDWR, not I2C_SLAVE + write(): the kernel sc1320cs driver
+		/* I2C_RDWR, not I2C_SLAVE + write(): the kernel sensor driver
 		 * holds the CCI bus while the sensor streams and a second
 		 * I2C_SLAVE claim of the same address gets EBUSY, whereas an
 		 * I2C_RDWR transaction (what i2ctransfer does) always works. */
@@ -290,11 +632,11 @@ public:
 		struct i2c_msg msgs[2] = {};
 		struct i2c_rdwr_ioctl_data xfer = { msgs, 2 };
 
-		msgs[0].addr = kSensorAddr;
+		msgs[0].addr = spec_.addr;
 		msgs[0].flags = 0;
 		msgs[0].len = sizeof(addr);
 		msgs[0].buf = addr;
-		msgs[1].addr = kSensorAddr;
+		msgs[1].addr = spec_.addr;
 		msgs[1].flags = I2C_M_RD;
 		msgs[1].len = sizeof(data);
 		msgs[1].buf = data;
@@ -306,7 +648,7 @@ public:
 				       (unsigned(data[1]) << 8) | data[2];
 		const int decoded = int(value >> kExposureShift);
 
-		if (decoded <= 0 || decoded > kExposureMax)
+		if (decoded <= 0 || decoded > max_lines())
 			return false;
 		exposure_ = decoded;
 		if (lines)
@@ -315,9 +657,31 @@ public:
 	}
 
 private:
+	/* One 8-bit register (2-byte address + value), I2C_RDWR — the same
+	 * transaction the exposure burst uses, so it works while the kernel
+	 * driver holds the CCI bus. */
+	bool write_reg(int reg, int value)
+	{
+		unsigned char msg[3] = {
+			(unsigned char)((reg >> 8) & 0xff),
+			(unsigned char)(reg & 0xff),
+			(unsigned char)(value & 0xff),
+		};
+		struct i2c_msg m = {};
+		struct i2c_rdwr_ioctl_data xfer = { &m, 1 };
+
+		m.addr = spec_.addr;
+		m.flags = 0;
+		m.len = sizeof(msg);
+		m.buf = msg;
+		return ioctl(fd_, I2C_RDWR, &xfer) >= 0;
+	}
+
 	std::string path_;
+	SensorSpec spec_;
 	int fd_ = -1;
 	int exposure_ = kExposureDefault;
+	int vts_ = kRearSensor.vts_default;   /* current frame length */
 };
 
 /* ------------------------ frame analysis (the NPU) ----------------------- */
@@ -677,6 +1041,9 @@ private:
 
 enum class AfMode { Idle, Sweep, Monitor };
 
+/* The video soundtrack, chosen with the note button in the bottom bar. */
+enum class AudioMode { None, Microphone };
+
 struct Af {
 	bool enabled = true;
 	AfMode mode = AfMode::Idle;
@@ -705,8 +1072,10 @@ struct Af {
  * exposure only).  Every kAeStride analysed frames the whole preview frame is
  * measured on the NPU and the exposure is nudged by up to kAeMaxStep in log2
  * space; a highlight window over kRawExposureEpsilon vetoes brightening, and
- * the loop never leaves kExposureAeMax so the raw cannot saturate into the
- * soft ISP's inverting region. */
+ * the loop never leaves the streaming sensor's own AE ceiling (4800 of 6396
+ * lines on the rear, 3120 of 3120 on the front) so the raw cannot saturate
+ * into the soft ISP's inverting region.  Since 2.8 the loop runs on BOTH
+ * cameras. */
 struct Ae {
 	bool enabled = true;
 	int exposure = kExposureDefault;   /* lines currently programmed */
@@ -721,6 +1090,10 @@ struct Ae {
 struct App {
 	/* GTK */
 	GtkWidget *win = nullptr;
+	/* The window is being destroyed: every widget pointer below is gone, so
+	 * the streaming thread / GStreamer bus callbacks must stop touching the
+	 * UI (they all null-check their widget already). */
+	bool ui_dead = false;
 	GtkWidget *preview = nullptr;
 	GtkWidget *status = nullptr;
 	GtkWidget *btn_switch = nullptr;
@@ -736,6 +1109,24 @@ struct App {
 	bool slider_sync = false;   /* programmatic slider write in flight */
 	GtkWidget *btn_shot = nullptr;
 	GtkWidget *btn_rec = nullptr;
+	/* video soundtrack picker (bottom bar, note icon + a popover) */
+	GtkWidget *btn_audio = nullptr;
+	GtkWidget *audio_popover = nullptr;
+	GtkWidget *audio_none = nullptr;
+	GtkWidget *audio_mic = nullptr;
+	AudioMode audio_mode = AudioMode::None;
+	bool audio_sync = false;    /* programmatic popover update in flight */
+	/* resolution picker (bottom-left corner, display icon + a popover).
+	 * ONE choice per camera, persisted in ~/.config/erhai/erhaicam.conf;
+	 * the popover is REBUILT whenever the camera changes, because the two
+	 * cameras offer different lists. */
+	GtkWidget *btn_res = nullptr;
+	GtkWidget *res_popover = nullptr;
+	GtkWidget *res_box = nullptr;
+	std::vector<GtkWidget *> res_checks;   /* current popover's buttons */
+	int rear_res = 0;    /* index into kRearResolutions */
+	int front_res = 0;   /* index into kFrontResolutions */
+	bool res_sync = false;   /* programmatic check-button update in flight */
 	guint shutter_flash_id = 0;
 	GdkPaintable *paintable = nullptr;
 	guint status_timer = 0;
@@ -749,10 +1140,60 @@ struct App {
 	/* GStreamer */
 	GstElement *pipe = nullptr;
 	GstElement *appsink = nullptr;
+	/* the libcamerasrc element of the preview pipeline: the ISP controls
+	 * (libcamera camera controls) live on it (see isp_spec) */
+	GstElement *camsrc = nullptr;
+	/* the app's grey-world white balance + the MANUAL warm/cool fader
+	 * (see setup_wb / wb_probe_cb / wb_gains_from_state) */
+	bool wb_grey = false;       /* automatic grey-world mode (env/config) */
+	bool wb_manual = false;     /* the fader's value is in use */
+	bool wb_active = false;     /* the WB toggle button (lit = applied) */
+	GtkWidget *btn_wb = nullptr;
+	int wb_warmth = 0;          /* -100 (cool) … +100 (warm) */
+	GtkWidget *wb_scale = nullptr;
+	GtkWidget *wb_value = nullptr;
+	bool wb_slider_sync = false;
+	guint wb_save_timer = 0;
+	int wb_stride = 0;
+	double wb_r = 1.0;
+	double wb_b = 1.0;
+	GstPad *wb_probe_pad = nullptr;
+	gulong wb_probe = 0;
+	GstVideoInfo wb_info{};
+	bool wb_info_valid = false;
+	unsigned long wb_frame = 0;
 	GstElement *rpipe = nullptr;
 	GstElement *rsrc = nullptr;
+	GstElement *raudio = nullptr;   /* the mic source of the recording pipeline */
 	bool recording = false;
 	std::string rec_path;
+	/* First recorded frame's PTS: the recording pipeline's zero (the camera
+	 * timestamps come from the preview pipeline's time base, the mic's from
+	 * its own — mixing them puts the video at the end of the movie). */
+	GstClockTime rec_base = GST_CLOCK_TIME_NONE;
+	/* The first picture frame must be the one CAPTURED when the microphone
+	 * went live (rec_audio_shift), not the next one to arrive: without this
+	 * the movie's picture starts up to a camera latency (~0.25 s) before the
+	 * sound (measured 2026-10-20: the sound lagged by 0.27-0.32 s).  This is
+	 * that frame's capture stamp, i.e. rec_audio_shift mapped into the
+	 * camera's clock — see on_new_sample.  NONE = not known yet. */
+	GstClockTime rec_anchor = GST_CLOCK_TIME_NONE;
+	/* dead-air trim: the mic delivers EXACT zeros for its first ~0.15-0.3 s
+	 * (see rec_audio_probe_cb) — those buffers are dropped, the track is
+	 * re-based onto the first real one, and the video waits for it.
+	 *
+	 * The app opens the microphone ONLY when Record is pressed, on purpose:
+	 * a capture stream that runs outside a recording (even one whose data is
+	 * thrown away, as an earlier version did to hide the cold-start latency)
+	 * is a microphone we do not need — owner decision 2026-10-20, "no audio
+	 * recording before start is pressed -> security: we do not spy on
+	 * users".  The cold-start gap is handled by trimming it instead. */
+	bool rec_audio_live = false;
+	GstClockTime rec_audio_shift = GST_CLOCK_TIME_NONE;
+	int rec_audio_dropped = 0;   /* dead-air buffers thrown away */
+	GstPad *rec_audio_pad = nullptr;
+	gulong rec_audio_probe = 0;
+	Steady::time_point rec_start = Steady::time_point::min();
 	/* latest frame (owned, protected) */
 	std::mutex frame_lock;
 	GstSample *last_sample = nullptr;
@@ -815,7 +1256,7 @@ static gboolean status_show_cb(gpointer data)
 {
 	StatusMsg *msg = static_cast<StatusMsg *>(data);
 
-	if (!msg->app->status) {
+	if (!msg->app->status || msg->app->ui_dead) {
 		delete msg;
 		return G_SOURCE_REMOVE;
 	}
@@ -827,6 +1268,8 @@ static gboolean status_show_cb(gpointer data)
 		4000, [](gpointer d) -> gboolean {
 			auto *app = static_cast<App *>(d);
 			app->status_timer = 0;
+			if (!app->status || app->ui_dead)
+				return G_SOURCE_REMOVE;
 			gtk_label_set_text(GTK_LABEL(app->status), "");
 			gtk_widget_set_visible(app->status, FALSE);
 			return G_SOURCE_REMOVE;
@@ -840,6 +1283,21 @@ static void set_status(App *app, const std::string &text)
 	g_main_context_invoke(nullptr, status_show_cb,
 			      new StatusMsg{ app, text });
 }
+
+/* --------------------------- resolution picker ---------------------------- */
+/* The per-camera size menu (the button, its popover and the persistence) is
+ * implemented further down, next to the soundtrack picker; these are declared
+ * here because the preview pipeline and the recording lock use them. */
+static const std::vector<ResOption> &res_options(const App *app);
+static int res_index(const App *app);
+static void res_menu_rebuild(App *app);
+static void res_update_button(App *app);
+static void res_set_locked(App *app, bool locked);
+
+/* Defined with the photo probe further down, used per frame. */
+static bool frame_rgb_mean(GstSample *sample, double *r, double *g, double *b);
+/* the app's in-place white balance pass (defined with setup_wb) */
+static void wb_detach(App *app);
 
 /* ------------------------------- autofocus ------------------------------- */
 
@@ -963,6 +1421,70 @@ static double af_frame_score(App *app, const GstVideoFrame &frame)
 	return stats.sharp;
 }
 
+/* ------------------------ the exposure register owner -------------------- */
+
+/* The span the exposure fader spans for the camera in use (the two sensors
+ * have different frame lengths, so the fader must change with the camera). */
+static int exp_span(const App *app)
+{
+	return app->sensor_ok ? app->sensor->max_lines() : kExposureMax;
+}
+
+/* Resolve and own the integration-time register of the sensor the CURRENT
+ * camera streams from.  ErhaiCam 2.8 owns BOTH sensors — the rear sc1320cs and
+ * the front sc820cs — because the front was previously left entirely to the
+ * software ISP, whose only remaining lever is DIGITAL gain (libcamera has no
+ * exposure/gain model for either sensor, and both kernel controls are no-ops):
+ * that software gain lifts the black level and, with the ISP's luminance-
+ * dependent `Adjust` curve, turned a dark room into the owner's "yellowish
+ * taint" (measured 2026-10-21).
+ *
+ * Called at startup and on EVERY camera switch: each sensor has its own i2c
+ * client, address and limits, and the fd belongs to one camera at a time.  The
+ * rails are powered only while a sensor streams, so the read-back is best
+ * effort — a silent register keeps the mode-table default. */
+static void sensor_attach(App *app)
+{
+	const SensorSpec &spec = app->rear ? kRearSensor : kFrontSensor;
+
+	if (app->sensor) {
+		delete app->sensor;
+		app->sensor = nullptr;
+	}
+	app->sensor_ok = false;
+	app->ae.exposure = spec.default_lines;   /* mode table default for now */
+	if (auto path = Sensor::find(spec)) {
+		try {
+			app->sensor = new Sensor(*path, spec);
+			app->sensor_ok = true;
+			app->ae.exposure = app->sensor->ae_max();  /* its ceiling */
+			std::cout << "Sensor device: " << *path << " (" << spec.name
+				  << ", frame " << spec.vts_default << " lines (low "
+				  << "light up to " << spec.vts_max << "), exposure 1.."
+				  << app->sensor->max_lines() << ", AE up to "
+				  << app->sensor->ae_max() << ")\n";
+			int lines = 0;
+
+			if (app->sensor->read_exposure_lines(&lines)) {
+				app->ae.exposure = lines;
+				std::cout << "Sensor exposure: " << lines
+					  << " lines\n";
+			}
+		} catch (const std::exception &e) {
+			std::cerr << "sensor: " << e.what() << "\n";
+		}
+	}
+	if (!app->sensor_ok)
+		std::cerr << "no " << spec.name << " i2c client; exposure control "
+			     "disabled for the " << (app->rear ? "rear" : "front")
+			  << " camera\n";
+	/* The AE's tracked exposure belonged to the OLD sensor. */
+	app->ae.stride = 0;
+	app->ae.settle = kAeSettle;
+	app->ae.measured = false;
+	app->ae.at_limit = false;
+}
+
 /* --------------------- manual controls / AE-AF buttons ------------------- */
 
 /* ONE place decides how the AF/AE buttons and the two manual sliders look:
@@ -972,7 +1494,8 @@ static double af_frame_score(App *app, const GstVideoFrame &frame)
 static void app_sync_controls(App *app)
 {
 	if (app->btn_ae) {
-		gtk_widget_set_sensitive(app->btn_ae, app->rear && app->sensor_ok);
+		/* Both cameras expose a driver register the app owns (2.8). */
+		gtk_widget_set_sensitive(app->btn_ae, app->sensor_ok);
 		if (app->ae.enabled) {
 			gtk_widget_add_css_class(app->btn_ae, "on");
 			gtk_widget_remove_css_class(app->btn_ae, "off");
@@ -992,8 +1515,11 @@ static void app_sync_controls(App *app)
 		}
 	}
 
-	const bool exp_manual = app->sensor_ok && app->rear && !app->ae.enabled;
+	const bool exp_manual = app->sensor_ok && !app->ae.enabled;
 	if (app->exp_scale) {
+		/* The two sensors have different frame lengths: span THIS one. */
+		gtk_range_set_range(GTK_RANGE(app->exp_scale), kExposureMin,
+				    exp_span(app));
 		if (exp_manual) {
 			app->slider_sync = true;
 			gtk_range_set_value(GTK_RANGE(app->exp_scale),
@@ -1141,7 +1667,7 @@ static void ae_step(App *app, GstSample *sample)
 {
 	Ae &ae = app->ae;
 
-	if (!ae.enabled || !app->sensor_ok || !app->rear || !app->camera_ok)
+	if (!ae.enabled || !app->sensor_ok || !app->camera_ok)
 		return;
 	if (++ae.stride < kAeStride)
 		return;
@@ -1191,13 +1717,59 @@ static void ae_step(App *app, GstSample *sample)
 	if (step < 0.0 && ae.exposure <= kExposureMin)
 		step = 0.0;
 
+	/* The ceiling is the STREAMING sensor's (rear 4800 of 6396, front 3120). */
+	int ae_max = app->sensor->ae_max();
+
+	/* --- THE LOW-LIGHT LADDER (2.9) -------------------------------------
+	 * A frame's integration time can never exceed its frame length, and the
+	 * mode table fixes that at 3128 lines (front) / 6404 (rear) — so once the
+	 * exposure is at the ceiling the ONLY way to get more light is to
+	 * LENGTHEN THE FRAME: 2x the frame length is 2x the integration time at
+	 * half the frame rate.  Measured 2026-10-21 on the front camera in a dim
+	 * room: VTS 3128 -> 6240 took the frame from luma 43.4 / band 17.9 to
+	 * 48.7 / 24.3 (real light, contrast INTACT), where every ISP-side option
+	 * changed nothing.  Lengthening when dark, and giving the frame rate back
+	 * when not, is what makes a low-light picture usable instead of "bad".
+	 * The highlight guard above (kRawExposureEpsilon) already stops brightening
+	 * when a longer exposure would blow the highlights. */
+	if (step > 0.0 && ae.exposure >= ae_max &&
+	    app->sensor->frame_lines() < app->sensor->vts_max()) {
+		const int vts = std::min(app->sensor->frame_lines() * 2,
+					 app->sensor->vts_max());
+
+		if (app->sensor->set_frame_lines(vts) &&
+		    app->sensor->set_exposure_lines(app->sensor->max_lines())) {
+			ae.exposure = app->sensor->max_lines();
+			ae.settle = kAeSettle * 2;
+			ae.measured = false;
+			std::cerr << "erhai-cam: low light: frame " << vts
+				  << " lines, exposure " << ae.exposure << "\n";
+		}
+		return;                       /* re-measure at the new setting */
+	}
+	/* Too bright and the long frame is clearly not needed any more: halve it
+	 * back towards the mode table's length (the frame rate comes back). */
+	if (step < 0.0 && app->sensor->frame_lines() > app->sensor->vts_default() &&
+	    ae.exposure <= (app->sensor->vts_default() - 8) / 2) {
+		const int vts = std::max(app->sensor->vts_default(),
+					 app->sensor->frame_lines() / 2);
+
+		if (app->sensor->set_frame_lines(vts)) {
+			app->sensor->set_exposure_lines(ae.exposure);
+			ae.settle = kAeSettle * 2;
+			std::cerr << "erhai-cam: low light off: frame " << vts
+				  << " lines, exposure " << ae.exposure << "\n";
+		}
+		ae_max = app->sensor->ae_max();
+	}
+
 	int next = ae.exposure;
 	if (step != 0.0) {
 		next = std::clamp(int(std::lround(ae.exposure * std::exp2(step))),
-				  kExposureMin, kExposureAeMax);
+				  kExposureMin, ae_max);
 		if (next == ae.exposure)   /* rounding at the very bottom */
 			next = std::clamp(ae.exposure + (step > 0.0 ? 1 : -1),
-					  kExposureMin, kExposureAeMax);
+					  kExposureMin, ae_max);
 	}
 	if (next != ae.exposure) {
 		if (apply_exposure(app, next)) {
@@ -1213,7 +1785,7 @@ static void ae_step(App *app, GstSample *sample)
 		}
 	}
 
-	const bool dark_end = ae.exposure >= kExposureAeMax && err > kAeDeadband;
+	const bool dark_end = ae.exposure >= ae_max && err > kAeDeadband;
 	const bool bright_end = ae.exposure <= kExposureMin && err < -kAeDeadband;
 
 	ae.at_limit = dark_end || bright_end;
@@ -1476,18 +2048,41 @@ static void app_take_photo(App *app)
 
 /* ------------------------------- recording ------------------------------- */
 
+/* Tear the recording pipeline down (used by both bus outcomes).  The two
+ * source refs taken by gst_bin_get_by_name() are dropped with it. */
+static void record_pipeline_clear(App *app)
+{
+	if (app->rec_audio_pad) {
+		if (app->rec_audio_probe)
+			gst_pad_remove_probe(app->rec_audio_pad,
+					     app->rec_audio_probe);
+		app->rec_audio_probe = 0;
+		gst_object_unref(app->rec_audio_pad);
+		app->rec_audio_pad = nullptr;
+	}
+	if (app->rsrc) {
+		gst_object_unref(app->rsrc);
+		app->rsrc = nullptr;
+	}
+	if (app->raudio) {
+		gst_object_unref(app->raudio);
+		app->raudio = nullptr;
+	}
+	if (app->rpipe) {
+		gst_element_set_state(app->rpipe, GST_STATE_NULL);
+		gst_object_unref(app->rpipe);
+		app->rpipe = nullptr;
+	}
+}
+
 static gboolean rec_bus_cb(GstBus *, GstMessage *msg, gpointer ud)
 {
 	auto *app = static_cast<App *>(ud);
 
 	if (GST_MESSAGE_TYPE(msg) == GST_MESSAGE_EOS) {
-		if (app->rpipe) {
-			gst_element_set_state(app->rpipe, GST_STATE_NULL);
-			gst_object_unref(app->rpipe);
-			app->rpipe = nullptr;
-			app->rsrc = nullptr;
-		}
+		record_pipeline_clear(app);
 		app->recording = false;
+		res_set_locked(app, false);
 		if (app->btn_rec) {
 			gtk_button_set_label(GTK_BUTTON(app->btn_rec), "Record");
 			gtk_widget_remove_css_class(app->btn_rec, "recording");
@@ -1506,13 +2101,10 @@ static gboolean rec_bus_cb(GstBus *, GstMessage *msg, gpointer ud)
 		if (gerr)
 			g_error_free(gerr);
 		g_free(dbg);
-		if (app->rpipe) {
-			gst_element_set_state(app->rpipe, GST_STATE_NULL);
-			gst_object_unref(app->rpipe);
-			app->rpipe = nullptr;
-			app->rsrc = nullptr;
-		}
+		if (app->rpipe)
+			record_pipeline_clear(app);
 		app->recording = false;
+		res_set_locked(app, false);
 		if (app->btn_rec) {
 			gtk_button_set_label(GTK_BUTTON(app->btn_rec), "Record");
 			gtk_widget_remove_css_class(app->btn_rec, "recording");
@@ -1527,14 +2119,129 @@ static void app_record_stop(App *app)
 	if (!app->recording)
 		return;
 	app->recording = false;
+	res_set_locked(app, false);
 	if (app->btn_rec) {
 		gtk_button_set_label(GTK_BUTTON(app->btn_rec), "Record");
 		gtk_widget_remove_css_class(app->btn_rec, "recording");
 	}
 	if (app->rsrc)
 		gst_app_src_end_of_stream(GST_APP_SRC(app->rsrc));
+	/* The mic is a live source: it never ends by itself, and a muxer waits
+	 * for EOS on EVERY sink pad, so the soundtrack must be ended explicitly
+	 * or the MP4 is never finalized. */
+	if (app->raudio)
+		gst_element_send_event(app->raudio, gst_event_new_eos());
 	/* rpipe is finalized by the EOS/error bus callback. */
 }
+
+/* Wait up to timeout_ms for the recording pipeline's EOS, pumping the default
+ * main context (the bus watch lives on it) so the muxer can write its index —
+ * only used when the app quits while a recording is still running. */
+static void record_finish(App *app, int timeout_ms)
+{
+	for (int waited = 0; app->rpipe && waited < timeout_ms; waited += 20) {
+		while (g_main_context_iteration(nullptr, FALSE))
+			;   /* drain what is pending */
+		g_usleep(20 * 1000);
+	}
+}
+
+/* The recording pipeline's audio source.  ORDER MATTERS (2026-10-20):
+ * `pulsesrc` first — the PULSE-protocol client of the same PipeWire server
+ * gives an EXACT sample timeline (measured: declared duration == sample count,
+ * 0 timeline gaps), while the native `pipewiresrc` client forwards PipeWire's
+ * own chunking and its timestamps leave ~1 % of the audio as small gaps
+ * (~5-30 ms, one every ~0.3 s) — audible as crackle/dropouts, worst right
+ * after the stream starts while the mic node is still ramping (owner report:
+ * "audio cracks in the first ~2 sec").  `pipewiresrc` stays as the second
+ * choice, raw ALSA hw:0,2 (the SoundWire capture PCM, no session layer) as
+ * the last.  The element is always NAMED "mic" so the stop path can send it
+ * the EOS. */
+static const char *audio_source_desc()
+{
+	static const struct {
+		const char *factory;
+		const char *desc;
+	} sources[] = {
+		{ "pulsesrc", "pulsesrc name=mic do-timestamp=true" },
+		{ "pipewiresrc", "pipewiresrc name=mic do-timestamp=true" },
+		{ "alsasrc", "alsasrc name=mic device=hw:0,2 do-timestamp=true" },
+	};
+
+	for (const auto &s : sources) {
+		GstElementFactory *factory = gst_element_factory_find(s.factory);
+
+		if (!factory)
+			continue;
+		gst_object_unref(factory);
+		return s.desc;
+	}
+	return nullptr;
+}
+
+/* Throw the mic's DEAD AIR away and start the movie with the first real audio.
+ *
+ * The pad's capture path delivers ~0.15-0.25 s of EXACT zeros after a client
+ * connects (the SoundWire/DSP capture graph plus the codec's ADC ramp; the
+ * app opens the mic in app_record_start, i.e. when Record is pressed).  A take
+ * therefore began with a hole of dead silence that ended in an abrupt onset -
+ * the owner's "small problem maybe in the first 500 ms", made while he was
+ * already speaking.  This probe drops the all-zero buffers, remembers the PTS
+ * of the first real one and re-bases the whole soundtrack onto it, so the
+ * audio starts at 0 together with the first picture frame (on_new_sample holds
+ * the video back until rec_audio_live) — "throw away the first ~300 ms of
+ * audio and video and save only the remainder", as the owner asked. */
+static GstPadProbeReturn rec_audio_probe_cb(GstPad *, GstPadProbeInfo *info,
+					    gpointer ud)
+{
+	auto *app = static_cast<App *>(ud);
+	GstBuffer *buf = GST_PAD_PROBE_INFO_BUFFER(info);
+
+	if (!buf)
+		return GST_PAD_PROBE_OK;
+
+	if (!app->rec_audio_live) {
+		GstMapInfo map;
+		bool silent = true;
+
+		if (!gst_buffer_map(buf, &map, GST_MAP_READ))
+			return GST_PAD_PROBE_DROP;
+		for (gsize i = 0; i < map.size; i++) {
+			if (map.data[i]) {
+				silent = false;
+				break;
+			}
+		}
+		if (silent) {
+			gst_buffer_unmap(buf, &map);
+			app->rec_audio_dropped++;
+			return GST_PAD_PROBE_DROP;   /* dead air */
+		}
+		app->rec_audio_shift = GST_BUFFER_PTS(buf);
+		app->rec_audio_live = true;
+		gst_buffer_unmap(buf, &map);
+		if (!app->headless)
+			std::cerr << "erhai-cam: mic live after "
+				  << app->rec_audio_dropped << " dead buffers\n";
+	}
+
+	if (GST_CLOCK_TIME_IS_VALID(app->rec_audio_shift) &&
+	    GST_BUFFER_PTS_IS_VALID(buf) &&
+	    GST_BUFFER_PTS(buf) >= app->rec_audio_shift) {
+		GST_BUFFER_PTS(buf) -= app->rec_audio_shift;
+		if (GST_BUFFER_DTS_IS_VALID(buf) &&
+		    GST_BUFFER_DTS(buf) >= app->rec_audio_shift)
+			GST_BUFFER_DTS(buf) -= app->rec_audio_shift;
+	}
+	return GST_PAD_PROBE_OK;
+}
+
+/* The app opens the microphone ONLY for an actual recording (see
+ * app_record_start / record_pipeline_clear): no capture stream is ever left
+ * running to hide the cold-start latency — owner decision 2026-10-20, "no audio
+ * recording before start is pressed -> security: we do not spy on users".  An
+ * earlier 2.0/2.1 attempt at a warm-up keep-alive (throwaway stream, data ->
+ * fakesink, enabled with ERHAI_CAM_MIC_WARM=1) was REMOVED for that reason. */
 
 static void app_record_start(App *app)
 {
@@ -1552,57 +2259,145 @@ static void app_record_start(App *app)
 	std::filesystem::path base =
 		media_dir(G_USER_DIRECTORY_VIDEOS, "Videos");
 
+	/* Container/encoder candidates, in preference order.  `format` is what the
+	 * encoder eats: v4l2h264enc (the Iris hardware encoder) accepts ONLY NV12
+	 * — the old I420 request made gst_parse_launch fail its link, so every
+	 * recording silently fell through to the software VP8 branch (2026-10-20).
+	 * `aenc`/`aparse` are the soundtrack for that container. */
 	static const struct {
 		const char *enc;
+		const char *format;
 		const char *parse;
 		const char *mux;
 		const char *ext;
+		const char *aenc;
+		const char *aparse;
 	} candidates[] = {
-		{ "v4l2h264enc", "h264parse", "mp4mux", ".mp4" },
-		{ "vp8enc", nullptr, "webmmux", ".webm" },
+		{ "v4l2h264enc", "NV12", "h264parse", "mp4mux", ".mp4",
+		  "voaacenc", "aacparse" },
+		{ "vp8enc", "I420", nullptr, "webmmux", ".webm",
+		  "opusenc", nullptr },
 	};
 
+	/* The soundtrack source, when the mic is selected AND it exists. */
+	const char *audio_src = app->audio_mode == AudioMode::Microphone ?
+				audio_source_desc() : nullptr;
+
+	/* Every recording starts its own video time base (see on_new_sample) and
+	 * its own dead-air trim (see rec_audio_probe_cb). */
+	app->rec_base = GST_CLOCK_TIME_NONE;
+	app->rec_audio_shift = GST_CLOCK_TIME_NONE;
+	app->rec_audio_dropped = 0;
+	app->rec_start = Steady::now();
+
 	for (const auto &c : candidates) {
-		if (!gst_element_factory_find(c.enc) ||
-		    !gst_element_factory_find(c.mux))
+		GstElementFactory *ef = gst_element_factory_find(c.enc);
+		GstElementFactory *mf = gst_element_factory_find(c.mux);
+
+		if (ef)
+			gst_object_unref(ef);
+		if (mf)
+			gst_object_unref(mf);
+		if (!ef || !mf)
 			continue;
 
-		std::string desc = std::string("appsrc name=src do-timestamp=true format=time ! videoconvert ! video/x-raw,format=I420 ! ") +
-				   c.enc + (c.parse ? std::string(" ! ") + c.parse : "") +
-				   " ! " + c.mux + " ! filesink location=\"" +
-				   (base / timestamp_name("VID", c.ext)).string() + "\"";
+		GstElementFactory *af = c.aenc ?
+			gst_element_factory_find(c.aenc) : nullptr;
+		const bool have_aenc = af != nullptr;
 
-		GError *gerr = nullptr;
-		GstElement *rpipe = gst_parse_launch(desc.c_str(), &gerr);
-		if (gerr || !rpipe) {
-			g_clear_error(&gerr);
-			continue;
+		if (af)
+			gst_object_unref(af);
+
+		/* At most two passes per candidate: with the mic, then silent — a
+		 * soundtrack that cannot come up must still leave a usable video. */
+		for (int pass = (audio_src && have_aenc) ? 0 : 1; pass < 2; pass++) {
+			const bool audio = audio_src && have_aenc && pass == 0;
+
+			std::string name = timestamp_name("VID", c.ext);
+			std::string desc =
+				std::string("appsrc name=src do-timestamp=true format=time ! videoconvert ! "
+					    "video/x-raw,format=") + c.format + " ! " +
+				c.enc + (c.parse ? std::string(" ! ") + c.parse : "") +
+				" ! queue ! mux. ";
+			if (audio)
+				desc += std::string(audio_src) +
+					" ! audioconvert ! audioresample ! "
+					"audio/x-raw,format=S16LE,rate=48000,channels=1 ! "
+					"queue ! " + c.aenc +
+					(c.aparse ? std::string(" ! ") + c.aparse : "") +
+					" ! queue ! mux. ";
+			desc += std::string(c.mux) +
+				" name=mux ! filesink location=\"" +
+				(base / name).string() + "\"";
+
+			GError *gerr = nullptr;
+			GstElement *rpipe = gst_parse_launch(desc.c_str(), &gerr);
+			if (gerr || !rpipe) {
+				std::cerr << "record pipeline: "
+					  << (gerr ? gerr->message : "?") << "\n";
+				g_clear_error(&gerr);
+				continue;
+			}
+
+			GstElement *src = gst_bin_get_by_name(GST_BIN(rpipe),
+							      "src");
+			GstElement *mic = audio ?
+				gst_bin_get_by_name(GST_BIN(rpipe), "mic") :
+				nullptr;
+
+			g_object_set(src, "caps", caps, nullptr);
+			gst_app_src_set_stream_type(GST_APP_SRC(src),
+						    GST_APP_STREAM_TYPE_STREAM);
+
+			app->rec_path = (base / name).string();
+			gst_bus_add_watch(gst_element_get_bus(rpipe), rec_bus_cb,
+					  app);
+			if (gst_element_set_state(rpipe, GST_STATE_PLAYING) ==
+			    GST_STATE_CHANGE_FAILURE) {
+				if (mic)
+					gst_object_unref(mic);
+				gst_object_unref(src);
+				gst_object_unref(rpipe);
+				continue;
+			}
+
+			app->rpipe = rpipe;
+			app->rsrc = src;
+			app->raudio = mic;
+			app->recording = true;
+			/* The resolution is fixed for the whole take. */
+			res_set_locked(app, true);
+			/* The mic's dead air is trimmed at the source (see
+			 * rec_audio_probe_cb); with no soundtrack there is
+			 * nothing to wait for. */
+			if (mic) {
+				GstPad *pad = gst_element_get_static_pad(mic,
+									"src");
+
+				if (pad) {
+					app->rec_audio_pad = pad;
+					app->rec_audio_probe = gst_pad_add_probe(
+						pad,
+						GST_PAD_PROBE_TYPE_BUFFER,
+						rec_audio_probe_cb, app,
+						nullptr);
+				}
+			} else {
+				app->rec_audio_live = true;
+			}
+			if (app->btn_rec) {
+				gtk_button_set_label(GTK_BUTTON(app->btn_rec),
+						     "Stop");
+				gtk_widget_add_css_class(app->btn_rec,
+							 "recording");
+			}
+			set_status(app, audio ? "Recording with sound\u2026" :
+				(audio_src ? "Recording \u2014 no sound "
+					     "(microphone unavailable)"
+					   : "Recording\u2026"));
+			gst_caps_unref(caps);
+			return;
 		}
-
-		GstElement *src = gst_bin_get_by_name(GST_BIN(rpipe), "src");
-		g_object_set(src, "caps", caps, nullptr);
-		gst_app_src_set_stream_type(GST_APP_SRC(src),
-					    GST_APP_STREAM_TYPE_STREAM);
-
-		app->rec_path = (base / timestamp_name("VID", c.ext)).string();
-		gst_bus_add_watch(gst_element_get_bus(rpipe), rec_bus_cb, app);
-		if (gst_element_set_state(rpipe, GST_STATE_PLAYING) ==
-		    GST_STATE_CHANGE_FAILURE) {
-			gst_object_unref(src);
-			gst_object_unref(rpipe);
-			continue;
-		}
-
-		app->rpipe = rpipe;
-		app->rsrc = src;
-		app->recording = true;
-		if (app->btn_rec) {
-			gtk_button_set_label(GTK_BUTTON(app->btn_rec), "Stop");
-			gtk_widget_add_css_class(app->btn_rec, "recording");
-		}
-		set_status(app, "Recording\u2026");
-		gst_caps_unref(caps);
-		return;
 	}
 
 	gst_caps_unref(caps);
@@ -1653,18 +2448,115 @@ static GstFlowReturn on_new_sample(GstAppSink *sink, gpointer ud)
 		}
 		if (app->af.enabled && app->lens_ok && app->rear)
 			autofocus_start(app);
-		/* The sensor resets to its power-on default when the stream
-		 * starts: re-assert the manual exposure if AE is off. */
-		if (!app->ae.enabled)
+		/* A stream start reloads the sensor's mode table, so its frame
+		 * length (and with it the exposure ceiling the low-light ladder
+		 * raised) is back at the default: put both back in step, and
+		 * re-assert the integration time (the AE re-escalates by itself
+		 * if the scene is still dark; with AE off this is the manual
+		 * value, as before). */
+		if (app->sensor_ok && app->sensor) {
+			app->sensor->set_frame_lines(app->sensor->vts_default());
+			app->sensor->set_exposure_lines(app->ae.exposure);
+		} else if (!app->ae.enabled) {
 			apply_exposure(app, app->ae.exposure);
+		}
 		if (!app->rear && !app->headless)
 			set_status(app, "Front camera");
 		app_sync_controls_async(app);
 	}
 
-	if (app->recording && app->rsrc) {
+	/* Hold the picture back until the microphone is actually delivering, so
+	 * both branches start at movie 0 and the take is not missing its first
+	 * ~0.2 s of sound behind a hole of dead silence (owner report
+	 * 2026-10-20; rec_audio_live is set by rec_audio_probe_cb).  The wait is
+	 * capped: a mic that never comes up must not block the whole recording.
+	 * With the soundtrack OFF there is no audio branch and the flag is set
+	 * at record start. */
+	if (app->recording && app->rsrc &&
+	    (app->rec_audio_live ||
+	     Steady::now() - app->rec_start > kRecAudioWait)) {
+		app->rec_audio_live = true;   /* the mic never came up */
 		GstBuffer *buffer = gst_buffer_ref(gst_sample_get_buffer(sample));
-		gst_app_src_push_buffer(GST_APP_SRC(app->rsrc), buffer);
+
+		/* Re-base the frame onto the recording pipeline's own zero.
+		 *
+		 * The camera's timestamps belong to the PREVIEW pipeline's time
+		 * base (they grow with how long the app has been streaming),
+		 * while the recording pipeline's other branch — the
+		 * microphone — starts at its own zero.  Left alone, the muxer
+		 * keeps the difference and the video lands that far into the
+		 * movie: the player shows NOTHING (and reports a wrong
+		 * duration) until the video's own start, so a recording made
+		 * 12 s after launch came out as a ~12 s black lead-in plus
+		 * 3.7 s of picture (owner report 2026-10-20).  Subtract the
+		 * first KEPT frame's PTS (and DTS) from every frame, so both
+		 * branches start at 0.
+		 *
+		 * WHICH frame is the first one kept matters: the mic went live
+		 * at `rec_audio_shift` (pipeline clock) but the frames reaching
+		 * us are already a camera latency old, so just taking the next
+		 * arrival began the picture ~0.25 s BEFORE the sound and the
+		 * sound therefore lagged it.  Map the mic's live instant into
+		 * the camera's clock once (`rec_anchor`, using this frame's
+		 * capture stamp `pts` and the instant it reached us, `now` —
+		 * their difference is the constant offset between the two
+		 * clocks) and drop every frame captured before it. */
+		const GstClockTime pts = GST_BUFFER_PTS(buffer);
+		const GstClockTime dts = GST_BUFFER_DTS(buffer);
+		const GstClockTime now =
+			gst_element_get_current_running_time(app->rsrc);
+
+		if (GST_CLOCK_TIME_IS_VALID(pts)) {
+			if (!GST_CLOCK_TIME_IS_VALID(app->rec_anchor) &&
+			    GST_CLOCK_TIME_IS_VALID(app->rec_audio_shift)) {
+				const GstClockTime shift =
+					app->rec_audio_shift;
+
+				if (GST_CLOCK_TIME_IS_VALID(now) &&
+				    GST_CLOCK_TIME_IS_VALID(shift) &&
+				    pts > now)
+					app->rec_anchor = (pts - now) + shift;
+				/* sanity: a plausible anchor sits near this frame
+				 * (guards against a torn read of the probe's
+				 * value — the audio thread writes it) */
+				if (GST_CLOCK_TIME_IS_VALID(app->rec_anchor) &&
+				    (app->rec_anchor > pts + 2 * GST_SECOND ||
+				     pts > app->rec_anchor + 60 * GST_SECOND)) {
+					std::cerr << "erhai-cam: unusable mic anchor; "
+						     "starting at the next frame\n";
+					app->rec_anchor = GST_CLOCK_TIME_NONE;
+				}
+			}
+			if (GST_CLOCK_TIME_IS_VALID(app->rec_anchor) &&
+			    pts < app->rec_anchor) {
+				/* captured before the sound exists */
+				gst_buffer_unref(buffer);
+				buffer = nullptr;
+			} else if (!GST_CLOCK_TIME_IS_VALID(app->rec_base)) {
+				app->rec_base = pts;
+			}
+		}
+		if (std::getenv("ERHAI_CAM_REC_DEBUG"))
+			std::cerr << "erhai-cam: rec-dbg pts=" << pts << " now="
+				  << now << " shift=" << app->rec_audio_shift
+				  << " anchor=" << app->rec_anchor << " base="
+				  << app->rec_base << " kept=" << (buffer != nullptr)
+				  << " rebased="
+				  << (buffer ? gint64(pts - app->rec_base) : -1)
+				  << "\n";
+		if (buffer && GST_CLOCK_TIME_IS_VALID(pts)) {
+			GST_BUFFER_PTS(buffer) = pts - app->rec_base;
+			if (GST_CLOCK_TIME_IS_VALID(dts)) {
+				if (dts >= app->rec_base)
+					GST_BUFFER_DTS(buffer) = dts -
+								app->rec_base;
+				else
+					GST_BUFFER_DTS(buffer) = GST_BUFFER_PTS(
+								buffer);
+			}
+		}
+		if (buffer)
+			gst_app_src_push_buffer(GST_APP_SRC(app->rsrc), buffer);
 	}
 
 	af_step(app, sample);
@@ -1675,6 +2567,11 @@ static GstFlowReturn on_new_sample(GstAppSink *sink, gpointer ud)
 
 static void preview_pipeline_stop(App *app)
 {
+	wb_detach(app);
+	if (app->camsrc) {
+		gst_object_unref(app->camsrc);
+		app->camsrc = nullptr;
+	}
 	if (app->pipe) {
 		gst_element_set_state(app->pipe, GST_STATE_NULL);
 		gst_object_unref(app->pipe);
@@ -1715,13 +2612,498 @@ static gboolean camera_watchdog_cb(gpointer ud)
 	return G_SOURCE_REMOVE;
 }
 
+/* Apply the forced ISP controls to the camera source (a no-op without them).
+ * gst_util_set_object_arg() parses the string by the property's own type, so
+ * booleans, enums, floats and value arrays ("<0.97, 1.05>") all work. */
+static void apply_isp_controls(App *app)
+{
+	if (!app->camsrc)
+		return;
+	const std::string spec = isp_spec();
+
+	if (spec.empty())
+		return;
+	size_t pos = 0;
+
+	std::cerr << "erhai-cam: ISP controls:";
+	while (pos <= spec.size()) {
+		const size_t comma = spec.find(',', pos);
+		std::string item = spec.substr(pos, comma - pos);
+
+		while (!item.empty() && item.front() == ' ')
+			item.erase(item.begin());
+		const size_t eq = item.find('=');
+
+		if (eq != std::string::npos) {
+			const std::string key = item.substr(0, eq);
+			const std::string val = item.substr(eq + 1);
+
+			if (!key.empty() && !val.empty() &&
+			    g_object_class_find_property(
+				    G_OBJECT_GET_CLASS(app->camsrc),
+				    key.c_str())) {
+				gst_util_set_object_arg(G_OBJECT(app->camsrc),
+							key.c_str(),
+							val.c_str());
+				std::cerr << " " << key << "=" << val;
+			} else {
+				std::cerr << " (unknown: " << key << ")";
+			}
+		}
+		if (comma == std::string::npos)
+			break;
+		pos = comma + 1;
+	}
+	std::cerr << "\n";
+}
+
+/* ---- the app's own white balance ----------------------------------------
+ * The pad has NO white balance by default: libcamerasrc's `awb-enable` is
+ * FALSE, and the software ISP's AWB (measured 2026-10-20) barely moves the
+ * colour gains, so the picture simply carries the scene's colour temperature —
+ * daylight looks right, warm indoor light looks yellow.  Since this app already
+ * owns exposure, it can own white balance too: a damped grey-world controller
+ * (same spirit as the AF/AE loops) measures the frame's mean R,G,B and drives
+ * libcamera's `colour-gains` (R and B relative to green) so the average of the
+ * picture is neutral.
+ *
+ *   ERHAI_CAM_WB=grey   ~/.config/erhai/erhaicam.conf [whitebalance] mode=grey
+ *   ERHAI_CAM_WB=off    fixed 1.0/1.0 (no correction, but stable)
+ *   ERHAI_CAM_WB=isp    leave the ISP alone (today's default behaviour)
+ * The damping (25 % per update, 6 frames apart, ratio clamped to 0.5..2.0)
+ * keeps a scene that is genuinely one colour from swinging the whole stream. */
+constexpr int kWbStride = 30;             /* frames between UPDATES (~2.5 s) */
+constexpr double kWbMinLuma = 25.0;       /* too dark to trust the estimate */
+constexpr double kWbStep = 1.03;          /* max ±3 % per update (latency!) */
+constexpr double kWbMinGain = 0.6;
+constexpr double kWbMaxGain = 1.6;
+/* The MANUAL warm/cool fader (owner request 2026-10-20: "a yellowish almost
+ * transparent overlay was put over the original image — can we control it?
+ * maybe with a slider next to AE"): ±100 on the slider = ±30 % on R, ∓30 % on B,
+ * i.e. a real white-balance control the ISP cannot refuse (the app applies it
+ * to the frames itself, see wb_probe_cb). */
+constexpr int kWbWarmthMin = -100;
+constexpr int kWbWarmthMax = 100;
+constexpr double kWbWarmthPerStep = 0.003;
+
+static void wb_gains_from_state(const App *app, double *gr, double *gb)
+{
+	if (!app->wb_active && !app->wb_grey) {   /* WB toggle off: bypassed */
+		*gr = 1.0;
+		*gb = 1.0;
+		return;
+	}
+	if (app->wb_grey) {          /* the app's slow grey-world loop */
+		*gr = app->wb_r;
+		*gb = app->wb_b;
+		return;
+	}
+	{                            /* the warm/cool fader */
+		const double w = app->wb_warmth;
+
+		*gr = std::clamp(1.0 + kWbWarmthPerStep * w, kWbMinGain,
+				 kWbMaxGain);
+		*gb = std::clamp(1.0 - kWbWarmthPerStep * w, kWbMinGain,
+				 kWbMaxGain);
+	}
+}
+
+/* defined with the photo probe below; needed by wb_step */
+static bool frame_rgb_mean(GstSample *sample, double *r, double *g, double *b);
+
+std::string wb_mode()
+{
+	if (const char *env = std::getenv("ERHAI_CAM_WB"))
+		return env;
+	const std::string path = config_path();
+
+	if (path.empty())
+		return {};
+	GKeyFile *kf = g_key_file_new();
+	std::string mode;
+
+	if (g_key_file_load_from_file(kf, path.c_str(), G_KEY_FILE_NONE,
+				      nullptr)) {
+		gchar *v = g_key_file_get_string(kf, "whitebalance", "mode",
+						nullptr);
+
+		if (v) {
+			mode = v;
+			g_free(v);
+		}
+	}
+	g_key_file_unref(kf);
+	return mode;
+}
+
+/* The gains the ISP cannot apply (measured 2026-10-20: libcamera's ColourGains
+ * reaches the debayer on this path as a NO-OP — an extreme <0.6,1.6> changes
+ * the image by nothing), so the app scales the R and B channels of every frame
+ * ITSELF, in place, right before the tee: one pass over the BGRA pixels, the
+ * same way it already owns exposure.  The controller is an integral one: it
+ * measures the strided R,G,B of the frame it is about to correct and multiplies
+ * the running gains by a damped residual, so it converges to a neutral picture
+ * (and back, if the light changes). */
+static GstPadProbeReturn wb_probe_cb(GstPad *pad, GstPadProbeInfo *info,
+				     gpointer ud)
+{
+	auto *app = static_cast<App *>(ud);
+	GstBuffer *buf = GST_PAD_PROBE_INFO_BUFFER(info);
+
+	if ((!app->wb_active && !app->wb_grey) || !buf)
+		return GST_PAD_PROBE_OK;
+
+	if (!app->wb_info_valid) {
+		GstCaps *caps = gst_pad_get_current_caps(pad);
+
+		if (!caps || !gst_video_info_from_caps(&app->wb_info, caps)) {
+			if (caps)
+				gst_caps_unref(caps);
+			return GST_PAD_PROBE_OK;
+		}
+		gst_caps_unref(caps);
+		if (GST_VIDEO_INFO_FORMAT(&app->wb_info) != GST_VIDEO_FORMAT_BGRA)
+			return GST_PAD_PROBE_OK;
+		app->wb_info_valid = true;
+	}
+
+	GstVideoFrame frame;
+
+	if (!gst_video_frame_map(&frame, &app->wb_info, buf,
+				 GST_MAP_READWRITE))
+		return GST_PAD_PROBE_OK;
+
+	const int w = GST_VIDEO_INFO_WIDTH(&app->wb_info);
+	const int h = GST_VIDEO_INFO_HEIGHT(&app->wb_info);
+	const int stride = GST_VIDEO_FRAME_PLANE_STRIDE(&frame, 0);
+	uint8_t *base = static_cast<uint8_t *>(
+		GST_VIDEO_FRAME_PLANE_DATA(&frame, 0));
+	double sr = 0, sg = 0, sb = 0;
+	long n = 0;
+
+	/* measure on a stride-sampled subset of the UNCORRECTED frame */
+	for (int y = 0; y < h; y += 8) {
+		const uint8_t *row = base + size_t(y) * stride;
+
+		for (int x = 0; x < w; x += 8) {
+			const uint8_t *p = row + size_t(x) * 4;
+
+			sb += p[0];
+			sg += p[1];
+			sr += p[2];
+			n++;
+		}
+	}
+
+	if (app->wb_grey && n && sg / n >= kWbMinLuma) {
+		if (++app->wb_stride >= kWbStride) {
+			app->wb_stride = 0;
+			const double r = sr / n, g = sg / n, b = sb / n;
+
+			/* multiply the running gains by a small, rate-limited
+			 * residual correction: the ISP pipeline lags a frame, so
+			 * a fast loop oscillates (measured: every-frame updates
+			 * drove both gains into their clamps and the picture
+			 * blue). */
+			const double step_r = std::clamp(
+				g / std::max(r, 1.0), 1.0 / kWbStep, kWbStep);
+			const double step_b = std::clamp(
+				g / std::max(b, 1.0), 1.0 / kWbStep, kWbStep);
+
+			app->wb_r = std::clamp(app->wb_r * step_r, kWbMinGain,
+					       kWbMaxGain);
+			app->wb_b = std::clamp(app->wb_b * step_b, kWbMinGain,
+					       kWbMaxGain);
+			if (std::getenv("ERHAI_CAM_WB_DEBUG"))
+				std::cerr << "erhai-cam: wb frame=" << app->wb_frame
+					  << " measured=" << int(r) << "," << int(g)
+					  << "," << int(b) << " gains R=" << app->wb_r
+					  << " B=" << app->wb_b << "\n";
+		}
+	}
+
+	/* apply the running gains to THIS frame (cheap: 2 multiplies + clamp) */
+	double gr = 1.0, gb = 1.0;
+
+	wb_gains_from_state(app, &gr, &gb);
+	if (gr != 1.0 || gb != 1.0) {
+		for (int y = 0; y < h; y++) {
+			uint8_t *row = base + size_t(y) * stride;
+
+			for (int x = 0; x < w; x++) {
+				uint8_t *p = row + size_t(x) * 4;
+
+				p[0] = (uint8_t)std::clamp(p[0] * gb, 0.0, 255.0);
+				p[2] = (uint8_t)std::clamp(p[2] * gr, 0.0, 255.0);
+			}
+		}
+	}
+	app->wb_frame++;
+	gst_video_frame_unmap(&frame);
+	return GST_PAD_PROBE_OK;
+}
+
+/* The ISP cannot do the white balance, so attach the app's own pass. */
+static void wb_attach(App *app)
+{
+	if ((!app->wb_active && !app->wb_grey) || !app->pipe || app->wb_probe_pad)
+		return;
+
+	GstElement *tee = gst_bin_get_by_name(GST_BIN(app->pipe), "t");
+
+	if (!tee)
+		return;
+	GstPad *sink = gst_element_get_static_pad(tee, "sink");
+
+	gst_object_unref(tee);
+	if (!sink)
+		return;
+	app->wb_probe_pad = sink;
+	app->wb_probe = gst_pad_add_probe(sink, GST_PAD_PROBE_TYPE_BUFFER,
+					  wb_probe_cb, app, nullptr);
+}
+
+static void wb_detach(App *app)
+{
+	if (app->wb_probe_pad && app->wb_probe)
+		gst_pad_remove_probe(app->wb_probe_pad, app->wb_probe);
+	app->wb_probe = 0;
+	if (app->wb_probe_pad) {
+		gst_object_unref(app->wb_probe_pad);
+		app->wb_probe_pad = nullptr;
+	}
+	app->wb_info_valid = false;
+}
+
+static void setup_wb(App *app)
+{
+	const std::string mode = wb_mode();
+
+	if (mode == "grey" || mode == "auto") {
+		app->wb_grey = true;
+		std::cerr << "erhai-cam: white balance: grey-world (app)\n";
+	} else if (mode == "off" || mode == "fixed") {
+		app->wb_r = 1.0;
+		app->wb_b = 1.0;
+		std::cerr << "erhai-cam: white balance: fixed 1.0/1.0\n";
+	} else if (app->wb_manual || mode == "manual") {
+		app->wb_manual = true;
+		if (mode == "manual")
+			app->wb_active = true;
+		std::cerr << "erhai-cam: white balance: manual warmth="
+			  << app->wb_warmth << " active="
+			  << (app->wb_active ? 1 : 0) << "\n";
+	} else if (!mode.empty() && mode != "isp") {
+		std::cerr << "erhai-cam: white balance: unknown mode '" << mode
+			  << "'\n";
+	} else {
+		std::cerr << "erhai-cam: white balance: ISP (unchanged)\n";
+	}
+	wb_attach(app);
+}
+
+/* Load the stored warm/cool value (mode=manual in the config, or warmth=). */
+static void load_wb_config(App *app)
+{
+	const std::string path = config_path();
+
+	if (path.empty())
+		return;
+	GKeyFile *kf = g_key_file_new();
+
+	if (g_key_file_load_from_file(kf, path.c_str(), G_KEY_FILE_NONE,
+				      nullptr)) {
+		/* A stored warmth is meant to be USED unless the config
+		 * explicitly says the WB toggle is off. */
+		GError *err = nullptr;
+		const int warmth = g_key_file_get_integer(kf, "whitebalance",
+							  "warmth", &err);
+
+		if (!err) {
+			app->wb_warmth = std::clamp(warmth, kWbWarmthMin,
+						    kWbWarmthMax);
+			app->wb_manual = true;
+			app->wb_active = true;
+		} else {
+			g_error_free(err);
+		}
+		err = nullptr;
+		const gboolean active = g_key_file_get_boolean(
+			kf, "whitebalance", "active", &err);
+
+		if (!err)
+			app->wb_active = active;
+		else
+			g_error_free(err);
+	}
+	g_key_file_unref(kf);
+}
+
+static void save_wb_config(const App *app)
+{
+	const std::string path = config_path();
+
+	if (path.empty())
+		return;
+	GKeyFile *kf = g_key_file_new();
+	std::error_code ec;
+
+	std::filesystem::create_directories(
+		std::filesystem::path(path).parent_path(), ec);
+	g_key_file_load_from_file(kf, path.c_str(), G_KEY_FILE_NONE, nullptr);
+	g_key_file_set_integer(kf, "whitebalance", "warmth", app->wb_warmth);
+	g_key_file_set_boolean(kf, "whitebalance", "active", app->wb_active);
+	g_key_file_set_comment(kf, "whitebalance", nullptr,
+			       "White balance: the app applies these gains itself "
+			       "(the ISP ignores them)", nullptr);
+	gchar *text = g_key_file_to_data(kf, nullptr, nullptr);
+
+	if (text)
+		g_file_set_contents(path.c_str(), text, -1, nullptr);
+	g_free(text);
+	g_key_file_unref(kf);
+}
+
+/* The WB toggle next to AE: lit = the white balance is applied, dim = the
+ * picture is left exactly as the ISP delivers it.  The fader follows it (and
+ * the auto grey-world mode takes the button over). */
+static void wb_sync_button(App *app)
+{
+	if (!app->btn_wb)
+		return;
+	const bool on = app->wb_active || app->wb_grey;
+
+	if (on) {
+		gtk_widget_add_css_class(app->btn_wb, "on");
+		gtk_widget_remove_css_class(app->btn_wb, "off");
+	} else {
+		gtk_widget_add_css_class(app->btn_wb, "off");
+		gtk_widget_remove_css_class(app->btn_wb, "on");
+	}
+	gtk_widget_set_sensitive(app->btn_wb, !app->wb_grey);
+	gtk_widget_set_tooltip_text(app->btn_wb, on ?
+		"White balance: ON — the app corrects the colour of the "
+		"picture (this camera's own white balance does nothing). "
+		"Tap to leave the colours untouched." :
+		"White balance: OFF — colours are whatever the camera gives. "
+		"Tap to switch the correction on.");
+	/* the fader AND its value readout follow the toggle the same way the
+	 * AE/AF faders do: shown only while the WB correction is on */
+	if (app->wb_scale) {
+		gtk_widget_set_visible(app->wb_scale, on);
+		gtk_widget_set_sensitive(app->wb_scale, on);
+	}
+	if (app->wb_value) {
+		gtk_widget_set_visible(app->wb_value, on);
+		gtk_widget_set_sensitive(app->wb_value, on);
+	}
+}
+
+static void save_wb_config(const App *app);
+static void wb_sync_button(App *app);
+
+/* Push the current state into the widgets WITHOUT changing it (used at
+ * startup, where the config's on/off must survive). */
+static void wb_sync_ui(App *app)
+{
+	if (app->wb_scale && !app->wb_slider_sync) {
+		app->wb_slider_sync = true;
+		gtk_range_set_value(GTK_RANGE(app->wb_scale), app->wb_warmth);
+		app->wb_slider_sync = false;
+	}
+	if (app->wb_value) {
+		const std::string text =
+			(app->wb_warmth > 0 ? "+" : "") +
+			std::to_string(app->wb_warmth);
+
+		gtk_label_set_text(GTK_LABEL(app->wb_value), text.c_str());
+	}
+	wb_sync_button(app);
+}
+
+/* The warm/cool fader: + = warmer (R up, B down), - = cooler.  Moving the
+ * fader also switches the WB pass ON (dragging it must do something), and the
+ * value is only written to the config once the drag settles — GTK animates a
+ * slider, so every animation step emits value-changed and the last of those is
+ * not necessarily the final value. */
+static gboolean wb_save_later_cb(gpointer data)
+{
+	auto *app = static_cast<App *>(data);
+
+	app->wb_save_timer = 0;
+	save_wb_config(app);
+	return G_SOURCE_REMOVE;
+}
+
+static void wb_set_warmth(App *app, int warmth, bool announce)
+{
+	app->wb_warmth = std::clamp(warmth, kWbWarmthMin, kWbWarmthMax);
+	if (!app->wb_grey) {
+		app->wb_manual = true;
+		app->wb_active = true;
+		wb_attach(app);
+	}
+	wb_sync_ui(app);
+	if (app->wb_save_timer)
+		g_source_remove(app->wb_save_timer);
+	app->wb_save_timer = g_timeout_add(600, wb_save_later_cb, app);
+	if (announce && !app->headless)
+		set_status(app, app->wb_warmth == 0 ?
+			"White balance: neutral (0)" :
+			std::string("White balance: ") +
+				(app->wb_warmth > 0 ? "warm +" : "cool ") +
+				std::to_string(app->wb_warmth));
+}
+
+static void on_wb_toggled(GtkButton *, gpointer ud)
+{
+	auto *app = static_cast<App *>(ud);
+
+	if (app->wb_grey)   /* the auto loop owns the gains */
+		return;
+	app->wb_active = !app->wb_active;
+	if (app->wb_active)
+		app->wb_manual = true;
+	wb_sync_button(app);
+	if (app->wb_save_timer)
+		g_source_remove(app->wb_save_timer);
+	app->wb_save_timer = g_timeout_add(600, wb_save_later_cb, app);
+	if (!app->headless)
+		set_status(app, app->wb_active ?
+			"White balance: on" : "White balance: off (untouched)");
+}
+
+static void on_wb_changed(GtkRange *range, gpointer ud)
+{
+	auto *app = static_cast<App *>(ud);
+
+	if (app->wb_slider_sync)
+		return;
+	if (app->wb_grey) {
+		/* the auto loop owns the gains; keep the fader where it is */
+		return;
+	}
+	wb_set_warmth(app, (int)gtk_range_get_value(range), true);
+}
+
 static bool preview_pipeline_start(App *app)
 {
 	static GstAppSinkCallbacks cbs = { nullptr, nullptr, on_new_sample,
 					   nullptr, nullptr };
 
-	for (const auto &[w, h] :
-	     (app->rear ? kRearResolutions : kFrontResolutions)) {
+	/* The camera's own list, with the CHOSEN entry first: a stored size
+	 * that no longer negotiates still leaves a working preview instead of
+	 * a black screen. */
+	const auto &opts = res_options(app);
+	const int chosen = res_index(app);
+	std::vector<std::pair<int, int>> candidates;
+
+	candidates.push_back({ opts[chosen].w, opts[chosen].h });
+	for (size_t i = 0; i < opts.size(); i++)
+		if (int(i) != chosen)
+			candidates.push_back({ opts[i].w, opts[i].h });
+
+	for (const auto &[w, h] : candidates) {
 		/* OWNER DECISION (REVISED 2026-09-07 ~18:30, supersedes
 		 * the "fully honest" choice of this morning): MIRRORED
 		 * preview, HONEST capture — the front preview is flipped
@@ -1733,12 +3115,18 @@ static bool preview_pipeline_start(App *app)
 		 * Rear stays raw everywhere. */
 		const char *mirror = app->rear ? "" :
 			"videoflip method=horizontal-flip ! ";
+		/* The size is asked of LIBCAMERA, i.e. the software ISP scales —
+		 * putting it after videoconvert instead made videoconvert scale
+		 * the ISP's 4096x2160 (rear) / 3200x2400 (front) output, which is
+		 * pure extra CPU for the same frame rate (measured: 11.5 fps
+		 * rear / 18 fps front at EVERY size, because the sensor runs one
+		 * fixed mode). */
 		std::string desc =
-			"libcamerasrc camera-name=\"" + app->camera +
-			"\" ! queue ! videoconvert ! "
-			"video/x-raw,format=BGRA,width=" +
+			"libcamerasrc name=cam camera-name=\"" + app->camera +
+			"\" ! video/x-raw,width=" +
 			std::to_string(w) + ",height=" + std::to_string(h) +
-			" ! tee name=t "
+			" ! queue ! videoconvert ! "
+			"video/x-raw,format=BGRA ! tee name=t "
 			"t. ! queue leaky=downstream max-size-buffers=2 ! " +
 			std::string(mirror) +
 			"gtk4paintablesink name=preview "
@@ -1779,8 +3167,14 @@ static bool preview_pipeline_start(App *app)
 			if (state == GST_STATE_PLAYING) {
 				app->pipe = pipe;
 				app->appsink = sink;
+				app->camsrc = gst_bin_get_by_name(GST_BIN(pipe),
+								  "cam");
 				app->stream_w = w;
 				app->stream_h = h;
+				/* the ISP controls, if any are forced */
+				apply_isp_controls(app);
+				/* then the app's own white balance, if enabled */
+				setup_wb(app);
 				gst_object_unref(psink);
 				app->camera_ok = false;
 				app->watchdog = g_timeout_add(
@@ -1818,8 +3212,17 @@ static void app_switch_camera(App *app)
 		app->camera = app->rear ? kRearCamera : kFrontCamera;
 		preview_pipeline_start(app);
 	}
-	/* AE/AF and the manual sliders are rear-camera features. */
+	/* The OTHER camera has a different sensor register (and their own
+	 * limits): hand exposure over to it, then refit the UI to it.  The lens
+	 * and the AF loop stay rear-only. */
+	sensor_attach(app);
+	app->lens_ok = app->rear && app->lens;
+	app->af.mode = AfMode::Idle;
 	app_sync_controls(app);
+	/* The two cameras offer different sizes: show THIS camera's menu and
+	 * its own remembered choice (owner requirement). */
+	res_menu_rebuild(app);
+	res_update_button(app);
 }
 
 /* ------------------------------ orientation ------------------------------ */
@@ -2221,6 +3624,541 @@ static void on_switch_clicked(GtkButton *, gpointer ud)
 	app_switch_camera(app);
 }
 
+/* ------------------------- video soundtrack picker ----------------------- */
+
+/* The note button in the bottom bar chooses what the video records:
+ * no audio (silent, the default) or the microphone.  The choice is read when a
+ * recording STARTS, so changing it mid-recording applies to the next one. */
+static void app_set_audio_mode(App *app, AudioMode mode, bool announce)
+{
+	app->audio_mode = mode;
+	const bool mic = mode == AudioMode::Microphone;
+
+	/* The popover's two check buttons are radio-like: keep them in step with
+	 * the mode however it was set (the guard stops the toggled handlers from
+	 * re-entering this function). */
+	if (app->audio_none || app->audio_mic) {
+		app->audio_sync = true;
+		if (app->audio_none)
+			gtk_check_button_set_active(
+				GTK_CHECK_BUTTON(app->audio_none), !mic);
+		if (app->audio_mic)
+			gtk_check_button_set_active(
+				GTK_CHECK_BUTTON(app->audio_mic), mic);
+		app->audio_sync = false;
+	}
+
+	if (app->btn_audio) {
+		/* Same visual language as the AF/AE toggles: lit = on. */
+		if (mic) {
+			gtk_widget_add_css_class(app->btn_audio, "on");
+			gtk_widget_remove_css_class(app->btn_audio, "off");
+		} else {
+			gtk_widget_add_css_class(app->btn_audio, "off");
+			gtk_widget_remove_css_class(app->btn_audio, "on");
+		}
+		gtk_widget_set_tooltip_text(app->btn_audio, mic ?
+			"Sound: microphone \u2014 tap to change" :
+			"Sound: no audio \u2014 tap to change");
+	}
+
+	if (!announce || app->headless)
+		return;
+	if (app->recording)
+		set_status(app, mic ? "Sound: microphone (next recording)" :
+				      "Sound: off (next recording)");
+	else
+		set_status(app, mic ? "Video sound: microphone" :
+				      "Video sound: no audio");
+}
+
+static void on_audio_none_toggled(GtkCheckButton *button, gpointer ud)
+{
+	auto *app = static_cast<App *>(ud);
+
+	if (app->audio_sync || !gtk_check_button_get_active(button))
+		return;
+	app_set_audio_mode(app, AudioMode::None, true);
+	gtk_popover_popdown(GTK_POPOVER(app->audio_popover));
+}
+
+static void on_audio_mic_toggled(GtkCheckButton *button, gpointer ud)
+{
+	auto *app = static_cast<App *>(ud);
+
+	if (app->audio_sync || !gtk_check_button_get_active(button))
+		return;
+	app_set_audio_mode(app, AudioMode::Microphone, true);
+	gtk_popover_popdown(GTK_POPOVER(app->audio_popover));
+}
+
+static void on_audio_clicked(GtkButton *, gpointer ud)
+{
+	auto *app = static_cast<App *>(ud);
+
+	if (app->audio_popover)
+		gtk_popover_popup(GTK_POPOVER(app->audio_popover));
+}
+
+/* Build the note button and its two-choice popover.  It is parented to the
+ * button (GTK4 attaches a popover to its parent widget) and pops UP from the
+ * bottom bar. */
+static GtkWidget *build_audio_button(App *app)
+{
+	app->btn_audio = gtk_button_new_from_icon_name(
+		"audio-x-generic-symbolic");
+	gtk_widget_add_css_class(app->btn_audio, "togbtn");
+	gtk_widget_add_css_class(app->btn_audio, "off");
+	g_signal_connect(app->btn_audio, "clicked", G_CALLBACK(on_audio_clicked),
+			 app);
+
+	app->audio_popover = gtk_popover_new();
+	gtk_popover_set_position(GTK_POPOVER(app->audio_popover), GTK_POS_TOP);
+	gtk_popover_set_has_arrow(GTK_POPOVER(app->audio_popover), TRUE);
+
+	GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+	gtk_widget_set_margin_start(box, 12);
+	gtk_widget_set_margin_end(box, 12);
+	gtk_widget_set_margin_top(box, 10);
+	gtk_widget_set_margin_bottom(box, 10);
+
+	app->audio_none = gtk_check_button_new_with_label("No audio");
+	app->audio_mic = gtk_check_button_new_with_label("Microphone");
+	gtk_check_button_set_group(GTK_CHECK_BUTTON(app->audio_mic),
+				   GTK_CHECK_BUTTON(app->audio_none));
+	gtk_widget_set_tooltip_text(app->audio_none,
+				    "Record silent video");
+	gtk_widget_set_tooltip_text(app->audio_mic,
+				    "Record the internal microphones");
+	g_signal_connect(app->audio_none, "toggled",
+			 G_CALLBACK(on_audio_none_toggled), app);
+	g_signal_connect(app->audio_mic, "toggled",
+			 G_CALLBACK(on_audio_mic_toggled), app);
+	gtk_box_append(GTK_BOX(box), app->audio_none);
+	gtk_box_append(GTK_BOX(box), app->audio_mic);
+
+	gtk_popover_set_child(GTK_POPOVER(app->audio_popover), box);
+	gtk_widget_set_parent(app->audio_popover, app->btn_audio);
+	return app->btn_audio;
+}
+
+/* --------------------------- resolution picker --------------------------- */
+
+/* The button is in the bottom-LEFT corner (mirroring the soundtrack picker on
+ * the right) and shows the size in use, so the state is visible on a touch
+ * device where a tooltip is not.  Tapping it opens a radio list of the sizes
+ * the CAMERA IN USE offers; switching cameras rebuilds that list.  The choice
+ * is stored per camera (see save_res_choice) and applies immediately by
+ * re-opening the stream — so it also becomes the size of the recorded video
+ * and of a snapshot (one stream feeds all three).  While a recording runs the
+ * picker is refused: a new stream would end the take. */
+
+static const std::vector<ResOption> &res_options(const App *app)
+{
+	return app->rear ? kRearResolutions : kFrontResolutions;
+}
+
+static int res_index(const App *app)
+{
+	const auto &opts = res_options(app);
+	const int idx = app->rear ? app->rear_res : app->front_res;
+
+	if (idx < 0 || idx >= int(opts.size()))
+		return default_res_index(opts);
+	return idx;
+}
+
+/* "3200×2400" — what the button shows. */
+static std::string res_short(const ResOption &opt)
+{
+	return std::to_string(opt.w) + "\u00d7" + std::to_string(opt.h);
+}
+
+/* "3200×2400 — 8 MP (4:3)" — what the menu shows. */
+static std::string res_text(const ResOption &opt)
+{
+	return res_short(opt) + " \u2014 " + opt.label;
+}
+
+/* Show the size in use on the button and in its tooltip. */
+static void res_update_button(App *app)
+{
+	if (!app->btn_res)
+		return;
+	const ResOption &opt = res_options(app)[res_index(app)];
+
+	gtk_button_set_label(GTK_BUTTON(app->btn_res), res_short(opt).c_str());
+	gtk_widget_set_tooltip_text(app->btn_res,
+		("Video / preview resolution: " + res_text(opt) +
+		 " \u2014 tap to change (photos too)").c_str());
+}
+
+/* A recording taps the LIVE stream, so the picker is locked (greyed) while a
+ * take runs — a new size would need a new pipeline and end the recording. */
+static void res_set_locked(App *app, bool locked)
+{
+	if (app->btn_res)
+		gtk_widget_set_sensitive(app->btn_res, !locked);
+}
+
+/* Tick the entry that is in use (the option list itself does not change).
+ * Guarded like slider_sync/audio_sync so the toggled handlers stay quiet. */
+static void res_menu_sync(App *app)
+{
+	if (app->res_checks.empty())
+		return;
+	app->res_sync = true;
+	const int cur = res_index(app);
+
+	for (size_t i = 0; i < app->res_checks.size(); i++)
+		if (app->res_checks[i])
+			gtk_check_button_set_active(
+				GTK_CHECK_BUTTON(app->res_checks[i]),
+				int(i) == cur);
+	app->res_sync = false;
+}
+
+static void app_set_resolution(App *app, int idx, bool announce);
+
+static void on_res_toggled(GtkCheckButton *button, gpointer ud)
+{
+	auto *app = static_cast<App *>(ud);
+
+	if (app->res_sync || !gtk_check_button_get_active(button))
+		return;
+	app_set_resolution(
+		app, GPOINTER_TO_INT(g_object_get_data(G_OBJECT(button),
+						      "res-index")),
+		true);
+	if (app->res_popover)
+		gtk_popover_popdown(GTK_POPOVER(app->res_popover));
+}
+
+/* Build the radio list for the camera in use.  Called at startup and on every
+ * camera switch — the front and the rear camera do NOT offer the same sizes,
+ * so the menu must follow the camera (owner requirement). */
+static void res_menu_rebuild(App *app)
+{
+	if (!app->res_box)
+		return;
+	app->res_checks.clear();
+	while (GtkWidget *child = gtk_widget_get_first_child(app->res_box))
+		gtk_box_remove(GTK_BOX(app->res_box), child);
+
+	const auto &opts = res_options(app);
+	GtkWidget *first = nullptr;
+
+	for (size_t i = 0; i < opts.size(); i++) {
+		const std::string label = res_text(opts[i]);
+		GtkWidget *cb = gtk_check_button_new_with_label(label.c_str());
+
+		g_object_set_data(G_OBJECT(cb), "res-index",
+				  GINT_TO_POINTER(int(i)));
+		if (!first) {
+			first = cb;
+		} else {
+			gtk_check_button_set_group(GTK_CHECK_BUTTON(cb),
+						   GTK_CHECK_BUTTON(first));
+		}
+		g_signal_connect(cb, "toggled", G_CALLBACK(on_res_toggled),
+				 app);
+		const std::string tip =
+			(app->rear ? "Back" : "Front") +
+			std::string(" camera: video, preview and photos at ") +
+			label;
+
+		gtk_widget_set_tooltip_text(cb, tip.c_str());
+		gtk_box_append(GTK_BOX(app->res_box), cb);
+		app->res_checks.push_back(cb);
+	}
+
+	res_menu_sync(app);
+}
+
+/* Choose a size for the camera in use: remember it, show it, and re-open the
+ * stream at it (a size that cannot be negotiated falls through the other
+ * entries inside preview_pipeline_start). */
+static void app_set_resolution(App *app, int idx, bool announce)
+{
+	const auto &opts = res_options(app);
+
+	if (idx < 0 || idx >= int(opts.size()))
+		return;
+
+	/* A recording taps the LIVE stream, so a size change would have to end
+	 * the take — refuse it and put the tick back where it was. */
+	if (app->recording) {
+		res_menu_sync(app);
+		set_status(app, "Stop the recording to change the resolution");
+		return;
+	}
+
+	(app->rear ? app->rear_res : app->front_res) = idx;
+	const ResOption &opt = opts[idx];
+
+	save_res_choice(app->rear, opt);
+	res_menu_sync(app);
+	res_update_button(app);
+
+	const bool changed = app->stream_w != opt.w || app->stream_h != opt.h;
+
+	if (changed && app->camera_ok) {
+		preview_pipeline_stop(app);
+		gtk_widget_queue_draw(app->preview);
+		if (!preview_pipeline_start(app)) {
+			set_status(app, "Cannot stream at " + res_short(opt));
+			return;
+		}
+	}
+	if (announce && !app->headless)
+		set_status(app, "Resolution: " + res_text(opt) +
+				" (video and photos)");
+}
+
+/* The pill button: the size in use, tapping opens the radio list above it. */
+static gboolean on_res_clicked(GtkButton *, gpointer ud)
+{
+	auto *app = static_cast<App *>(ud);
+
+	if (app->res_popover)
+		gtk_popover_popup(GTK_POPOVER(app->res_popover));
+	return TRUE;
+}
+
+static GtkWidget *build_res_button(App *app)
+{
+	app->btn_res = gtk_button_new_with_label("3200\u00d72400");
+	gtk_button_set_icon_name(GTK_BUTTON(app->btn_res),
+				 "video-display-symbolic");
+	gtk_widget_add_css_class(app->btn_res, "resbtn");
+	g_signal_connect(app->btn_res, "clicked",
+			 G_CALLBACK(on_res_clicked), app);
+
+	app->res_popover = gtk_popover_new();
+	gtk_popover_set_position(GTK_POPOVER(app->res_popover), GTK_POS_TOP);
+	gtk_popover_set_has_arrow(GTK_POPOVER(app->res_popover), TRUE);
+
+	app->res_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+	gtk_widget_set_margin_start(app->res_box, 12);
+	gtk_widget_set_margin_end(app->res_box, 12);
+	gtk_widget_set_margin_top(app->res_box, 10);
+	gtk_widget_set_margin_bottom(app->res_box, 10);
+	gtk_popover_set_child(GTK_POPOVER(app->res_popover), app->res_box);
+	gtk_widget_set_parent(app->res_popover, app->btn_res);
+
+	res_menu_rebuild(app);
+	res_update_button(app);
+	return app->btn_res;
+}
+
+/* ERHAI_CAM_PHOTO_PROBE="<s>,<s>,…" (GUI only): take a photo at each of those
+ * seconds through the SAME path the shutter button uses and log the file AND
+ * the colour of the frame that went into it (mean R/G/B + R/B) — the
+ * instrument for "take a photo now, wait 5 s, take another" colour reports.
+ * ERHAI_CAM_PHOTO_PROBE_SWITCH=<s> switches the camera once, so the front can
+ * be probed without a finger (it does not start on a cold app).
+ * Both are inert without their env var. */
+static bool frame_rgb_mean(GstSample *sample, double *r, double *g, double *b)
+{
+	GstVideoInfo info;
+	GstVideoFrame frame;
+	GstBuffer *buffer = sample ? gst_sample_get_buffer(sample) : nullptr;
+
+	if (!buffer || !gst_video_info_from_caps(&info, gst_sample_get_caps(sample)) ||
+	    GST_VIDEO_INFO_FORMAT(&info) != GST_VIDEO_FORMAT_BGRA ||
+	    !gst_video_frame_map(&frame, &info, buffer, GST_MAP_READ))
+		return false;
+
+	const int w = GST_VIDEO_INFO_WIDTH(&info);
+	const int h = GST_VIDEO_INFO_HEIGHT(&info);
+	const int stride = GST_VIDEO_FRAME_PLANE_STRIDE(&frame, 0);
+	const uint8_t *base = static_cast<const uint8_t *>(
+		GST_VIDEO_FRAME_PLANE_DATA(&frame, 0));
+	double sr = 0, sg = 0, sb = 0;
+	int n = 0;
+
+	/* stride-sample: every 16th pixel in both directions is plenty here */
+	for (int y = 0; y < h; y += 16) {
+		const uint8_t *row = base + size_t(y) * stride;
+
+		for (int x = 0; x < w; x += 16) {
+			const uint8_t *p = row + size_t(x) * 4;
+
+			sb += p[0];
+			sg += p[1];
+			sr += p[2];
+			n++;
+		}
+	}
+	gst_video_frame_unmap(&frame);
+	if (!n)
+		return false;
+	*r = sr / n;
+	*g = sg / n;
+	*b = sb / n;
+	return true;
+}
+
+static gboolean photo_probe_cb(gpointer data)
+{
+	auto *job = static_cast<std::pair<App *, int> *>(data);
+	App *app = job->first;
+	const int at = job->second;
+	std::string path, err;
+
+	std::cerr << "erhai-cam: photo-probe t=" << at
+		  << " camera=" << (app->rear ? "rear" : "front")
+		  << " stream=" << app->stream_w << "x" << app->stream_h;
+
+	GstSample *sample = nullptr;
+
+	{
+		std::lock_guard lock(app->frame_lock);
+
+		if (app->last_sample)
+			sample = gst_sample_ref(app->last_sample);
+	}
+	if (sample) {
+		double r = 0, g = 0, b = 0;
+
+		if (frame_rgb_mean(sample, &r, &g, &b))
+			std::cerr << " frame R,G,B=" << int(r) << "," << int(g)
+				  << "," << int(b) << " R/B="
+				  << (b > 0 ? r / b : 0.0);
+		gst_sample_unref(sample);
+	}
+	if (save_photo(app, &path, &err))
+		std::cerr << " saved=" << path << "\n";
+	else
+		std::cerr << " failed=" << err << "\n";
+	delete job;
+	return G_SOURCE_REMOVE;
+}
+
+static gboolean photo_probe_switch_cb(gpointer data)
+{
+	auto *app = static_cast<App *>(data);
+
+	app_switch_camera(app);
+	std::cerr << "erhai-cam: photo-probe switch -> "
+		  << (app->rear ? "rear" : "front") << "\n";
+	return G_SOURCE_REMOVE;
+}
+
+/* ERHAI_CAM_PREVIEW_DUMP=<file.png> (GUI): render the preview WIDGET the way the
+ * compositor would (GtkWidgetPaintable -> GskRenderNode -> texture -> PNG) so
+ * the colours the user actually SEES can be measured; the captured frames are
+ * not the same thing as the rendered preview.  Inert without the env var. */
+static gboolean preview_dump_cb(gpointer data)
+{
+	auto *job = static_cast<std::pair<App *, std::string> *>(data);
+	App *app = job->first;
+	const std::string path = job->second;
+
+	if (app->ui_dead || !app->preview) {
+		std::cerr << "erhai-cam: preview-dump: no preview widget\n";
+	} else {
+		const int w = gtk_widget_get_width(app->preview);
+		const int h = gtk_widget_get_height(app->preview);
+
+		std::cerr << "erhai-cam: preview-dump widget=" << w << "x" << h;
+		if (w > 0 && h > 0) {
+			GdkPaintable *p = gtk_widget_paintable_new(app->preview);
+			GtkSnapshot *snap = gtk_snapshot_new();
+
+			gdk_paintable_snapshot(p, snap, (double)w, (double)h);
+			GskRenderNode *node = gtk_snapshot_free_to_node(snap);
+			GtkNative *native = gtk_widget_get_native(app->preview);
+			/* the window's own renderer is realized; a fresh cairo one
+			 * would need a surface and refuses to render textures */
+			GskRenderer *r = native ? gtk_native_get_renderer(native) :
+						 nullptr;
+			GError *err = nullptr;
+			GdkTexture *tex = nullptr;
+
+			if (r && node)
+				tex = gsk_renderer_render_texture(r, node, nullptr);
+			if (tex) {
+				if (gdk_texture_save_to_png(tex, path.c_str()))
+					std::cerr << " saved=" << path;
+				else
+					std::cerr << " save failed";
+				g_object_unref(tex);
+			} else {
+				std::cerr << " render failed: "
+					  << (err ? err->message : "?")
+					  << " (renderer=" << (r ? "native" : "none")
+					  << " node=" << (node ? "yes" : "no") << ")";
+			}
+			if (err)
+				g_error_free(err);
+			if (node)
+				gsk_render_node_unref(node);
+			g_object_unref(p);
+		}
+		std::cerr << "\n";
+	}
+	delete job;
+	return G_SOURCE_REMOVE;
+}
+
+static void setup_photo_probe(App *app)
+{
+	const char *spec = std::getenv("ERHAI_CAM_PHOTO_PROBE");
+
+	if (spec) {
+		const std::string times(spec);
+		size_t pos = 0;
+
+		while (pos <= times.size()) {
+			const size_t comma = times.find(',', pos);
+
+			if (const int at = std::atoi(
+				    times.substr(pos, comma - pos).c_str())) {
+				g_timeout_add_seconds(at, photo_probe_cb,
+						      new std::pair<App *, int>(
+							      app, at));
+			}
+			if (comma == std::string::npos)
+				break;
+			pos = comma + 1;
+		}
+	}
+	if (const char *sw = std::getenv("ERHAI_CAM_PHOTO_PROBE_SWITCH")) {
+		if (const int at = std::atoi(sw))
+			g_timeout_add_seconds(at, photo_probe_switch_cb, app);
+	}
+	if (const char *dump = std::getenv("ERHAI_CAM_PREVIEW_DUMP")) {
+		const std::string spec2(dump);
+		size_t pos = 0;
+
+		while (pos <= spec2.size()) {          /* "<file>,<file>,…" */
+			const size_t comma = spec2.find(',', pos);
+			const std::string file =
+				spec2.substr(pos, comma - pos);
+			const bool switch_cam =
+				!file.empty() && file[0] == '+'; /* '+': front */
+
+			if (!file.empty() && file[0] != '-') {
+				const std::string want =
+					file[0] == '+' ? file.substr(1) : file;
+
+				/* the front does not start cold: switch first */
+				if (switch_cam)
+					g_timeout_add_seconds(
+						2, photo_probe_switch_cb, app);
+				g_timeout_add_seconds(
+					switch_cam ? 9 : 6, preview_dump_cb,
+					new std::pair<App *, std::string>(app,
+									 want));
+			}
+			if (comma == std::string::npos)
+				break;
+			pos = comma + 1;
+		}
+	}
+}
+
 static void app_af_toggle(App *app)
 {
 	Af &af = app->af;
@@ -2257,12 +4195,13 @@ static void app_ae_toggle(App *app)
 	ae.stride = 0;
 	ae.settle = 0;
 	if (ae.enabled) {
-		if (app->rear && app->sensor_ok) {
+		if (app->sensor_ok) {
 			ae.exposure = app->sensor->exposure_lines();
 			ae.measured = false;
 			set_status(app, "Auto exposure on");
 		} else {
-			set_status(app, "Auto exposure needs the rear camera");
+			set_status(app, "Auto exposure unavailable: no sensor "
+					"register");
 		}
 	} else {
 		if (app->sensor_ok && app->camera_ok) {
@@ -2431,6 +4370,275 @@ static void setup_orientation_watch(App *app)
 	update_orientation(app);
 }
 
+/* The window is being closed: the widgets below are about to be destroyed, so
+ * forget them (every GTK-touching callback in this file null-checks its widget)
+ * and stop the status timer from writing into a freed label. */
+static gboolean on_window_close(GtkWindow *, gpointer ud)
+{
+	auto *app = static_cast<App *>(ud);
+
+	if (app->status_timer) {
+		g_source_remove(app->status_timer);
+		app->status_timer = 0;
+	}
+	app->ui_dead = true;
+	app->status = nullptr;
+	app->btn_switch = nullptr;
+	app->btn_shot = nullptr;
+	app->btn_rec = nullptr;
+	app->btn_af = nullptr;
+	app->btn_ae = nullptr;
+	app->btn_audio = nullptr;
+	app->audio_popover = nullptr;
+	app->audio_none = nullptr;
+	app->audio_mic = nullptr;
+	app->btn_res = nullptr;
+	app->res_popover = nullptr;
+	app->res_box = nullptr;
+	app->res_checks.clear();
+	app->focus_scale = nullptr;
+	app->focus_value = nullptr;
+	app->exp_scale = nullptr;
+	app->exp_value = nullptr;
+	app->preview = nullptr;
+	return FALSE;   /* let the close happen */
+}
+
+/* ERHAI_CAM_GEOM=1: after the first layout, print the window size and the two
+ * manual faders' boxes MEASURED RELATIVE TO THE WINDOW, so the owner's "the
+ * fader must stop kFaderBottomGap above the bottom edge" can be checked with
+ * numbers instead of by eye (bottom-gap is exactly that distance).
+ * ERHAI_CAM_UI_TEST=1 additionally drives the soundtrack picker through its
+ * real signal path (check button -> toggled -> app_set_audio_mode) and logs
+ * the resulting state, plus a popover popup/popdown, so the new UI can be
+ * verified without a finger on the glass.  Both are inert without the env. */
+static gboolean debug_layout_cb(gpointer ud)
+{
+	auto *app = static_cast<App *>(ud);
+
+	if (app->ui_dead || !app->win)
+		return G_SOURCE_REMOVE;
+	const int win_w = gtk_widget_get_width(app->win);
+	const int win_h = gtk_widget_get_height(app->win);
+
+	std::cerr << "erhai-cam: layout window " << win_w << "x" << win_h << "\n";
+	const struct {
+		const char *name;
+		GtkWidget *widget;
+	} faders[] = {
+		{ "exposure", app->exp_scale },
+		{ "white-balance", app->wb_scale },
+		{ "focus", app->focus_scale },
+	};
+
+	for (const auto &f : faders) {
+		graphene_rect_t rect;
+
+		if (!f.widget ||
+		    !gtk_widget_compute_bounds(f.widget, app->win, &rect)) {
+			std::cerr << "erhai-cam: layout fader-" << f.name
+				  << " not laid out\n";
+			continue;
+		}
+		std::cerr << "erhai-cam: layout fader-" << f.name
+			  << " top=" << int(rect.origin.y)
+			  << " height=" << int(rect.size.height)
+			  << " bottom-gap=" << win_h -
+			     int(rect.origin.y + rect.size.height)
+			  << " (want " << kFaderBottomGap << ")\n";
+	}
+
+	if (app->btn_audio) {
+		graphene_rect_t r;
+
+		if (gtk_widget_compute_bounds(app->btn_audio, app->win, &r))
+			std::cerr << "erhai-cam: layout note-button "
+				  << int(r.size.width) << "x"
+				  << int(r.size.height) << " right-margin="
+				  << win_w - int(r.origin.x + r.size.width)
+				  << " bottom-margin="
+				  << win_h - int(r.origin.y + r.size.height)
+				  << " togbtn="
+				  << gtk_widget_has_css_class(app->btn_audio,
+							      "togbtn")
+				  << "\n";
+	}
+
+	if (app->btn_res) {
+		graphene_rect_t r;
+
+		if (gtk_widget_compute_bounds(app->btn_res, app->win, &r)) {
+			const char *label = gtk_button_get_label(
+				GTK_BUTTON(app->btn_res));
+
+			std::cerr << "erhai-cam: layout res-button "
+				  << int(r.size.width) << "x"
+				  << int(r.size.height) << " left-margin="
+				  << int(r.origin.x) << " bottom-margin="
+				  << win_h - int(r.origin.y + r.size.height)
+				  << " resbtn="
+				  << gtk_widget_has_css_class(app->btn_res,
+							      "resbtn")
+				  << " label=" << (label ? label : "?")
+				  << " entries=" << app->res_checks.size()
+				  << " sensitive="
+				  << gtk_widget_get_sensitive(app->btn_res)
+				  << "\n";
+		}
+	}
+
+	const char *test = std::getenv("ERHAI_CAM_UI_TEST");
+
+	if (!test || std::string(test) != "1")
+		return G_SOURCE_REMOVE;
+	auto dump = [app](const char *when) {
+		std::cerr << "erhai-cam: ui-test " << when
+			  << " mode=" << (app->audio_mode ==
+					  AudioMode::Microphone ? "microphone"
+								: "none")
+			  << " check-none=" << (app->audio_none ?
+			     gtk_check_button_get_active(
+				     GTK_CHECK_BUTTON(app->audio_none)) : -1)
+			  << " check-mic=" << (app->audio_mic ?
+			     gtk_check_button_get_active(
+				     GTK_CHECK_BUTTON(app->audio_mic)) : -1)
+			  << " btn-on=" << gtk_widget_has_css_class(
+				     app->btn_audio, "on")
+			  << " btn-off=" << gtk_widget_has_css_class(
+				     app->btn_audio, "off")
+			  << " icon=" << (app->btn_audio ?
+			     gtk_button_get_icon_name(
+				     GTK_BUTTON(app->btn_audio)) : "?")
+			  << "\n";
+	};
+
+	dump("start");
+	if (app->audio_popover)   /* the popup path used by a tap */
+		gtk_popover_popup(GTK_POPOVER(app->audio_popover));
+	if (app->audio_mic)   /* choose Microphone */
+		gtk_check_button_set_active(GTK_CHECK_BUTTON(app->audio_mic),
+					    TRUE);
+	dump("after-mic");
+	if (app->audio_none)   /* and back to No audio */
+		gtk_check_button_set_active(GTK_CHECK_BUTTON(app->audio_none),
+					    TRUE);
+	dump("after-none");
+	if (app->audio_popover)
+		gtk_popover_popdown(GTK_POPOVER(app->audio_popover));
+
+	/* The resolution picker, driven the same way (check button -> toggled
+	 * -> app_set_resolution): pick another size, then switch camera and
+	 * check that the menu AND the choice follow the camera, then read the
+	 * stored file back the way startup does. */
+	if (app->btn_res) {
+		auto res_dump = [app](const char *when) {
+			const char *label = gtk_button_get_label(
+				GTK_BUTTON(app->btn_res));
+
+			std::cerr << "erhai-cam: ui-test res-" << when
+				  << " camera=" << (app->rear ? "rear" : "front")
+				  << " choice=" << (app->rear ? app->rear_res
+							      : app->front_res)
+				  << " label=" << (label ? label : "?")
+				  << " entries=" << app->res_checks.size()
+				  << " stream=" << app->stream_w << "x"
+				  << app->stream_h << "\n";
+		};
+
+		res_dump("start");
+		if (app->res_popover)
+			gtk_popover_popup(GTK_POPOVER(app->res_popover));
+		const int want =
+			(app->rear ? app->rear_res : app->front_res) == 0 ? 1 : 0;
+
+		if (want < int(app->res_checks.size()))
+			gtk_check_button_set_active(
+				GTK_CHECK_BUTTON(app->res_checks[want]), TRUE);
+		res_dump("after-pick");
+		/* A recording taps the live stream, so the picker must lock while
+		 * one runs and unlock when it is over (checked here, while the
+		 * REAR camera is the one streaming). */
+		if (app->appsink) {
+			app_record_start(app);
+			std::cerr << "erhai-cam: ui-test res-recording sensitive="
+				  << gtk_widget_get_sensitive(app->btn_res)
+				  << " recording=" << app->recording << "\n";
+			app_record_stop(app);
+			std::cerr << "erhai-cam: ui-test res-stopped sensitive="
+				  << gtk_widget_get_sensitive(app->btn_res)
+				  << " recording=" << app->recording << "\n";
+		}
+		if (app->res_popover)
+			gtk_popover_popdown(GTK_POPOVER(app->res_popover));
+
+		app_switch_camera(app);   /* the OTHER camera's menu */
+		res_dump("after-switch");
+		const int want2 =
+			(app->rear ? app->rear_res : app->front_res) == 0 ? 1 : 0;
+
+		if (want2 < int(app->res_checks.size()))
+			gtk_check_button_set_active(
+				GTK_CHECK_BUTTON(app->res_checks[want2]), TRUE);
+		res_dump("after-pick2");
+		if (app->res_popover)
+			gtk_popover_popdown(GTK_POPOVER(app->res_popover));
+
+		const ResOption &r = kRearResolutions[
+			load_res_choice(kRearResolutions, "rear")];
+		const ResOption &f = kFrontResolutions[
+			load_res_choice(kFrontResolutions, "front")];
+
+		std::cerr << "erhai-cam: ui-test res-config " << config_path()
+			  << " rear=" << r.w << "x" << r.h
+			  << " front=" << f.w << "x" << f.h << "\n";
+	}
+
+	/* The white-balance fader, through its real signal path (range ->
+	 * value-changed -> wb_set_warmth -> the per-frame gains). */
+		if (app->wb_scale) {
+		auto wb_probe_dump = [app](const char *when) {
+			double gr = 1.0, gb = 1.0;
+
+			wb_gains_from_state(app, &gr, &gb);
+			std::cerr << "erhai-cam: ui-test wb-" << when
+				  << " active=" << app->wb_active
+				  << " warmth=" << app->wb_warmth
+				  << " btn-on=" << (app->btn_wb ?
+				     gtk_widget_has_css_class(app->btn_wb,
+							      "on") : -1)
+				  << " label="
+				  << (gtk_label_get_text(
+					      GTK_LABEL(app->wb_value)))
+				  << " gains R=" << gr << " B=" << gb
+				  << " probe=" << (app->wb_probe ? 1 : 0)
+				  << " slider-sensitive="
+				  << gtk_widget_get_sensitive(app->wb_scale)
+				  << " slider-visible="
+				  << gtk_widget_get_visible(app->wb_scale)
+				  << " value-visible="
+				  << gtk_widget_get_visible(app->wb_value)
+				  << "\n";
+		};
+
+		wb_probe_dump("start");
+		if (app->btn_wb) {          /* the WB toggle */
+			g_signal_emit_by_name(app->btn_wb, "clicked");
+			wb_probe_dump("after-toggle");
+		}
+		gtk_range_set_value(GTK_RANGE(app->wb_scale), 40);
+		wb_probe_dump("after-warm");
+		gtk_range_set_value(GTK_RANGE(app->wb_scale), -40);
+		wb_probe_dump("after-cool");
+		gtk_range_set_value(GTK_RANGE(app->wb_scale), 0);
+		wb_probe_dump("after-zero");
+		if (app->btn_wb) {          /* and off again */
+			g_signal_emit_by_name(app->btn_wb, "clicked");
+			wb_probe_dump("after-off");
+		}
+	}
+	return G_SOURCE_REMOVE;
+}
+
 static void activate(GtkApplication *gapp, gpointer ud)
 {
 	auto *app = static_cast<App *>(ud);
@@ -2460,7 +4668,11 @@ static void activate(GtkApplication *gapp, gpointer ud)
 		     "button.togbtn.off { background: rgba(0,0,0,0.6); "
 		     "color: #bbbbbb; } "
 		     "button.togbtn:disabled { color: #666666; } "
-		     "scale.manual { min-height: 220px; min-width: 40px; } "
+		     "button.resbtn { border-radius: 9999px; min-height: 52px; "
+		     "padding: 0 14px; background: rgba(0,0,0,0.6); "
+		     "color: white; font-size: 0.9em; } "
+		     "button.resbtn:disabled { color: #888888; } "
+		     "scale.manual { min-height: 120px; min-width: 40px; } "
 		     "label.manual { color: white; font-size: 0.85em; "
 		     "background: rgba(0,0,0,0.55); border-radius: 6px; "
 		     "padding: 1px 6px; }");
@@ -2478,12 +4690,17 @@ static void activate(GtkApplication *gapp, gpointer ud)
 	app->preview = preview;
 	gtk_overlay_set_child(GTK_OVERLAY(overlay), preview);
 
-	/* ---- top-left: AE (auto exposure) + its manual slider below it ----- */
+	/* ---- top-left: AE (auto exposure) + its manual fader below it ------ */
+	/* The dock fills the window height and stops kFaderBottomGap above the
+	 * bottom edge; the FADER is its last child, so that gap is the fader's
+	 * own bottom (the value readout sits under the button instead) and the
+	 * track is as long as the window allows. */
 	GtkWidget *left_dock = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
 	gtk_widget_set_halign(left_dock, GTK_ALIGN_START);
-	gtk_widget_set_valign(left_dock, GTK_ALIGN_START);
+	gtk_widget_set_valign(left_dock, GTK_ALIGN_FILL);
 	gtk_widget_set_margin_start(left_dock, 16);
 	gtk_widget_set_margin_top(left_dock, 16);
+	gtk_widget_set_margin_bottom(left_dock, kFaderBottomGap);
 	gtk_overlay_add_overlay(GTK_OVERLAY(overlay), left_dock);
 
 	app->btn_ae = gtk_button_new_with_label("AE");
@@ -2493,30 +4710,78 @@ static void activate(GtkApplication *gapp, gpointer ud)
 				    "Automatic exposure (NPU). Turn it off "
 				    "for the manual exposure slider.");
 	g_signal_connect(app->btn_ae, "clicked", G_CALLBACK(on_ae_clicked), app);
-	gtk_box_append(GTK_BOX(left_dock), app->btn_ae);
+
+	/* The heads: the AE toggle and the WB caption, above their faders. */
+	GtkWidget *heads = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+	gtk_box_append(GTK_BOX(heads), app->btn_ae);
+
+	/* The WB toggle next to AE (lit = the app's white balance is applied),
+	 * so the fader's value can be switched on and off. */
+	app->btn_wb = gtk_button_new_with_label("WB");
+	gtk_widget_add_css_class(app->btn_wb, "togbtn");
+	gtk_widget_add_css_class(app->btn_wb, "off");
+	g_signal_connect(app->btn_wb, "clicked", G_CALLBACK(on_wb_toggled),
+			 app);
+	gtk_box_append(GTK_BOX(heads), app->btn_wb);
+	gtk_box_append(GTK_BOX(left_dock), heads);
+
+	/* Two faders side by side: exposure and white balance. */
+	GtkWidget *faders = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+	gtk_widget_set_vexpand(faders, TRUE);
+	gtk_box_append(GTK_BOX(left_dock), faders);
+
+	app->exp_value = gtk_label_new(std::to_string(kExposureDefault).c_str());
+	gtk_widget_add_css_class(app->exp_value, "manual");
+	gtk_widget_set_halign(app->exp_value, GTK_ALIGN_CENTER);
 
 	app->exp_scale = gtk_scale_new_with_range(GTK_ORIENTATION_VERTICAL,
 						  kExposureMin, kExposureMax, 1);
 	gtk_scale_set_draw_value(GTK_SCALE(app->exp_scale), FALSE);
 	gtk_range_set_inverted(GTK_RANGE(app->exp_scale), TRUE);
 	gtk_widget_add_css_class(app->exp_scale, "manual");
+	gtk_widget_set_vexpand(app->exp_scale, TRUE);
 	gtk_widget_set_tooltip_text(app->exp_scale,
 				    "Exposure (sensor lines): down = darker");
 	g_signal_connect(app->exp_scale, "value-changed",
 			 G_CALLBACK(on_exposure_changed), app);
-	gtk_box_append(GTK_BOX(left_dock), app->exp_scale);
 
-	app->exp_value = gtk_label_new(std::to_string(kExposureDefault).c_str());
-	gtk_widget_add_css_class(app->exp_value, "manual");
-	gtk_widget_set_halign(app->exp_value, GTK_ALIGN_CENTER);
-	gtk_box_append(GTK_BOX(left_dock), app->exp_value);
+	GtkWidget *exp_col = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+	gtk_box_append(GTK_BOX(exp_col), app->exp_value);
+	gtk_box_append(GTK_BOX(exp_col), app->exp_scale);
+	gtk_box_append(GTK_BOX(faders), exp_col);
 
-	/* ---- top-right: AF + its manual focus slider below it --------------- */
+	app->wb_value = gtk_label_new("0");
+	gtk_widget_add_css_class(app->wb_value, "manual");
+	gtk_widget_set_halign(app->wb_value, GTK_ALIGN_CENTER);
+
+	app->wb_scale = gtk_scale_new_with_range(GTK_ORIENTATION_VERTICAL,
+						 kWbWarmthMin, kWbWarmthMax, 1);
+	gtk_scale_set_draw_value(GTK_SCALE(app->wb_scale), FALSE);
+	gtk_range_set_inverted(GTK_RANGE(app->wb_scale), TRUE);
+	gtk_widget_add_css_class(app->wb_scale, "manual");
+	gtk_widget_set_vexpand(app->wb_scale, TRUE);
+	gtk_widget_set_tooltip_text(app->wb_scale,
+		"White balance: up = warmer (more yellow), "
+		"down = cooler (more blue). 0 = untouched.");
+	g_signal_connect(app->wb_scale, "value-changed",
+			 G_CALLBACK(on_wb_changed), app);
+
+	GtkWidget *wb_col = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+	gtk_box_append(GTK_BOX(wb_col), app->wb_value);
+	gtk_box_append(GTK_BOX(wb_col), app->wb_scale);
+	gtk_box_append(GTK_BOX(faders), wb_col);
+
+	/* bring the stored state into the fader/label/button WITHOUT changing it
+	 * (a stored warmth with active=false must stay switched off) */
+	wb_sync_ui(app);
+
+	/* ---- top-right: AF + its manual fader below it --------------------- */
 	GtkWidget *right_dock = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
 	gtk_widget_set_halign(right_dock, GTK_ALIGN_END);
-	gtk_widget_set_valign(right_dock, GTK_ALIGN_START);
+	gtk_widget_set_valign(right_dock, GTK_ALIGN_FILL);
 	gtk_widget_set_margin_end(right_dock, 16);
 	gtk_widget_set_margin_top(right_dock, 16);
+	gtk_widget_set_margin_bottom(right_dock, kFaderBottomGap);
 	gtk_overlay_add_overlay(GTK_OVERLAY(overlay), right_dock);
 
 	app->btn_af = gtk_button_new_with_label("AF");
@@ -2529,21 +4794,22 @@ static void activate(GtkApplication *gapp, gpointer ud)
 			 app);
 	gtk_box_append(GTK_BOX(right_dock), app->btn_af);
 
+	app->focus_value = gtk_label_new("0");
+	gtk_widget_add_css_class(app->focus_value, "manual");
+	gtk_widget_set_halign(app->focus_value, GTK_ALIGN_CENTER);
+	gtk_box_append(GTK_BOX(right_dock), app->focus_value);
+
 	app->focus_scale = gtk_scale_new_with_range(GTK_ORIENTATION_VERTICAL,
 						   kFocusMin, kFocusMax, 1);
 	gtk_scale_set_draw_value(GTK_SCALE(app->focus_scale), FALSE);
 	gtk_range_set_inverted(GTK_RANGE(app->focus_scale), TRUE);
 	gtk_widget_add_css_class(app->focus_scale, "manual");
+	gtk_widget_set_vexpand(app->focus_scale, TRUE);
 	gtk_widget_set_tooltip_text(app->focus_scale,
 				    "Focus (VCM): up = far, down = near");
 	g_signal_connect(app->focus_scale, "value-changed",
 			 G_CALLBACK(on_focus_changed), app);
 	gtk_box_append(GTK_BOX(right_dock), app->focus_scale);
-
-	app->focus_value = gtk_label_new("0");
-	gtk_widget_add_css_class(app->focus_value, "manual");
-	gtk_widget_set_halign(app->focus_value, GTK_ALIGN_CENTER);
-	gtk_box_append(GTK_BOX(right_dock), app->focus_value);
 
 	app_sync_controls(app);
 
@@ -2583,14 +4849,50 @@ static void activate(GtkApplication *gapp, gpointer ud)
 	g_signal_connect(app->btn_rec, "clicked", G_CALLBACK(on_rec_clicked), app);
 	gtk_box_append(GTK_BOX(bar), app->btn_rec);
 
+	/* ---- bottom-right: the soundtrack picker (note icon, round) --------- */
+	/* Owner request 2026-10-20: "at the very right (same margin as AF button)
+	 * and make it round".  Like the AF/AE toggles it is a 52 px circle with
+	 * the togbtn styling — outside #bar, so those sizes apply.  The right
+	 * fader clears it (kFaderBottomGap). */
+	GtkWidget *audio_btn = build_audio_button(app);
+	gtk_widget_set_halign(audio_btn, GTK_ALIGN_END);
+	gtk_widget_set_valign(audio_btn, GTK_ALIGN_END);
+	gtk_widget_set_margin_end(audio_btn, 16);       /* == AF dock margin */
+	gtk_widget_set_margin_bottom(audio_btn, kNoteButtonBottomGap);
+	gtk_overlay_add_overlay(GTK_OVERLAY(overlay), audio_btn);
+	/* Take the CLI/env choice, without a startup status line. */
+	app_set_audio_mode(app, app->audio_mode, false);
+
+	/* ---- bottom-left: the resolution picker (pill, size in use) -------- */
+	/* Owner request: "a button in the left bottom corner ... tapping opens
+	 * a menu to choose the resolution", per camera, and both choices must
+	 * persist.  It mirrors the soundtrack picker in the opposite corner and
+	 * keeps the SAME 16 px margins, so the left fader (kFaderBottomGap,
+	 * i.e. 16 + 52 + 8) still clears it. */
+	GtkWidget *res_btn = build_res_button(app);
+	gtk_widget_set_halign(res_btn, GTK_ALIGN_START);
+	gtk_widget_set_valign(res_btn, GTK_ALIGN_END);
+	gtk_widget_set_margin_start(res_btn, 16);
+	gtk_widget_set_margin_bottom(res_btn, kNoteButtonBottomGap);
+	gtk_overlay_add_overlay(GTK_OVERLAY(overlay), res_btn);
+
 	GtkEventController *keys = gtk_event_controller_key_new();
 	g_signal_connect(keys, "key-pressed", G_CALLBACK(on_key_pressed), app);
 	gtk_widget_add_controller(app->win, keys);
+
+	/* Closing the window destroys every widget below while the streaming
+	 * thread and the GStreamer bus may still call back — drop the pointers
+	 * (all those callbacks null-check them) and stop the UI work. */
+	g_signal_connect(app->win, "close-request",
+			 G_CALLBACK(on_window_close), app);
 
 	setup_orientation_watch(app);
 	setup_display_watch(app);
 	preview_pipeline_start(app);
 	gtk_window_present(GTK_WINDOW(app->win));
+	if (std::getenv("ERHAI_CAM_GEOM"))
+		g_timeout_add(1500, debug_layout_cb, app);
+	setup_photo_probe(app);
 }
 
 /* --------------------------------- main ---------------------------------- */
@@ -2678,10 +4980,11 @@ int main(int argc, char **argv)
 	 * the journal always proves WHICH build a session is actually
 	 * running (2026-09-07: repeated "no change" confusion). */
 	std::cerr << "erhai-cam: BUILD " << __DATE__ " " << __TIME__
-		  << " tag=shutter-ui-10-ae-npu\n";
+		  << " tag=shutter-ui-14-lowlight\n";
 	/* A dead analyzer helper must not kill the app with SIGPIPE. */
 	signal(SIGPIPE, SIG_IGN);
 	std::string camera_override;
+	std::string res_override;
 	bool use_gui = true;
 	/* argv pass-through for g_application_run(): GApplication rejects
 	 * unknown LOCAL options ("Unknown option --camera" -> silent exit
@@ -2690,26 +4993,34 @@ int main(int argc, char **argv)
 
 	for (int i = 1; i < argc; i++) {
 		const std::string arg(argv[i]);
+		/* Every flag ADDS to the App: the modes below used to build a fresh
+		 * one, which silently dropped whatever an earlier flag had set
+		 * (e.g. --no-af --record 5 lost --no-af).  Flag order must not
+		 * matter (2026-10-20: --audio mic --record N needs the same). */
 		if (arg == "--shot") {
-			g_app = new App();
+			if (!g_app)
+				g_app = new App();
 			g_app->shot = true;
 			g_app->headless = true;
 			use_gui = false;
 			if (i + 1 < argc && argv[i + 1][0] != '-')
 				g_app->out_path = argv[++i];
 		} else if (arg == "--record") {
-			g_app = new App();
+			if (!g_app)
+				g_app = new App();
 			g_app->record_seconds = (i + 1 < argc) ? std::atoi(argv[++i]) : 5;
 			g_app->headless = true;
 			use_gui = false;
 		} else if (arg == "--once") {
-			g_app = new App();
+			if (!g_app)
+				g_app = new App();
 			g_app->once = true;
 			g_app->headless = true;
 			use_gui = false;
 		} else if (arg == "--ae-probe") {
 			/* headless AE soak: log every controller update */
-			g_app = new App();
+			if (!g_app)
+				g_app = new App();
 			g_app->headless = true;
 			g_app->ae_probe = true;
 			g_app->ae_probe_seconds =
@@ -2726,8 +5037,21 @@ int main(int argc, char **argv)
 			g_app->af.enabled = false;
 		} else if (arg == "--camera" && i + 1 < argc) {
 			camera_override = argv[++i];
+		} else if (arg == "--res" && i + 1 < argc) {
+			/* Force the stream/recording size for the camera in use,
+			 * e.g. --res 1920x1080 (scripts and headless runs). */
+			res_override = argv[++i];
+		} else if (arg == "--audio" && i + 1 < argc) {
+			/* video soundtrack: "none" (silent, the GUI default) or
+			 * "mic" (the PipeWire default source) */
+			if (!g_app)
+				g_app = new App();
+			g_app->audio_mode = std::string(argv[++i]) == "mic" ?
+				AudioMode::Microphone : AudioMode::None;
 		} else if (arg == "-h" || arg == "--help") {
 			std::cout << "Usage: erhai-cam [--shot [PATH]] [--record SECONDS] "
+				     "[--audio none|mic] "
+				     "[--res WxH] "
 				     "[--once] [--ae-probe SECONDS] [--no-af] "
 				     "[--no-ae] [--camera NAME]\n";
 			return 0;
@@ -2750,6 +5074,49 @@ int main(int argc, char **argv)
 		app->rear = (camera_override == kRearCamera);
 	}
 
+	/* The two cameras' remembered resolutions (owner requirement: both must
+	 * survive a restart).  Loaded for BOTH cameras whatever we start on. */
+	app->rear_res = load_res_choice(kRearResolutions, "rear");
+	app->front_res = load_res_choice(kFrontResolutions, "front");
+
+	/* the stored warm/cool white-balance value (the WB fader) */
+	load_wb_config(app);
+
+	/* --res / ERHAI_CAM_RES: force the size for the camera in use, without
+	 * storing it (a scripted/headless override, e.g. --res 1280x720). */
+	if (res_override.empty()) {
+		if (const char *env = std::getenv("ERHAI_CAM_RES"))
+			res_override = env;
+	}
+	if (!res_override.empty()) {
+		const auto &opts = app->rear ? kRearResolutions
+					     : kFrontResolutions;
+		const auto parsed = parse_res(res_override);
+
+		if (!parsed) {
+			std::cerr << "erhai-cam: cannot parse --res "
+				  << res_override << "\n";
+		} else if (const int i = res_index_of(opts, parsed->first,
+						      parsed->second);
+			   i < 0) {
+			std::cerr << "erhai-cam: " << res_override
+				  << " is not offered for the "
+				  << (app->rear ? "rear" : "front")
+				  << " camera\n";
+		} else {
+			(app->rear ? app->rear_res : app->front_res) = i;
+			std::cout << "Resolution forced: " << res_override
+				  << "\n";
+		}
+	}
+
+	/* Video soundtrack default from the environment (ERHAI_CAM_AUDIO=mic);
+	 * --audio wins over it, and the popover wins over both. */
+	if (const char *env = std::getenv("ERHAI_CAM_AUDIO")) {
+		if (std::string(env) == "mic" || std::string(env) == "microphone")
+			app->audio_mode = AudioMode::Microphone;
+	}
+
 	gst_init(&argc, &argv);
 
 	/* Lens: rear camera only. */
@@ -2767,28 +5134,9 @@ int main(int argc, char **argv)
 	if (!app->rear)
 		app->lens_ok = false;
 
-	/* Sensor: rear camera only (the exposure register lives on sc1320cs). */
-	if (app->rear) {
-		if (auto path = Sensor::find()) {
-			try {
-				app->sensor = new Sensor(*path);
-				app->sensor_ok = true;
-				int lines = 0;
-
-				if (app->sensor->read_exposure_lines(&lines)) {
-					app->ae.exposure = lines;
-					std::cout << "Sensor exposure: " << lines
-						  << " lines\n";
-				}
-				std::cout << "Sensor device: " << *path << "\n";
-			} catch (const std::exception &e) {
-				std::cerr << "sensor: " << e.what() << "\n";
-			}
-		}
-		if (!app->sensor_ok)
-			std::cerr << "no sc1320cs i2c client; exposure "
-				     "control disabled\n";
-	}
+	/* Sensor: the exposure register of the camera we START on (2.8 owns the
+	 * front sc820cs as well; a switch re-attaches, see app_switch_camera). */
+	sensor_attach(app);
 
 	/* The NPU analyzer (Hexagon HTP) for autofocus + auto exposure. */
 	app->analyzer.start();
@@ -2830,6 +5178,10 @@ int main(int argc, char **argv)
 	app->analyzer.stop();
 	if (app->recording)
 		app_record_stop(app);
+	/* A recording still in flight (the window was closed / --record without a
+	 * loop) is finalized before the process goes away: EOS both branches and
+	 * let the muxer write its index, or the MP4 is left without a moov. */
+	record_finish(app, 5000);
 	preview_pipeline_stop(app);
 	return 0;
 }

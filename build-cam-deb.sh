@@ -4,11 +4,11 @@
 #
 #   ./build-cam-deb.sh -> debs/oneplus-erhai-erhaicam_<version>_arm64.deb
 #
-# ErhaiCam: STANDALONE GTK4/GStreamer camera app (preview, built-in contrast
-# autofocus via the kernel cn3927 lens subdev, photos, experimental video,
-# camera switch, accelerometer orientation).  NOT part of the camera-drivers
-# package (oneplus-erhai-camera = kernel drivers + autofocus udev rules);
-# this deb only ships the app binary + desktop file.
+# ErhaiCam: STANDALONE GTK4/GStreamer camera app (preview, NPU-driven
+# autofocus/auto-exposure, photos, H.264+AAC video recording with an optional
+# microphone soundtrack, camera switch, accelerometer orientation).  NOT part
+# of the camera-drivers package (oneplus-erhai-camera = kernel drivers +
+# autofocus udev rules); this deb only ships the app binary + desktop file.
 # The binary is compiled here from src/erhai-cam.cpp so the deb always
 # matches its shipped source.
 # The compile step needs libgtk-4-dev, libgstreamer1.0-dev and
@@ -57,6 +57,10 @@ cp "$SRC/src/erhai-npu-analyze.py" \
 find "$SRC" -type d -exec chmod 755 {} \;
 chmod 755 "$SRC"/DEBIAN/postinst "$SRC"/usr/bin/erhai-cam
 chmod 755 "$SRC"/usr/local/lib/oneplus-erhai-erhaicam/*.py
+# Deterministic manifest, so dpkg -V has something to verify (every erhai deb
+# ships one; this builder was the exception until 1.6).
+( cd "$SRC" && find . -path ./DEBIAN -prune -o -type f -print0 |
+	sed -z 's|^\./||' | sort -z | xargs -0 -r md5sum > DEBIAN/md5sums )
 dpkg-deb --build --root-owner-group "$SRC" "$DEB_DIR/${PKG}_${VER}_${ARCH}.deb"
 
 # NO_PPA=1 builds locally without publishing (in-development iterations;

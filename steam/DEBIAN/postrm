@@ -1,25 +1,105 @@
 #!/bin/bash
 set -e
 
-# The package only owns /usr/lib/steam, /usr/bin/steam and the desktop files.
-# The writable Steam root it seeds lives in the USER's home and is never
-# touched here -- removing a package must not delete somebody's games.
-# On purge we only say where that data is, and how much of it there is
-# (worst case ~2.6 GB per account).
+# The package owns /usr/lib/steam, /usr/bin/steam and the desktop files.  It
+# does NOT own the Steam DATA: the client the account downloaded on its first
+# start, and every game, live in that account's Steam root (~/.local/share/Steam
+# by default, or wherever the first-start dialog pointed it).  Nothing inside
+# that folder is ever read, written or deleted here -- removing a package must
+# not delete somebody's games.
+#
+# What a removal clears is the per-user DECISION of where the data lives, so
+# that a reinstall lets the user choose the directory again (dpkg touches nothing
+# under $HOME, so nothing else ever would):
+#
+#   ~/.config/erhai-steam.conf                    the remembered location
+#   ~/.local/state/erhai-steam/location-decided   the launcher's "already asked"
+#                                                 marker -- the same decision,
+#                                                 and what the launcher's gate
+#                                                 reads (see /usr/bin/steam)
+#
+# NOTHING ELSE IS REMOVED (see the shared block below: it removes exactly those
+# two files, and that directory only if it ends up EMPTY).
+#
+# The SAME block also runs from DEBIAN/postinst, because dpkg executes the
+# ALREADY-INSTALLED package's postrm on a removal -- so installing the fixed
+# package over a leftover answer has to clean that state itself, or the question
+# stays suppressed after the reinstall (owner report 2026-10-20, first fix did
+# not work for exactly that reason).
+#
+# The question can also be suppressed machine-wide by an STEAM_HOME in the
+# environment or in /etc/steam/launcher.conf -- and that conffile is KEPT by
+# 'remove' (dpkg drops it only on purge), which is why it is only reported.
 case "${1:-}" in
 	remove|purge)
 		if command -v update-desktop-database >/dev/null 2>&1; then
 			update-desktop-database -q /usr/share/applications 2>/dev/null || true
 		fi
 
-		if [ "${1}" = purge ]; then
-			for home in /root /home/*; do
-				[ -d "$home/.local/share/Steam" ] || continue
-				if [ -d "$home/.local/state/erhai-steam" ]; then
-					echo "steam: keeping $home/.local/share/Steam (your Steam data);" >&2
-					echo "steam: delete it by hand if you really want the games gone." >&2
-				fi
-			done
+# >>> erhai-forget-location
+# Forget the remembered Steam data location for each account, so the next start
+# asks where the data should live again.  ONLY the decision is removed -- never
+# anything inside a Steam root (its client, games, saves and settings all stay).
+#
+# THIS BLOCK IS KEPT BYTE-IDENTICAL IN DEBIAN/postinst AND DEBIAN/postrm, and
+# build-steam-deb.sh (guard 6) refuses to pack the package if the two drift.  It
+# has to be in BOTH because dpkg runs the ALREADY-INSTALLED package's postrm on a
+# removal: installing this fixed package (postinst) must clean the same state the
+# removal would have cleaned, or a leftover answer keeps the question suppressed
+# after the reinstall (owner report 2026-10-20).
+		for home in /root /home/*; do
+			[ -d "$home" ] || continue
+			conf="$home/.config/erhai-steam.conf"
+			state="$home/.local/state/erhai-steam"
+
+			# Read the answer BEFORE deleting it, so the notice can name the
+			# folder that is kept (a hand-written file may use any path).  NOTE:
+			# the file is only PARSED, never sourced -- it lives in a
+			# user-writable home and these scripts run as root.
+			root=$(sed -n 's/^STEAM_HOME=//p' "$conf" 2>/dev/null | tail -n 1) ||
+				root=""
+			case "$root" in
+			\'*\') root=${root#\'}; root=${root%\'} ;;
+			\"*\") root=${root#\"}; root=${root%\"} ;;
+			esac
+			if [ -z "$root" ]; then
+				root="$home/.local/share/Steam"
+			fi
+
+			# Remove ONLY the decision -- never anything inside $root.
+			deleted=""
+			if [ -e "$conf" ]; then
+				rm -f "$conf" || true
+				deleted="$conf"
+			fi
+			if [ -e "$state/location-decided" ]; then
+				rm -f "$state/location-decided" || true
+				deleted="${deleted:+$deleted, }$state/location-decided"
+			fi
+			# Only when it is EMPTY: the payload stamp and the seed lock stay.
+			rmdir "$state" 2>/dev/null || true
+
+			if [ -n "$deleted" ]; then
+				echo "steam: forgot the remembered data location ($root):" >&2
+				echo "steam: removed $deleted" >&2
+				echo "steam: the next start asks where the data should live again." >&2
+			fi
+			if [ -d "$root" ]; then
+				echo "steam: keeping $root (the client and your games) -- pick" >&2
+				echo "steam: that folder again and nothing is copied or lost." >&2
+			fi
+		done
+# <<< erhai-forget-location
+
+		# A machine-wide STEAM_HOME keeps answering for EVERY account and is
+		# not ours to edit (it is a conffile, and it survives 'remove').
+		if [ -r /etc/steam/launcher.conf ] &&
+			grep -qE '^[[:space:]]*(export[[:space:]]+)?STEAM_HOME=' \
+				/etc/steam/launcher.conf; then
+			echo "steam: note: /etc/steam/launcher.conf sets STEAM_HOME, so the" >&2
+			echo "steam: 'where should the data live?' question stays suppressed" >&2
+			echo "steam: after a reinstall; comment that line out to be asked" >&2
+			echo "steam: again (or purge, which removes the file)." >&2
 		fi
 		;;
 esac

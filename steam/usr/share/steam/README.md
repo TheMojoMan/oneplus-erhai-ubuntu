@@ -19,7 +19,7 @@ duplicate what the CDN already delivers to every user.
 | `/usr/bin/steam` | the launcher |
 | `/etc/steam/launcher.conf` | root-owned, all-commented override file |
 | `~/.local/share/Steam` | the **writable** Steam root (seeded on first start) |
-| `~/.local/state/erhai-steam` | launcher state |
+| `~/.local/state/erhai-steam` | launcher state (the "asked already" marker) |
 | `~/.steam` | Valve's bootstrap symlinks (`root`, `steam`, `sdk*`, `bin*`) |
 
 ## Why `/usr/lib/steam` is not where the client runs from
@@ -53,10 +53,20 @@ filesystem:
 * `choose another folder…` opens a folder picker (you can create one);
 * tmpfs/ramfs are never offered (data there would not survive a reboot), and a
   location with less than 8 GB free asks for confirmation;
+* **Cancel cancels the whole start**: nothing is downloaded, seeded or changed
+  and nothing is remembered — start `steam` again when you have decided. Closing
+  the *folder chooser* (`choose another folder…`) just brings the list back, so
+  any of the entries can still be picked;
 * the answer is remembered in `~/.config/erhai-steam.conf`. **Delete that file**
   (or start with `STEAM_ASK_HOME=1 steam`) to be asked again;
-* the question is asked **once** — a location that is already set, or a Steam
-  root that already exists, is never questioned again.
+* the question is asked **once**: a location that is already decided — by
+  `STEAM_HOME`, by the saved answer, or by the launcher's own "asked already"
+  marker in `~/.local/state/erhai-steam/` — is never questioned again;
+* **removing (or installing) the package forgets the answer**, so the question
+  comes back: only the answer file and that marker are deleted — never anything
+  inside the Steam root (the client, the games, `steamapps/`, saves and settings
+  all stay).  The install path has to do it too, because dpkg runs the
+  *previously installed* package's postrm on a removal.
 
 Precedence, highest first: `STEAM_HOME` in the environment → `STEAM_HOME` in
 `/etc/steam/launcher.conf` (root-owned, machine-wide, no dialog) → the saved
@@ -64,13 +74,17 @@ answer → the dialog → the default `~/.local/share/Steam`.
 
 Changing the location later does **not** move an existing installation: pick the
 new place in the dialog and Steam downloads itself there again (the old folder
-stays until you delete it). No desktop, no `zenity`? Then the default is used
-silently — set `STEAM_HOME=/path steam` instead.
+stays until you delete it). Nothing is installed while the question is
+unanswered, and **Cancel cancels the start** — only a picked entry is remembered
+and acted on. If the dialog cannot be shown at all (no display, or no `zenity`)
+there is nothing to ask on, so the default is used and the reason is printed to
+stderr — a headless start must proceed or fail, never hang.
 
 ## First start
 
-1. `steam` (from the menu, or the shell) asks where the data should live (first
-   start only), seeds the bootstrap and says so on stderr.
+1. `steam` (from the menu, or the shell) asks where the data should live; only a
+   picked entry proceeds — **Cancel stops the start** — and then it seeds the
+   bootstrap and says so on stderr.
 2. The client then downloads itself: **~654 MB downloaded, ~3.1 GB on disk**
    (measured on a scratch HOME from exactly this bootstrap, 2026-10-17),
    including the **steamrt3c container runtime** it now runs inside, the UI, and
@@ -96,12 +110,22 @@ choice for troubleshooting.
 
 ## Removing
 
-`apt purge steam` removes the packaged bootstrap and launcher only. Every
-account's `~/.local/share/Steam` (games, saves, settings) is deliberately left
-alone — delete it by hand if you really want it gone.
+`apt remove steam` (or `purge`) removes the packaged bootstrap and launcher and
+forgets where the data lives — it deletes only the answer file and the launcher's
+"asked already" marker — so a reinstall asks again; an install or upgrade of a
+new version forgets it too (the maintainer scripts share that step, because dpkg
+runs the *old* postrm on a removal). Every account's Steam root —
+`~/.local/share/Steam`, or the folder chosen in the dialog: the client, the
+games, the saves, the settings — is deliberately left alone; delete it by hand if
+you really want it gone.
 
 ## Notes
 
+* The package version is **`1:2.0-1erhai1`**: epoch 1 so that Ubuntu's `steam`
+  family (their epoch-1 `1:1.0.0.85~ds-2build1`) can never upgrade over it, and
+  an upstream part of `2.0` so that a later `1.0.0.52` cannot either. Never drop
+  the epoch, and never go below `1.0.0.51-1~` — `steam-devices` declares
+  `Breaks: steam (<< 1.0.0.51-1~)`.
 * Not affiliated with or endorsed by Valve Corporation. Steam is a trademark
   of Valve Corporation; the client is distributed by Valve under the Steam
   Subscriber Agreement.

@@ -1,0 +1,12 @@
+c0ef45e8adf6c75c6e6b9cc2d3ad172d  etc/systemd/system/erhai-audio-bringup.service
+b3e1c06d58c1158a0feee0548429fa1b  etc/systemd/system/erhai-dp-audio-sync.service
+2c487c35877933efd5b97bcd604a268b  etc/systemd/system/erhai-mic-state.service
+73476676eab0d638029bf3eb1a653a35  etc/wireplumber/wireplumber.conf.d/51-erhai-sound-ucm.conf
+10bd2cea8f66c936a6455d01b539dcb8  usr/lib/udev/rules.d/70-erhai-dp-audio.rules
+8c931053f12f0e4373a8d87c9db49797  usr/local/sbin/erhai-audio-bringup.sh
+1528145df483e7fd012236d732cc6716  usr/local/sbin/erhai-dp-audio-sync.sh
+137ffd1bd1c5ff7ddbf6e4f86d300caf  usr/local/sbin/erhai-mic-state.sh
+ca3b303b838708c00be3705326b8d354  usr/share/alsa/ucm2/OnePlusPad3/HiFi.conf
+38392c88edf60589d5f1e2b54a287a90  usr/share/alsa/ucm2/OnePlusPad3/OnePlusPad3.conf
+5525d19955aa2d65c4e2feec55cd8a81  usr/share/alsa/ucm2/Qualcomm/sm8750/OnePlusPad3/HiFi.conf
+2ba6f60a2400aeac5712d8bf7db84de6  usr/share/alsa/ucm2/Qualcomm/sm8750/OnePlusPad3/OnePlus-Pad-3.conf

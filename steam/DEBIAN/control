@@ -1,5 +1,5 @@
 Package: steam
-Version: 1.0.0.51-2erhai1
+Version: 1:2.0-2erhai1
 Section: games
 Priority: optional
 Architecture: arm64

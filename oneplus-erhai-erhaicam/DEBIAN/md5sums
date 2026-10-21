@@ -1,0 +1,8 @@
+893248576c3ff1d801f70125cb389466  src/erhai-cam.cpp
+8fb8e672112c060f997e3b45b84a4e81  src/erhai-npu-analyze.py
+cb90a7bce04139ad85b9ef9dd90a724c  src/gen-cam-stats-onnx.py
+1843ba4807df93597370e7fc55a9a948  usr/bin/erhai-cam
+8fb8e672112c060f997e3b45b84a4e81  usr/local/lib/oneplus-erhai-erhaicam/erhai-npu-analyze.py
+cb90a7bce04139ad85b9ef9dd90a724c  usr/local/lib/oneplus-erhai-erhaicam/gen-cam-stats-onnx.py
+f669cbdc5d5bab89561ea87b63375b70  usr/share/applications/com.github.themojoman.ErhaiCam.desktop
+6c2ceb7e135dd559cab265fd91fd04c5  usr/share/oneplus-erhai-erhaicam/erhai-cam-stats.onnx

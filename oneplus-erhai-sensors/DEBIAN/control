@@ -1,5 +1,5 @@
 Package: oneplus-erhai-sensors
-Version: 2.3
+Version: 2.5
 Section: utils
 Priority: optional
 Architecture: arm64
@@ -34,7 +34,16 @@ Description: SSC sensor stack for the OnePlus Pad 3 (erhai)
     toggle)
    - erhai-alsd (session auto-brightness) never writes brightness while the
      panel is blanked — by the power button or by the folio-fold watcher in
-     oneplus-erhai-desktop — and re-applies its target once the panel is back
+     oneplus-erhai-desktop — and re-applies its target once the panel is back.
+     It also idles in any logind session that is not a logged-in desktop
+     (class 'greeter': GDM's login screen AND the gnome-initial-setup session,
+     both of which get the globally-enabled unit), so the 2.5 % floor can
+     never override the fixed greeter/boot panel level
+   - erhai-alsd's auto-brightness curve is FITTED to the levels the owner
+     measured for himself on 2026-10-20: 0 lux -> 20 of 2047 (1 %, the flat
+     dark-room floor), 2.7 lux -> 685 (33 %), 96 lux -> 1457 (71 %), reaching
+     100 % at ~2900 lux (pct = 1 + 99*(log10(1+lux)/log10(1+2906))^0.618) -
+     the previous curve was far darker at low light (0 lux was 51)
    - ssccli gained `--rate HZ` (libssc 0.4.4 sample-rate property made
      writable): the folio-fold watcher requests 1 Hz so the magnetometer is
      not streamed at its 50 Hz ceiling all day (SSC hardware floors at 5 Hz)

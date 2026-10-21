@@ -132,3 +132,13 @@ log "amp gain offset applied (all six AW88261 -> $AMP_GAIN)"
 udevadm trigger --subsystem-match=sound --action=change 2>/dev/null \
 	|| log "warning: udevadm trigger failed (no running monitor to rescue)"
 
+# 8. Internal-microphone capture state. The UCM SectionDevice "Mic" sequence is
+#    never executed (WirePlumber runs the card with api.alsa.use-acp=false), so
+#    the mic route/gain would otherwise be the driver default (muted) on a
+#    freshly flashed image. erhai-mic-state.service does the same thing after
+#    alsa-restore; this call covers the boot where the card only appeared HERE
+#    (the unit's ConditionPathExists was evaluated before it existed).
+if [ -x /usr/local/sbin/erhai-mic-state.sh ]; then
+	/usr/local/sbin/erhai-mic-state.sh
+fi
+

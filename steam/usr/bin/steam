@@ -26,6 +26,12 @@ set -euo pipefail
 # Sourced before the defaults below, so it can override STEAM_HOME.
 PAYLOAD="${STEAM_PAYLOAD_DIR:-/usr/lib/steam}"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/erhai-steam"
+# The launcher's own record that the location question has been asked (see the
+# gate near remember_location).  It is launcher state, NOT user data: the
+# package's postrm deletes it on remove/purge, so a reinstalled package asks
+# again.  Keying the question on the Steam root instead would make a reinstall
+# permanently silent, because that root is the user's data and survives.
+DECIDED_FILE="$STATE_DIR/location-decided"
 DEFAULT_HOME="${XDG_DATA_HOME:-$HOME/.local/share}/Steam"
 CONFIG_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/erhai-steam.conf"
 MIN_FREE_GB="${MIN_FREE_GB:-8}"
@@ -41,7 +47,7 @@ MIN_FREE_GB="${MIN_FREE_GB:-8}"
 #   1. STEAM_HOME in the environment            (explicit: never overridden)
 #   2. STEAM_HOME from /etc/steam/launcher.conf (root-owned, machine-wide)
 #   3. the user's saved answer                  ($CONFIG_FILE, written by the dialog)
-#   4. the first-start dialog                   (skipped when a Steam root already exists)
+#   4. the first-start dialog                   (asked when nothing above decided it)
 #   5. $DEFAULT_HOME                            (~/.local/share/Steam, Valve's default)
 ENV_HOME="${STEAM_HOME:-}"
 unset STEAM_HOME
@@ -91,14 +97,35 @@ location_candidates() {
 		done
 }
 
-# Prints the chosen directory; non-zero means "no choice" (no display, no
-# zenity, or the user closed the dialog) and the caller falls back to the default.
+# Asks where the data should live.  On success ASK_CHOICE holds the chosen
+# directory and the return status is 0.  On failure the STATUS is the reason, and
+# the caller MUST treat the cases differently:
+#   1 = abort  -> the user pressed Cancel on the LIST: the whole start is
+#                 CANCELLED.  Nothing is installed, seeded, started or remembered
+#                 -- steam just exits (owner, 2026-10-20: "on cancel it should
+#                 obviously cancel the whole install process")
+#   2 = cancel -> the LIST was not answered because the folder CHOOSER was closed
+#                 (or returned no absolute path): the caller shows the list again,
+#                 so another entry can be picked -- nothing is installed yet
+#   3 = nogui  -> no zenity, or no display to put a dialog on: the caller uses the
+#                 default location (a headless/ssh start must fail or proceed,
+#                 never hang)
+#
+# WHY THE ANSWER TRAVELS IN A GLOBAL AND THE REASON IN THE RETURN STATUS: a call
+# written as `picked=$(ask_location)` runs the whole function in a SUBSHELL, so an
+# `ASK_RESULT=abort` set inside it is lost -- that made Cancel fall through to the
+# "ask again" branch and the dialog reopen (owner report, 2026-10-20; the nogui
+# case looped forever the same way).
 ask_location() {
 	local mp free choice
 	local -a rows=()
 
-	command -v zenity >/dev/null 2>&1 || return 1
-	{ [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ]; } || return 1
+	ASK_CHOICE=""
+
+	if ! command -v zenity >/dev/null 2>&1 ||
+		{ [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; }; then
+		return 3
+	fi
 
 	# The PATH (or the CHOOSE marker) must be column 1: zenity --list returns the
 	# FIRST COLUMN of the selected row, not the whole row (measured -- with a
@@ -118,17 +145,32 @@ ask_location() {
 		--width=980 --height=340 "${rows[@]}" 2>/dev/null) || return 1
 
 	# zenity returns the whole selected row (its columns joined by "|"), so the
-	# path is taken out of it; the CHOOSE row opens a folder chooser instead.
+	# path is taken out of it; the CHOOSE row opens a folder chooser instead.  A
+	# chooser that is closed (or that returns no absolute path) is NOT a decision:
+	# the caller shows the LIST again -- the options are still there to pick from.
 	if [[ "$choice" == *CHOOSE* ]]; then
 		choice=$(zenity --file-selection --directory \
-			--title="Choose a folder for the Steam data" 2>/dev/null) || return 1
+			--title="Choose a folder for the Steam data" 2>/dev/null) ||
+			return 2
 	fi
-	printf '%s\n' "$choice" | tr '|' '\n' | grep -m1 '^/'
+
+	choice=$(printf '%s\n' "$choice" | tr '|' '\n' | grep -m1 '^/') || return 2
+	ASK_CHOICE="$choice"
+	return 0
 }
 
-# Create it, check it is writable and has room.  Non-zero = ask again.
+# Create it, check it is a valid, writable directory with room.  Non-zero = NOT
+# usable: the caller shows the list again (it never silently installs anywhere).
 usable_location() {
 	local d="$1" avail
+
+	# Only an ABSOLUTE path is a selection: a row's column 1, or what the folder
+	# chooser returned.  Anything else means nothing was really picked.
+	case "$d" in
+	/*) ;;
+	*) return 1 ;;
+	esac
+
 	if ! mkdir -p "$d" 2>/dev/null || [ ! -w "$d" ]; then
 		zenity --error --title="Steam" 2>/dev/null \
 			--text="\"$d\" cannot be created, or you cannot write to it. Pick another folder." ||
@@ -147,33 +189,63 @@ usable_location() {
 }
 
 remember_location() {
-	mkdir -p "${CONFIG_FILE%/*}" 2>/dev/null || return 0
+	mkdir -p "${CONFIG_FILE%/*}" "$STATE_DIR" 2>/dev/null || return 0
 	{
 		printf '# Written by /usr/bin/steam: where the Steam data lives.\n'
 		printf '# Delete this file, or start with STEAM_ASK_HOME=1, to be asked again.\n'
 		printf 'STEAM_HOME=%q\n' "$1"
 	} >"$CONFIG_FILE" 2>/dev/null || true
+	: >"$DECIDED_FILE" 2>/dev/null || true
 }
 
 should_ask=0
 if [ -z "$ENV_HOME" ] && [ -z "$SYS_HOME" ] && [ -z "$USER_HOME" ] &&
-	[ ! -s "$DEFAULT_HOME/steamrtarm64/steam" ]; then
+	[ ! -e "$DECIDED_FILE" ]; then
 	should_ask=1
 fi
 [ "${STEAM_ASK_HOME:-0}" = 1 ] && should_ask=1
 
 if [ "$should_ask" = 1 ]; then
+	# Cancel on the LIST cancels the whole start (owner, 2026-10-20: "on cancel it
+	# should obviously cancel the whole install process"): Steam exits, and
+	# nothing is installed, seeded, started or remembered.  Only a closed FOLDER
+	# CHOOSER returns to the list (the options are still there to pick from), and
+	# an unusable pick does the same.  Steam itself is not started before a
+	# location has been chosen.
 	chosen=""
-	tries=0
-	while [ "$tries" -lt 3 ] && [ -z "$chosen" ]; do
-		tries=$((tries + 1))
-		picked=$(ask_location) || break
-		if usable_location "$picked"; then
-			chosen="$picked"
+	while [ -z "$chosen" ]; do
+		# ask_location reports its reason in the RETURN STATUS (1 = Cancel on the
+		# list, 2 = the folder chooser was closed, 3 = no GUI) and the chosen path
+		# in ASK_CHOICE -- see its header: anything set inside a $(...) call is
+		# lost, which is why it must NOT be called that way.
+		if ask_location; then
+			if usable_location "$ASK_CHOICE"; then
+				chosen="$ASK_CHOICE"
+			else
+				printf 'steam: %s cannot be used, pick another location\n' \
+					"$ASK_CHOICE" >&2
+			fi
+		else
+			case "$?" in
+			1)
+				printf 'steam: cancelled -- nothing was installed or changed.\n' >&2
+				printf 'steam: start steam again when you want to choose where the\n' >&2
+				printf 'steam: data should live (or set STEAM_HOME=<dir>).\n' >&2
+				exit 1
+				;;
+			3)
+				printf 'steam: no display (or no zenity): using %s\n' \
+					"$DEFAULT_HOME" >&2
+				printf 'steam: set STEAM_HOME=<dir> for somewhere else\n' >&2
+				chosen="$DEFAULT_HOME"
+				;;
+			*)
+				printf 'steam: no folder chosen -- pick one of the entries\n' >&2
+				;;
+			esac
 		fi
 	done
-	# A cancelled dialog is remembered too, so the question is asked once.
-	STEAM_HOME="${chosen:-$DEFAULT_HOME}"
+	STEAM_HOME="$chosen"
 	remember_location "$STEAM_HOME"
 	printf 'steam: Steam data will live in %s\n' "$STEAM_HOME" >&2
 fi

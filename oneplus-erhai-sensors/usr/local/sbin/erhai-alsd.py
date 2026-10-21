@@ -8,20 +8,43 @@
 # lamp to maximum. This daemon instead uses an ABSOLUTE Android-style log
 # curve, which keeps dark rooms readable and bright rooms bright:
 #
-#     pct = 2.5 + 97.5 * log10(1 + lux) / log10(1 + 20000)
+#     pct = 1.0 + 99.0 * ( log10(1 + lux) / log10(1 + 2906) ) ^ 0.618
 #
-#   lux     pct      (~2047 max backlight)
-#     0     2.5%     ~51   floor, never fully black
-#     4    18%       ~370  dark room, comfortable
-#    40    32%       ~650  indirect light
-#   400    56%       ~1150 bright room
-#  20000   100%      2047  outdoors
+# The three constants are FITTED to the owner's own measurements in a dark room
+# on 2026-10-20 - each point is the brightness level he picked for that light:
+#     lux 0.0   ->   20 of 2047  ( 1.0 %)  dark room  = the floor
+#     lux 2.72  ->  685 of 2047  (33.5 %)  dim room
+#     lux 95.7  -> 1457 of 2047  (71.2 %)  normally lit room
+# (the lux values come from monitor-sensor, which streams the sensor; reading
+# the property without claiming it reports a stale 0).  The curve reaches 100 %
+# at ~2900 lux and is clamped there, so daylight just stays at full.
+#
+#   lux      pct      raw (~2047)
+#     0     1.0%        20    floor: the panel must stay readable in the dark
+#   0.5    16.7%       341
+#     1    22.8%       468
+#     2    30.1%       615
+#     3    34.6%       707
+#     5    40.3%       825
+#    10    48.1%       984
+#    20    55.6%      1138
+#    40    62.7%      1284
+#   100    71.6%      1465
+#   200    77.9%      1595
+#   400    84.0%      1719
+#  1000    91.6%      1875
+#  2906   100.0%      2047    and above (clamped)
 #
 # Runs as the SESSION user and writes brightness through logind
 # SetBrightness (polkit grants that to active sessions) — no root needed.
 # Claims the sensor-proxy light client itself (refcounted); gsd's own
 # ambient is forced off (the erhai-sensors toggle drives
 # org.erhai.sensors ambient-enabled instead).
+#
+# It is enabled GLOBALLY, so it also starts for GDM's dynamic greeter user and
+# for the gnome-initial-setup session.  Those are logind class 'greeter' and
+# are NOT a logged-in desktop: tick() idles there (no sensor claim, no
+# brightness write), see GREETER_SESSION_CLASSES / brightness_allowed().
 #
 # One-time migration: if the legacy gsd key is true (the old toggle), copy
 # it to the new key and switch the legacy key off.
@@ -38,11 +61,24 @@ SCHEMA_ID = 'org.erhai.sensors'
 LEGACY_SCHEMA = 'org.gnome.settings-daemon.plugins.power'
 LEGACY_KEY = 'ambient-enabled'
 
-LUX_MAX = 20000.0
-PCT_FLOOR = 2.5
+LUX_MAX = 2906.0           # lux at which the curve reaches 100 %
+PCT_FLOOR = 1.0            # 0 lux -> 20 of 2047: the flat dark-room floor
+GAMMA = 0.618              # curve exponent (see the three measured points above)
 SMOOTH_TC_S = 1.5          # EWMA time constant
 POLL_S = 1.0
 MIN_WRITE_DELTA_PCT = 1.0
+
+# logind session classes this daemon must NEVER act in.  erhai-alsd is enabled
+# GLOBALLY (every user, see oneplus-erhai-sensors' postinst and build-root.sh),
+# so GDM's dynamic greeter user gets it too -- and so does the
+# gnome-initial-setup session, which GDM registers with class 'greeter' as
+# well.  Those sessions are not a logged-in desktop: the panel level there is
+# owned by erhai-backlight.service / erhai-greeter-brightness.py (fixed 50 %),
+# and the daemon's 2.5 % floor (~51 of 2047, its "never fully black" value)
+# would look like a black screen and would also claim the light sensor away
+# from the real user's session.  The class is read from logind, never guessed
+# from the user name: unknown (no logind answer) stays permissive.
+GREETER_SESSION_CLASSES = ('greeter',)
 
 
 def open_settings():
@@ -82,6 +118,9 @@ class AlsDaemon:
         self.deferred_pct = None
         self.renamed_legacy = False
         self.session_path = None
+        self._class_for = None
+        self._class_value = None
+        self.greeter_noted = False
 
     # --- legacy migration: old gsd toggle -> new key --------------------
     def migrate_legacy(self):
@@ -177,6 +216,45 @@ class AlsDaemon:
                 continue
         return candidates[0] if candidates else None
 
+    def session_class(self):
+        """logind Class of the session we would write brightness through.
+
+        'user' for a real login; 'greeter' for GDM's login screen AND for the
+        gnome-initial-setup session (GDM registers both with that class).
+        Cached per session object path, so it costs one D-Bus Get per session,
+        not one per tick.
+        """
+        path = self.session_path or self.resolve_session()
+        if not path:
+            return None
+        self.session_path = path
+        if self._class_for == path:
+            return self._class_value
+        cls = None
+        try:
+            res = self.system_bus.call_sync(
+                'org.freedesktop.login1', path,
+                'org.freedesktop.DBus.Properties', 'Get',
+                GLib.Variant('(ss)', ('org.freedesktop.login1.Session',
+                                      'Class')),
+                None, Gio.DBusCallFlags.NONE, -1, None)
+            cls = res.unpack()[0]
+        except GLib.Error as e:
+            print(f'cannot read the session class of {path}: {e.message}',
+                  flush=True)
+        self._class_for = path
+        self._class_value = cls
+        return cls
+
+    def brightness_allowed(self):
+        """True only in a session that is a logged-in desktop.
+
+        Unknown (logind did not answer) stays permissive on purpose: the guard
+        exists to keep the daemon out of the greeter, not to disable
+        auto-brightness when a lookup hiccups.
+        """
+        return self.session_class() not in GREETER_SESSION_CLASSES
+
     def set_brightness_pct(self, pct):
         if not self.backlight:
             return
@@ -208,6 +286,29 @@ class AlsDaemon:
             self.deferred_pct = None
             return GLib.SOURCE_CONTINUE
 
+        if not self.brightness_allowed():
+            # GDM's greeter and the gnome-initial-setup session (both class
+            # 'greeter' in logind) get erhai-alsd too, because the unit is
+            # enabled globally.  They must never drive the panel: the level
+            # there belongs to erhai-backlight.service /
+            # erhai-greeter-brightness.py, and this daemon's floor is 2.5 %
+            # (~51 of 2047) -- which reads as a black screen.  Do not even
+            # claim the light sensor (that would steal it from the real
+            # user's session).  Not an exit: the unit is Restart=always and
+            # the class can change under us (greeter -> user at login).
+            if not self.greeter_noted:
+                print('session class %s is not a logged-in desktop - '
+                      'auto-brightness idles here (the panel level is the '
+                      'greeter/boot policy)' % self.session_class(),
+                      flush=True)
+                self.greeter_noted = True
+            self.release()
+            self.ewma = None
+            self.last_pct = None
+            self.deferred_pct = None
+            return GLib.SOURCE_CONTINUE
+        self.greeter_noted = False
+
         self.claim()
         lux = self.read_lux()
         if lux is None:
@@ -217,7 +318,7 @@ class AlsDaemon:
         self.ewma = lux if self.ewma is None \
             else alpha * lux + (1.0 - alpha) * self.ewma
 
-        frac = math.log10(1.0 + self.ewma) / math.log10(1.0 + LUX_MAX)
+        frac = (math.log10(1.0 + self.ewma) / math.log10(1.0 + LUX_MAX)) ** GAMMA
         pct = PCT_FLOOR + (100.0 - PCT_FLOOR) * min(1.0, max(0.0, frac))
         pct = min(100.0, max(0.0, pct))
 

@@ -1,5 +1,5 @@
 Package: oneplus-erhai-audio
-Version: 1.3
+Version: 1.4
 Section: sound
 Priority: optional
 Architecture: all
@@ -40,6 +40,18 @@ Description: ALSA UCM profile and mixer routing for the OnePlus Pad 3 (erhai)
  erhai-audio-bringup.service (oneshot at boot): it binds the LPI pinctrl,
  re-runs the ASoC module probe chain if needed, waits for card0 and applies
  the HiFi verb.
+ .
+ 1.4 adds erhai-mic-state.service: the internal-microphone capture routing
+ lives in the UCM profile's SectionDevice "Mic" sequence, but WirePlumber runs
+ this card with api.alsa.use-acp=false and therefore never executes the UCM
+ *device* sequences. On a freshly flashed system (no
+ /var/lib/alsa/asound.state) the capture controls are then left at their
+ driver default — ADC muted, TX SMIC MUX0/1 = ZERO — and every recording in
+ every app (camera, recorder, browser) is digital silence with no error
+ anywhere. This unit applies the documented working mic state at every boot,
+ ordered after alsa-restore, so the microphone no longer depends on the stored
+ mixer state (a stale state restoring the vendor lane labels
+ SWR_MIC9/SWR_MIC4 silences it in exactly the same way).
  .
  WirePlumber's ACP opens the UCM with the ALSA card ID ("OnePlusPad3") rather
  than "hw:0"; ALSA's UCM resolver does not match the card ID against the

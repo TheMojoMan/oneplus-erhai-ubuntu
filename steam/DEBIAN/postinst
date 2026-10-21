@@ -4,6 +4,14 @@ set -e
 # Nothing has to be built here: the payload under /usr/lib/steam is already
 # complete and dpkg owns it.  The per-user writable Steam root is created by
 # /usr/bin/steam on first run, as the account that started it.
+#
+# This script also has a job that is more than cosmetic: forgetting the
+# remembered Steam data location, so that after installing (or upgrading, or
+# reinstalling) the package, the next start asks AGAIN where the data should
+# live.  It has to happen here because dpkg runs the ALREADY-INSTALLED package's
+# postrm on a removal -- a leftover answer from a previous install would
+# otherwise keep the question suppressed forever (owner report 2026-10-20: the
+# first fix, in the postrm only, did not work for exactly that reason).
 
 case "${1:-}" in
 	configure)
@@ -11,20 +19,89 @@ case "${1:-}" in
 		chmod 0755 /usr/lib/steam/steamrtarm64/steam 2>/dev/null || true
 		chmod 0755 /usr/lib/steam/steamrtarm64/steamwebhelper 2>/dev/null || true
 
-		# A hand-installed launcher in /usr/local/bin SHADOWS this one
-		# (/usr/local/bin precedes /usr/bin in PATH).  Say so instead of
-		# silently starting somebody else's tree.
+		# A hand-installed launcher in /usr/local/bin or ~/.local/bin SHADOWS
+		# this one (both precede /usr/bin in PATH), and a per-user
+		# ~/.local/share/applications/steam.desktop overrides the packaged
+		# entry in the app grid.  In either case the packaged launcher -- and
+		# its "where should the data live?" question -- is bypassed, so say
+		# so instead of silently starting somebody else's tree.
 		if [ -e /usr/local/bin/steam ]; then
 			echo "steam: note: /usr/local/bin/steam exists and takes precedence" >&2
-			echo "steam: over /usr/bin/steam in PATH; run 'hash -r' if you want" >&2
-			echo "steam: the packaged launcher (/usr/bin/steam) instead." >&2
+			echo "steam: over /usr/bin/steam in PATH; remove it (or start" >&2
+			echo "steam: /usr/bin/steam directly) to use this package." >&2
 		fi
+		for h in /root /home/*; do
+			[ -d "$h" ] || continue
+			if [ -e "$h/.local/bin/steam" ]; then
+				echo "steam: note: $h/.local/bin/steam shadows /usr/bin/steam" >&2
+				echo "steam: in PATH; remove it to use this package." >&2
+			fi
+			if [ -e "$h/.local/share/applications/steam.desktop" ]; then
+				echo "steam: note: $h/.local/share/applications/steam.desktop" >&2
+				echo "steam: overrides the packaged Steam entry in the app grid." >&2
+			fi
+		done
 
 		# Keep the desktop entry's icon cache coherent on systems that have
 		# the tool; harmless when they do not.
 		if command -v update-desktop-database >/dev/null 2>&1; then
 			update-desktop-database -q /usr/share/applications || true
 		fi
+
+# >>> erhai-forget-location
+# Forget the remembered Steam data location for each account, so the next start
+# asks where the data should live again.  ONLY the decision is removed -- never
+# anything inside a Steam root (its client, games, saves and settings all stay).
+#
+# THIS BLOCK IS KEPT BYTE-IDENTICAL IN DEBIAN/postinst AND DEBIAN/postrm, and
+# build-steam-deb.sh (guard 6) refuses to pack the package if the two drift.  It
+# has to be in BOTH because dpkg runs the ALREADY-INSTALLED package's postrm on a
+# removal: installing this fixed package (postinst) must clean the same state the
+# removal would have cleaned, or a leftover answer keeps the question suppressed
+# after the reinstall (owner report 2026-10-20).
+		for home in /root /home/*; do
+			[ -d "$home" ] || continue
+			conf="$home/.config/erhai-steam.conf"
+			state="$home/.local/state/erhai-steam"
+
+			# Read the answer BEFORE deleting it, so the notice can name the
+			# folder that is kept (a hand-written file may use any path).  NOTE:
+			# the file is only PARSED, never sourced -- it lives in a
+			# user-writable home and these scripts run as root.
+			root=$(sed -n 's/^STEAM_HOME=//p' "$conf" 2>/dev/null | tail -n 1) ||
+				root=""
+			case "$root" in
+			\'*\') root=${root#\'}; root=${root%\'} ;;
+			\"*\") root=${root#\"}; root=${root%\"} ;;
+			esac
+			if [ -z "$root" ]; then
+				root="$home/.local/share/Steam"
+			fi
+
+			# Remove ONLY the decision -- never anything inside $root.
+			deleted=""
+			if [ -e "$conf" ]; then
+				rm -f "$conf" || true
+				deleted="$conf"
+			fi
+			if [ -e "$state/location-decided" ]; then
+				rm -f "$state/location-decided" || true
+				deleted="${deleted:+$deleted, }$state/location-decided"
+			fi
+			# Only when it is EMPTY: the payload stamp and the seed lock stay.
+			rmdir "$state" 2>/dev/null || true
+
+			if [ -n "$deleted" ]; then
+				echo "steam: forgot the remembered data location ($root):" >&2
+				echo "steam: removed $deleted" >&2
+				echo "steam: the next start asks where the data should live again." >&2
+			fi
+			if [ -d "$root" ]; then
+				echo "steam: keeping $root (the client and your games) -- pick" >&2
+				echo "steam: that folder again and nothing is copied or lost." >&2
+			fi
+		done
+# <<< erhai-forget-location
 		;;
 esac
 

@@ -1,5 +1,5 @@
 Package: oneplus-erhai-erhaicam
-Version: 1.5
+Version: 2.9
 Section: graphics
 Priority: optional
 Architecture: arm64
@@ -7,8 +7,8 @@ Maintainer: TheMojoMan <themojoman@gmx.net>
 Provides: oneplus-erhai-cam
 Replaces: oneplus-erhai-cam (<< 1.3)
 Breaks: oneplus-erhai-cam (<< 1.3)
-Depends: libgtk-4-1, libgdk-pixbuf-2.0-0, gstreamer1.0-libcamera, gstreamer1.0-gtk4, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good
-Recommends: iio-sensor-proxy, gstreamer1.0-plugins-bad, python3-numpy
+Depends: libgtk-4-1, libgdk-pixbuf-2.0-0, gstreamer1.0-libcamera, gstreamer1.0-gtk4, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad, gstreamer1.0-pipewire
+Recommends: iio-sensor-proxy, python3-numpy
 Description: ErhaiCam — standalone camera app for the OnePlus Pad 3 (erhai)
  GTK4/GStreamer camera app with NPU-driven autofocus and auto-exposure.  The
  per-frame image analysis (Tenengrad focus metric + luminance statistics) runs
@@ -17,15 +17,86 @@ Description: ErhaiCam — standalone camera app for the OnePlus Pad 3 (erhai)
  same metric as the automatic fallback.  The AF sweep drives the kernel
  cn3927 lens subdev (V4L2_CID_FOCUS_ABSOLUTE, tap-to-focus, refocus on
  sharpness drop); AE is a log-domain controller on the SC1320CS integration
- time written straight to the sensor register 0x3e00.  AE (top left) and AF
- (top right) buttons toggle the automatics; turning one off reveals the
- matching vertical slider below the button for manual focus (VCM, 0..1023)
- or exposure (sensor lines, 1..6396).  Also: photo capture into
- ~/Pictures/ErhaiCam, video recording (v4l2h264enc/mp4mux with vp8/webm
- fallback), front/rear camera switching (front streams once its Phase-B
- driver work lands) and accelerometer orientation handling (upright preview
- + upright snapshots).
- Photo capture and autofocus are the focus; video is experimental.
+ time written straight to the sensor register 0x3e00 (BOTH cameras since 2.8 —
+ the rear SC1320CS and the front SC820CS).  AE (top left) and AF (top right)
+ buttons toggle the automatics; turning one off reveals the matching fader
+ below the button for manual focus (VCM, 0..1023) or exposure (sensor lines,
+ 1..6396 rear / 1..3120 front) — the faders stretch with the window and stop
+ 50 px above its bottom edge.
+ .
+ 2.9 MAKES LOW LIGHT USABLE — a frame-length (VTS) ladder in the AE.  A
+ sensor's integration time can never exceed its FRAME LENGTH, and the mode table
+ fixes that at 3128 lines (front SC820CS) / 6404 (rear SC1320CS): so in a dim
+ room the front camera was simply out of light (measured: luma 43, signal band
+ 18 of 255) and NO setting of the software ISP could help (its AGC is inert on
+ these sensors — libcamera has no CameraSensorHelper for either — and every
+ option set measured identical).  Lengthening the frame is the one lever that
+ works: `0x320e/0x320f` 3128 -> 6240 gave luma 43.4 -> 48.7 and band 17.9 ->
+ 24.3 (real light, contrast intact) for a 7.5 fps preview instead of 15.  The AE
+ now doubles the frame (up to 4x) when the exposure is at its ceiling and the
+ scene is still dark, moves the exposure to the new ceiling, and halves it back
+ towards the mode table's length once the scene brightens — so a bright room
+ keeps full frame rate.  `--no-ae` and manual exposure never touch the frame.
+ .
+ 2.8 OWNED THE CAMERAS' EXPOSURE REGISTERS; the ISP tuning below follows.  Measured on two photos taken 13 s
+ apart: the picture's black floor rose 10 -> 42 (out of 255) while the
+ highlights barely moved and its colour temperature was unchanged — a fog, not
+ a colour cast.  Cause: this pad's software ISP has NO exposure model for
+ either sensor (libcamera: "Failed to create camera sensor helper") and the
+ kernel's exposure/gain controls are no-ops on both, so in a dark scene the
+ ISP's AGC could only brighten the picture in SOFTWARE, and its digital gain
+ multiplies the black level until the frame washes out.  The app now owns BOTH
+ sensors' exposure registers (so the ISP's AE cannot fight it and the front is
+ no longer left entirely to it — the front has no AE of its own), and
+ libcamera's gamma and saturation are pinned by default so its luminance-
+ dependent `Adjust` compensation cannot re-curve the picture (gamma 2.2,
+ saturation 1.0 = the pinned default).  Escape hatches: ERHAI_CAM_ISP=none
+ restores the old behaviour (or `=raw`/`=off`/`=isp`), `=default`/`=on`/`=pins`
+ is the default, `=lowlight` adds `ae-enable=false` (no ISP gain stage at all —
+ darkest but never washed out), and any `key=value,…` is a complete override;
+ ~/.config/erhai/erhaicam.conf `[isp] key=value` lines are appended to the
+ default.
+ .
+ Also: photo capture into ~/Pictures/ErhaiCam, video recording, front/rear
+ camera switching (front streams once its Phase-B driver work lands) and
+ accelerometer orientation handling (upright preview + upright snapshots).
+ .
+ Video recording (1.6) is H.264 + AAC in MP4 through the hardware encoder
+ (v4l2h264enc / Iris, which only takes NV12 — the previous I420 request failed
+ its link and silently fell back to software VP8), with a VP8/Opus WebM
+ fallback.  The note button at the bottom right of the shutter bar picks the
+ soundtrack: "No audio" (silent video, the default) or "Microphone" — the
+ PipeWire default source (the pad's Internal Mics), captured as a second branch
+ of the same pipeline so the muxer keeps picture and sound in sync.  The
+ choice applies from the next recording on.
+ .
+ RESOLUTION (2.4, default changed in 2.5): the button in the bottom-LEFT corner
+ shows the stream size and opens a menu to choose it.  One stream feeds preview,
+ video and photos, so the choice sets all three.  Each camera has its OWN list
+ and its own remembered choice — switching camera switches the menu.  Default
+ for BOTH cameras: 1920x1080 (Full HD).
+   back  — 4152x3120 (sensor native), 3840x2160 (4K UHD), 3200x2400 (8 MP),
+           2560x1920, 1920x1080 (Full HD, the default), 1280x720, 640x480
+   front — 3200x2400 (8 MP), 2560x1920, 1920x1080 (Full HD, the default),
+           1600x1200, 1280x960, 640x480
+ (the front sensor's bare native 3264x2448 does NOT negotiate on this hardware;
+ 3200x2400 is its largest usable size).  The size is asked of the software ISP,
+ so it is scaled before the colour conversion.  Both choices persist in
+ ~/.config/erhai/erhaicam.conf, and the picker is locked while a recording runs
+ (a new stream would end the take).  A scripted run can force a size with
+ --res WxH or ERHAI_CAM_RES=WxH.
+ .
+ 1.7 fixes the resulting timestamps: the camera's frames carry the PREVIEW
+ pipeline's time base while the microphone starts at its own zero, so a
+ recording made a while after launch came out with a lead-in of nothing (black
+ picture, wrong duration) before the video began.  Each recording now re-bases
+ its frames onto the first one recorded, so picture and sound start together.
+ .
+ PRIVACY: the microphone is opened ONLY while a recording runs (from pressing
+ Record until Stop, or a headless --record run) and is closed again afterwards.
+ No capture stream is ever left running in the background, and the cold start
+ of the pad's capture path is handled by trimming the silent head of the track
+ instead of by keeping the mic awake (owner decision, 2026-10-20).
  .
  This package takes over the renamed oneplus-erhai-cam (<= 1.2, the same app):
  it Provides that name, and Replaces/Breaks the old versions so an installed

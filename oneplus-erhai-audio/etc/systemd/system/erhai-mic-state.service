@@ -1,0 +1,19 @@
+[Unit]
+Description=erhai internal-microphone capture state (UCM "Mic" route, applied at boot)
+Documentation=file:/usr/local/sbin/erhai-mic-state.sh
+# WHY: WirePlumber runs this card with api.alsa.use-acp=false, so it never
+# executes the UCM *device* sequences — the microphone routing must be applied
+# here or the capture starts from the driver default (ADC muted, TX SMIC MUX0/1
+# = ZERO) and every recording is silence.  Ordered AFTER alsa-restore so a
+# stale /var/lib/alsa/asound.state cannot overwrite it.
+After=alsa-restore.service
+After=sound.target
+ConditionPathExists=/dev/snd/controlC0
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/erhai-mic-state.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

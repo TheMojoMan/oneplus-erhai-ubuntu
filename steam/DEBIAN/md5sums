@@ -1,11 +1,11 @@
-83748763cf1b3ecc821142ac879bc7d7  etc/steam/launcher.conf
-8e3f28e08879a10db702de6732f438b0  usr/bin/steam
+6b25755b6bd896f20bc89d6ce295a191  etc/steam/launcher.conf
+7e58b6d4e22508ef1e13feb99948c9e0  usr/bin/steam
 d41d8cd98f00b204e9800998ecf8427e  usr/lib/steam/.steam-enable-steamrt64-client
 d3fbc3df7e5c6cb65fbeb3f084f6dcfb  usr/lib/steam/steamrtarm64/steam
-4def84593ae91784fccc9cf00dd99202  usr/lib/steam/VERSION
-764e794d79b6e3ba1af4c453ffa80cb1  usr/share/applications/steam.desktop
+a2206d9a55f85307209fe0db6de32bd4  usr/lib/steam/VERSION
+9d3be5a4d0c8a0112af9a4a59e1ee39d  usr/share/applications/steam.desktop
 3c4bda1b112a2bca29ac57cd0669bcc1  usr/share/doc/steam/copyright
 7e73a93288afa9c74545f754d7dcb5d6  usr/share/icons/hicolor/128x128/apps/steam.png
 842bd1b9628c75bbc04ef4f30b13241f  usr/share/icons/hicolor/256x256/apps/steam.png
 7468110828deee20ef156cea661e31ec  usr/share/icons/hicolor/48x48/apps/steam.png
-eeeff62dd0dd9ddc4cb5cafa76c49cc0  usr/share/steam/README.md
+ba960c234bb72c517d5bdb1a7d143b88  usr/share/steam/README.md
