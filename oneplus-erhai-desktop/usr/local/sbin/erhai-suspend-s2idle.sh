@@ -71,6 +71,16 @@ SETACTIVE_FIRST=${SETACTIVE_FIRST:-0}
 USE_WAKEUP_COUNT=${USE_WAKEUP_COUNT:-0}   # 0: unusable here, see STEP4b
 WIFI_WATCH_A=${WIFI_WATCH_A:-60}         # post-resume: wifi UNTOUCHED watch
 WIFI_WATCH_B=${WIFI_WATCH_B:-60}         # post-resume: after explicit re-enable
+# USB_GUARD (STEP2f): a suspend taken WITH USB devices attached killed the xHCI host
+# on resume (`HC died; cleaning up`, every device dropped, ~17 s of resume timeouts --
+# MEMORY-2026-10-21.md §31).  Until the kernel side is fixed, STEP2f unmounts any
+# filesystem on USB media and then UNBINDS the xHCI host, and STEP6 re-binds it (the
+# tree re-enumerates with NO replug -- proven live 23:33).  SAFETY: if a USB
+# filesystem cannot be unmounted the suspend is ABORTED (an unclean removal in the
+# middle of the sleep is a data-loss risk); USB_GUARD_ABORT=0 = warn and suspend anyway
+# WITHOUT unbinding (the old behaviour = HC-death risk).
+USB_GUARD=${USB_GUARD:-1}
+USB_GUARD_ABORT=${USB_GUARD_ABORT:-1}
 D=/media/data/develop/erhai/tmp/gpu-hang-capture
 RESUMEDF=/run/erhai-suspend-resumed
 
@@ -79,6 +89,17 @@ DONEF=/run/erhai-suspend-done
 SURVLOG=/usr/local/sbin/erhai-surv-log
 TOGGLE=/usr/local/sbin/erhai-display-toggle.sh
 RTC=/sys/class/rtc/rtc1
+# ...but the PMIC RTC's INDEX is not stable: kernel +b8 (2026-09-29) registered
+# the very same rtc-pm8xxx device as rtc0 (it was rtc1 before), so the hardcoded
+# path silently stopped arming the alarm ("$RTC/wakealarm not writable") and the
+# RTC auto-wake has been DEAD since.  Resolve it BY DRIVER NAME, never by index.
+for _d in /sys/class/rtc/rtc*; do
+    [ -e "$_d/device/driver" ] || continue
+    if [ "$(basename "$(readlink -f "$_d/device/driver")")" = rtc-pm8xxx ]; then
+        RTC="$_d"
+        break
+    fi
+done
 BL=/sys/class/backlight/ktz8868-backlight
 BATT=/sys/class/power_supply/bq27z561-0
 GPU=/sys/devices/platform/soc@0/3d00000.gpu/power
@@ -87,11 +108,25 @@ USER_NAME=themojoman
 UID_N=$(id -u "$USER_NAME")
 RT=/run/user/$UID_N
 
+# A pad that is not our dev workspace has no /media/data/develop/erhai/tmp: an
+# `exec >>` into a missing directory is FATAL to the whole suspend (the unit dies
+# before it can even blank the panel), so fall back to /var/log (MEMORY-2026-10-21
+# §2: the three hardcoded dev paths in the panel/suspend helpers).
+if ! mkdir -p "$(dirname "$LOG")" 2>/dev/null || [ ! -w "$(dirname "$LOG")" ]; then
+    LOG=/var/log/erhai-suspend-s2idle.log
+fi
 exec >> "$LOG" 2>&1
 rm -f "$DONEF"
 say() { echo "[$(date +%T) up=$(cut -d' ' -f1 /proc/uptime)] $*"; \
         [ -x "$SURVLOG" ] && "$SURVLOG" "suspend-s2idle: $*" 2>/dev/null; }
 kmsg() { echo "erhai-suspend: $*" > /dev/kmsg 2>/dev/null; }
+# live pm_test selection (the BRACKETED entry of /sys/power/pm_test).  Read out at
+# STEP4b (kmsg, survives a reset) and at STEP5, so the log PROVES which phase test
+# was in effect.  WHY: the tracer sets pm_test, but its own restore_tweaks used to
+# fire 1-2 s into the run (systemd-run without --wait) and silently put it back to
+# `none` before STEP5 -- so a "--pm-test freezer" run was really a full suspend and
+# nothing in the log said so.
+sel_pm_test() { tr ' ' '\n' < /sys/power/pm_test 2>/dev/null | sed -n 's/^\[\(.*\)\]$/\1/p'; }
 snap() { # one-line state: panel + gpu + genpd
     printf 'bl=%s gpu=%s/%s gdsc[%s]\n' \
         "$(cat $BL/actual_brightness 2>/dev/null)" \
@@ -102,6 +137,80 @@ ss() { runuser -u "$USER_NAME" -- env XDG_RUNTIME_DIR="$RT" \
         DBUS_SESSION_BUS_ADDRESS="unix:path=$RT/bus" timeout 10 gdbus call --session \
         --dest org.gnome.Shell --object-path /org/gnome/ScreenSaver \
         --method org.gnome.ScreenSaver.SetActive "$1" 2>&1; }
+
+# --- STEP2f / STEP6 USB quiesce helpers -------------------------------------
+# See the USB_GUARD comment above and MEMORY-2026-10-21.md §31-§33.  Only ever
+# touches xhci-hcd.<N>.auto -- NEVER dwc3-qcom / qcom-qmp-combo-phy (both are
+# forbidden: unbinding them bricks or hangs the port, see .clinerules).
+USB_UNBOUND=/run/erhai-suspend-usb-unbound
+usb_xhci() { ls -d /sys/bus/platform/devices/xhci-hcd.*.auto 2>/dev/null | head -1; }
+usb_nonroot_devs() { lsusb 2>/dev/null | grep -vc 'Linux Foundation'; }
+usb_media_mounts() {   # "<device> <mountpoint>" for MOUNTED usb block devices
+    command -v lsblk >/dev/null 2>&1 || return 0
+    lsblk -rno NAME,TRAN,MOUNTPOINT 2>/dev/null | awk '$2 == "usb" && $3 != "" {print "/dev/" $1, $3}'
+}
+usb_quiesce() {        # unmount USB media, then unbind the xHCI host; 3 = media busy
+    local X i left
+    if [ "$(usb_media_mounts | wc -l)" -gt 0 ]; then
+        usb_media_mounts | while read -r dev mp; do
+            say "STEP2f unmounting USB media: $dev on $mp"
+            if [ -x /usr/bin/udisksctl ]; then
+                udisksctl unmount -b "$dev" --no-user-interaction >/dev/null 2>&1
+            fi
+            mountpoint -q "$mp" 2>/dev/null && umount "$mp" 2>/dev/null
+        done
+        sync
+        left=$(usb_media_mounts | wc -l)
+        if [ "$left" -gt 0 ]; then
+            say "STEP2f !!! $left USB filesystem(s) STILL MOUNTED — will not remove the device"
+            usb_media_mounts | while read -r dev mp; do say "STEP2f     still mounted: $dev on $mp"; done
+            return 3
+        fi
+        say "STEP2f USB media unmounted cleanly"
+    fi
+    X=$(usb_xhci)
+    [ -n "$X" ] || { say "STEP2f no xHCI host (port not in host mode) — nothing to unbind"; return 0; }
+    if [ "$(usb_nonroot_devs)" = 0 ]; then
+        say "STEP2f no USB devices attached — nothing to unbind"
+        return 0
+    fi
+    say "STEP2f unbinding the xHCI host ${X##*/} ($(usb_nonroot_devs) device(s) disappear for the sleep)"
+    kmsg "USB unbind ${X##*/}"
+    if ! echo "${X##*/}" > /sys/bus/platform/drivers/xhci-hcd/unbind 2>/dev/null; then
+        say "STEP2f !!! unbind FAILED — suspending WITH devices attached (xHCI HC-death risk)"
+        return 1
+    fi
+    : > "$USB_UNBOUND"
+    i=0
+    while [ "$i" -lt 10 ]; do
+        [ "$(usb_nonroot_devs)" = 0 ] && break
+        sleep 1; i=$((i+1))
+    done
+    say "STEP2f devices now: $(usb_nonroot_devs) (after ${i}s)"
+    return 0
+}
+usb_restore() {        # re-probe the host iff STEP2f unbound it (idempotent, trap-safe)
+    [ -e "$USB_UNBOUND" ] || return 0
+    local X i
+    X=$(usb_xhci)
+    rm -f "$USB_UNBOUND"
+    if [ -z "$X" ]; then
+        say "STEP6 usb: xHCI host device gone — cannot re-probe (usb-host-recover.sh is the fallback)"
+        return 1
+    fi
+    say "STEP6 usb: re-binding ${X##*/} (the tree re-enumerates, no replug needed)"
+    echo "${X##*/}" > /sys/bus/platform/drivers/xhci-hcd/bind 2>/dev/null
+    i=0
+    while [ "$i" -lt 15 ]; do
+        [ "$(usb_nonroot_devs)" -gt 0 ] && break
+        sleep 1; i=$((i+1))
+    done
+    say "STEP6 usb: $(usb_nonroot_devs) device(s) enumerated after ${i}s"
+    kmsg "USB rebind done devices=$(usb_nonroot_devs)"
+    return 0
+}
+# belt-and-braces: an abort path that exits after the unbind still re-binds (idempotent)
+trap 'usb_restore 2>/dev/null || true' EXIT INT TERM
 
 say "===== SUSPEND s2idle RUN START (WAKE_SECS=$WAKE_SECS QUIESCE=$QUIESCE DISPLAY_OFF_FIRST=$DISPLAY_OFF_FIRST DRY=$DRY MEM_STATE=$MEM_STATE) ====="
 kmsg "START WAKE_SECS=$WAKE_SECS QUIESCE=$QUIESCE"
@@ -232,6 +341,117 @@ else
     fi
 fi
 
+# ---- STEP 2e: WLAN TEARDOWN GUARD (2026-10-21) — NEVER enter s2idle on a
+# crashed / half-dead WLAN.  Owner's 4-test session on 2026-10-21: tests 1-3
+# could not be woken with the power key and needed a HARD RESET, test 4 slept
+# 20.2 s and woke normally.  The journal difference is the WLAN teardown NM does
+# on logind's PrepareForSleep: the 250 ms psoc idle timer (`gInterfaceChangeWait`)
+# fires `cnss: Doing idle shutdown` -> hdd_psoc_idle_shutdown -> ... ->
+# hif_exec_napi_kill, which in the crashing runs Oopsed
+# ("Unable to handle kernel paging request" + "kworker/u33:N exited with
+# preempt_count 1") 0.1-0.2 s after "htc_stop: stopping hif layer" and left the
+# cnss IDLE_SHUTDOWN event NEVER completed ("Completed event: IDLE_SHUTDOWN"
+# count 0); `echo mem` 2.7-3.0 s later then never returned.  The surviving run
+# had that SAME shutdown COMPLETE cleanly ("... ret: 0/0") before the suspend.
+# STEP2d freezes the timer, but it runs AFTER NM's radio-off (logind's
+# PrepareForSleep reaches NM before systemd-suspend.service starts), i.e. too
+# late to matter — so instead of trying to win the race we refuse to sleep when
+# it was lost.  Full analysis: MEMORY-2026-10-21.md §suspend.
+WLAN_GUARD=${WLAN_GUARD:-1}
+GUARD=/usr/local/sbin/erhai-suspend-wlan-guard.sh
+[ -x "$GUARD" ] || GUARD=$D/erhai-suspend-wlan-guard.sh
+if [ "$DRY" = 1 ]; then
+    say "STEP2e WLAN guard SKIPPED in DRY run (no radio teardown happens)"
+elif [ "$WLAN_GUARD" != 1 ]; then
+    say "STEP2e WLAN guard DISABLED (WLAN_GUARD=$WLAN_GUARD) — no hard-reset protection"
+elif [ -x "$GUARD" ]; then
+    g_out=$("$GUARD" 2>&1); g_rc=$?
+    printf '%s\n' "$g_out" | while IFS= read -r l; do say "STEP2e   $l"; done
+    if [ "$g_rc" = 0 ]; then
+        say "STEP2e WLAN guard PASSED — safe to suspend"
+    else
+        say "STEP2e !!! WLAN guard FAILED (rc=$g_rc) — ABORTING the suspend (this is the case that used to need a hard reset)"
+        echo "wlan-guard-failed rc=$g_rc up=$(cut -d' ' -f1 /proc/uptime)" > /run/erhai-suspend-wlan-guard
+        say "STEP2e restore: SetActive false -> $(ss false)"
+        say "STEP2e restore: display on -> $("$TOGGLE" on 2>&1; echo rc=$?)"
+        if [ "$PARK_GPU" = 1 ]; then
+            echo on > "$GPU/control" 2>/dev/null
+            say "STEP2e restore: gpu re-pinned: $(snap)"
+        fi
+        if [ -n "${ORIG_MEM_SLEEP:-}" ]; then
+            echo "$ORIG_MEM_SLEEP" > /sys/power/mem_sleep 2>/dev/null
+        fi
+        if [ -n "$WLAN_TM_ORIG" ] && [ "$WLAN_TM_ORIG" != 1000000 ]; then
+            echo "$WLAN_TM_ORIG" > "$WLAN_TM" 2>/dev/null
+        fi
+        if [ "$POWERWATCH_ACTIVE" = 1 ]; then
+            systemctl start erhai-power-toggle.service 2>/dev/null
+        fi
+        # The crash that made the guard abort also leaves the qcacld driver broken
+        # (`hdd_open: VDEV SYNC TRANS start fails -16`, NM shows no networks).
+        # NEVER try to REPAIR that from here: in this state `rmmod wlan` HANGS in
+        # D-state (2026-10-21: "Hard Unloading driver" then nothing, module left
+        # GOING/refs -1, and the stuck unit then made the owner's plain reboot
+        # hang too -> hard reset).  So: REPORT ONLY (read-only + bounded), and
+        # tell the user to reboot with --force.  WLAN_GUARD_STATUS=0 skips it.
+        if [ "${WLAN_GUARD_STATUS:-1}" = 1 ]; then
+            WREC=/usr/local/sbin/erhai-wcn-recover.sh
+            [ -x "$WREC" ] || WREC=$D/erhai-wcn-recover.sh
+            if [ -x "$WREC" ]; then
+                r_out=$(timeout 40 "$WREC" status 2>&1); r_rc=$?
+                printf '%s\n' "$r_out" | while IFS= read -r l; do say "STEP2e wlan-state  $l"; done
+                say "STEP2e wlan-state rc=$r_rc (read-only; a wedged driver needs 'systemctl reboot --force')"
+            else
+                say "STEP2e wlan-state: $WREC not found"
+            fi
+        fi
+        say "STEP2e post-abort: $(snap)"
+        say "===== SUSPEND s2idle RUN END (ABORTED at STEP2e — WLAN guard) ====="
+        exit 3
+    fi
+else
+    say "STEP2e $GUARD not found — guard skipped (no hard-reset protection)"
+fi
+
+# ---- STEP 2f: USB quiesce (unmount USB media, then unbind the xHCI host)
+# WHY: with USB devices attached the resume can kill the xHCI controller (`HC died`),
+# drop every device and burn ~17 s (MEMORY-2026-10-21.md §31).  Taking the host down
+# before the sleep and re-probing it after it (STEP6) avoids that entirely -- the tree
+# re-enumerates with no replug.  Data safety first: media is unmounted, and if that
+# fails the suspend is ABORTED (USB_GUARD_ABORT=0 = suspend anyway, without unbinding).
+if [ "$DRY" = 1 ]; then
+    say "STEP2f USB guard SKIPPED in DRY run (no sleep happens)"
+elif [ "$USB_GUARD" != 1 ]; then
+    say "STEP2f USB guard DISABLED (USB_GUARD=$USB_GUARD) — devices stay attached (xHCI HC-death risk)"
+else
+    usb_quiesce; usb_rc=$?
+    if [ "$usb_rc" = 3 ]; then
+        if [ "$USB_GUARD_ABORT" = 1 ]; then
+            say "STEP2f !!! USB media is still mounted — ABORTING the suspend (data safety)"
+            echo "usb-busy up=$(cut -d' ' -f1 /proc/uptime)" > /run/erhai-suspend-usb-busy
+            say "STEP2f restore: SetActive false -> $(ss false)"
+            say "STEP2f restore: display on -> $("$TOGGLE" on 2>&1; echo rc=$?)"
+            if [ "$PARK_GPU" = 1 ]; then
+                echo on > "$GPU/control" 2>/dev/null
+                say "STEP2f restore: gpu re-pinned: $(snap)"
+            fi
+            if [ -n "${ORIG_MEM_SLEEP:-}" ]; then
+                echo "$ORIG_MEM_SLEEP" > /sys/power/mem_sleep 2>/dev/null
+            fi
+            if [ -n "${WLAN_TM_ORIG:-}" ]; then
+                echo "$WLAN_TM_ORIG" > "$WLAN_TM" 2>/dev/null
+            fi
+            if [ "$POWERWATCH_ACTIVE" = 1 ]; then
+                systemctl start erhai-power-toggle.service 2>/dev/null
+            fi
+            say "STEP2f post-abort: $(snap)"
+            say "===== SUSPEND s2idle RUN END (ABORTED at STEP2f — USB media busy) ====="
+            exit 3
+        fi
+        say "STEP2f USB_GUARD_ABORT=0: suspending WITH devices attached (xHCI HC-death risk)"
+    fi
+fi
+
 # ---- STEP 3: arm the RTC alarm (our auto-wake) and verify the readback.
 # RTC_ALARM=0 -> skip entirely (owner wakes with a short power press).
 RTC_BASE=""
@@ -275,7 +495,7 @@ if [ "$USE_WAKEUP_COUNT" = 1 ]; then
 else
     say "STEP4b wakeup_count gate disabled"
 fi
-kmsg "ENTER mem (mem_sleep=$MEM_STATE WAKE_SECS=$WAKE_SECS wc_gate=$USE_WAKEUP_COUNT PARK_GPU=$PARK_GPU)"
+kmsg "ENTER mem (mem_sleep=$MEM_STATE WAKE_SECS=$WAKE_SECS wc_gate=$USE_WAKEUP_COUNT PARK_GPU=$PARK_GPU pm_test=[$(sel_pm_test)])"
 
 # ---- STEP 4c: OPTIONAL — REAL blank first, then park the GPU before s2idle
 # Step 1 (SETACTIVE_FIRST): SetActive true = real DPU/DSI teardown under the
@@ -331,7 +551,7 @@ else
     soc_pre_chg=$(cat "$BATT/charge_now" 2>/dev/null)
     soc_pre_v=$(cat "$BATT/voltage_now" 2>/dev/null)
     say "STEP5 pre-suspend SOC: capacity=${soc_pre_cap}% charge_now=${soc_pre_chg}uAh voltage=$(awk -v v="$soc_pre_v" 'BEGIN{printf "%.3f", v/1e6}')V"
-    say "STEP5 ENTER /sys/power/state <- mem   (t0=$t0)  *** pad may sleep now ***"
+    say "STEP5 ENTER /sys/power/state <- mem   (t0=$t0) PM_TEST=[$(sel_pm_test)]  *** pad may sleep now ***"
     echo mem > /sys/power/state
     rc=$?
     t1=$(cut -d' ' -f1 /proc/uptime)
@@ -369,6 +589,9 @@ else
 fi
 
 # ---- STEP 6: restore
+# USB first: STEP2f unbound the xHCI host, so re-probe it now (idempotent; the trap
+# also calls this on any abort/exit after the unbind).
+usb_restore
 say "STEP6 restore: SetActive false -> $(ss false)"
 say "STEP6 display on -> $("$TOGGLE" on 2>&1; echo rc=$?)"
 sleep 2
@@ -415,7 +638,17 @@ if [ "$QUIESCE" = 1 ]; then
         sleep 10; i=$((i+10))
         say "STEP7 A t=${i}s $(nmst)$(rfk)"
     done
-    say "STEP7 WATCH_A end: $(nmst) — conclusion: came back by itself? $(nmcli -t -f DEVICE,STATE dev | grep -q wlp1s0:connected && echo YES || echo NO)"
+    # NOTE: the tracer passes WIFI_WATCH_A=0 to keep the run short, so this window
+    # is normally 0 s and a "came back by itself?" verdict is then MEANINGLESS
+    # (2026-10-21: it printed NO while wlp1s0 had in fact returned as a netdev and
+    # NM reconnected seconds later).  The real verdict is the netdev STATE:
+    # `wlp1s0:disconnected` = wlan.ko re-attached (OK, NM will connect),
+    # `wlp1s0:unavailable` = the post-resume WEDGE (see §25.3).
+    if [ "${WIFI_WATCH_A:-0}" -gt 0 ]; then
+        say "STEP7 WATCH_A end: $(nmst) — conclusion: came back by itself? $(nmcli -t -f DEVICE,STATE dev | grep -q wlp1s0:connected && echo YES || echo NO)"
+    else
+        say "STEP7 WATCH_A end: $(nmst) — window 0s (tracer): auto-reconnect NOT measured; the netdev state above IS the verdict (disconnected = wlan.ko back, unavailable = wedged), wlan refs=$(lsmod 2>/dev/null | awk '$1=="wlan"{print $3}')"
+    fi
     if [ "$RESTORE_WIFI" = 1 ]; then
         say "STEP7 explicit re-enable: nmcli radio wifi on -> $(nmcli radio wifi on 2>&1; echo rc=$?)"
         systemctl start erhai-wifi-discover.service 2>/dev/null && say "STEP7 discover sweeper restarted"

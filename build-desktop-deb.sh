@@ -29,6 +29,7 @@ for f in usr/local/sbin/erhai-user-groups.sh \
 	 usr/local/sbin/erhai-power-watch.py \
 	 usr/local/sbin/erhai-suspend-gnome.sh \
 	 usr/local/sbin/erhai-suspend-s2idle.sh \
+	 usr/local/sbin/erhai-suspend-wlan-guard.sh \
 	 etc/systemd/system/systemd-suspend.service.d/erhai-s2idle.conf \
 	 usr/local/sbin/erhai-folio-fold.py \
 	 usr/local/sbin/erhai-folio-gate.sh \

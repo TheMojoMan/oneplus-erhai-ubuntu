@@ -1,8 +1,9 @@
 [Unit]
 Description=erhai ADSP OTG session re-arm (revive CC attach detection after USB-C detach)
-# Triggered by udev rule 70-erhai-otg-rearm.rules on Type-C port change /
-# partner remove events. See /usr/local/sbin/erhai-otg-rearm.sh.
+# Started by udev rule 70-erhai-otg-rearm.rules ONLY when its PROGRAM gate reports a
+# real detach edge (the port emits a phantom "change" every ~4 s, which used to start
+# this unit ~15x/min).  See /usr/local/sbin/erhai-otg-rearm.sh (check|rearm|status).
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/sbin/erhai-otg-rearm.sh
+ExecStart=/usr/local/sbin/erhai-otg-rearm.sh rearm

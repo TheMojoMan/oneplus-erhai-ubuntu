@@ -1,6 +1,17 @@
 #!/bin/bash
 set -e
 
+# 2026-09-14 masked this unit and renamed the rule to .disabled for a clean-boot
+# experiment ("RE-ENABLE LATER when USB-C detach->CC-attach recovery is needed again").
+# Undo both so every detach self-heals again.  The rule is now edge-gated by
+# PROGRAM=.../check + RESULT=="edge", so the ~4 s phantom port0 change uevent this
+# line emits can never spawn the unit any more (it used to, ~15x/min).
+if [ -d /run/systemd/system ]; then
+	rm -f /etc/udev/rules.d/70-erhai-otg-rearm.rules.disabled \
+	      /etc/systemd/system/erhai-otg-rearm.service.disabled
+	systemctl unmask erhai-otg-rearm.service >/dev/null 2>&1 || true
+fi
+
 # Reload systemd + udev state after install/upgrade so the new rule and unit
 # are live without a reboot. The udev trigger itself only fires on Type-C
 # events, so nothing runs until the next detach/attach.

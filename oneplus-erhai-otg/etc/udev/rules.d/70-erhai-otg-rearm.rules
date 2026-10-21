@@ -1,9 +1,15 @@
 # erhai (OnePlus Pad 3): re-arm the ADSP OTG session after Type-C detach.
 # After a detach the ADSP CC attach detection can stay dead until the session
-# is re-armed (see /usr/local/sbin/erhai-otg-rearm.sh).
+# is re-armed (see /usr/local/sbin/erhai-otg-rearm.sh) -- replugs stay invisible.
 #
-# Trigger on port0 "change"; the script does the detach-edge detection
-# (marker file) so the re-arm write's own change uevents cannot loop.
-# NOTE: ACTION=="remove" + SYSTEMD_WANTS never fires (systemd drops the
-# start request for deleted devices) - do not rely on remove rules.
-ACTION=="change", SUBSYSTEM=="typec", KERNEL=="port0", TAG+="systemd", ENV{SYSTEMD_WANTS}="erhai-otg-rearm.service"
+# EDGE GATE (2026-10-21): the original rule started the service on EVERY port0
+# "change" uevent, but this line emits a PHANTOM change every ~4.03 s with no
+# partner/role information in the payload, so the service ran ~15x/min and the
+# mechanism was disabled on 2026-09-14.  `PROGRAM=... check` is a cheap edge
+# detector run inside udev (no service spawn); RESULT=="edge" only matches when a
+# partner was seen and then disappeared -- i.e. a REAL detach.
+# NOTE: ACTION=="remove" + SYSTEMD_WANTS never fires (systemd drops the start
+# request for an already-deleted device) - do not rely on remove rules.
+ACTION=="change", SUBSYSTEM=="typec", KERNEL=="port0", \
+  PROGRAM="/usr/local/sbin/erhai-otg-rearm.sh check", RESULT=="edge", \
+  TAG+="systemd", ENV{SYSTEMD_WANTS}="erhai-otg-rearm.service"

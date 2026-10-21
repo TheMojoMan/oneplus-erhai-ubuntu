@@ -17,7 +17,7 @@ cd060f1f656a07b9af4dfbb182c269f8  etc/systemd/system/erhai-power-toggle.service
 934bddc8df0068758428ca6e9dc1ba2a  etc/systemd/system/erhai-rtc-sync.service
 2621ff7dd6ef1cd5c0b5b08709576da2  etc/systemd/system/erhai-rtc-sync.timer
 b7d70ae00a046f13eb2095ab31e86671  etc/systemd/system/erhai-touchscreen.service
-8c2d14401d762de3c1b0a6b26749a6a2  etc/systemd/system/systemd-suspend.service.d/erhai-s2idle.conf
+449241d6e52f1df03d67acb34edde1a1  etc/systemd/system/systemd-suspend.service.d/erhai-s2idle.conf
 1549212aa03231d646aedf1ccd87ff08  etc/udev/rules.d/71-erhai-folio-udev.rules
 1203acd4aeafd7664865ac415ef77be6  etc/udev/rules.d/81-erhai-pogo-touchpad.rules
 3997d498709d8bea8f366fb236e72ccb  etc/udev/rules.d/99-nvt-touch-calibration.rules
@@ -39,8 +39,9 @@ c467f14af4efe2f93aa0bc31667a5d50  usr/local/sbin/erhai-panel-power.sh
 de6e899429cb709ba3d5c3828db2f9a1  usr/local/sbin/erhai-pogo-osk.py
 e3147e6336d4bddb175a4bb4317218cc  usr/local/sbin/erhai-power-watch.py
 b60c6831263f6164fa46fc842d14931a  usr/local/sbin/erhai-rtc-sync.py
-16186b42ae913d64c0f42e49d8a7e421  usr/local/sbin/erhai-suspend-gnome.sh
-11f1b3665016eed3ef1d97140b8679ae  usr/local/sbin/erhai-suspend-s2idle.sh
+6f98d5d7a1896ef533fe40e83a76eeb7  usr/local/sbin/erhai-suspend-gnome.sh
+6fb45a3ac77528d5f66de6af5d008b5d  usr/local/sbin/erhai-suspend-s2idle.sh
+1fc610bdc3ff38aeb4dcfa95602dd647  usr/local/sbin/erhai-suspend-wlan-guard.sh
 16b1e8005c725dd47ed687ba7032e094  usr/local/sbin/erhai-touch-rebind.sh
 1525ffc93a2fb55b818a8eccf0c2cfcd  usr/local/sbin/erhai-user-groups.sh
 7cc0c817e42043635b67a853eb0d5748  usr/local/share/gdm/greeter/wayland-sessions/gnome-greeter.desktop
