@@ -241,10 +241,20 @@ PKG_NAME="$(awk '/^Package:/{print $2; exit}' "$SNAP/DEBIAN/control")"
 # used to carry its own PACKAGE-wide next_deb_rev, which is what made a new
 # release line continue the old line's numbering -- dropped 2026-09-22.)
 DEB_REV="${DEB_REV:-${INNER_NAME##*+b}}"
+# 2026-10-21 (.clinerules): a PR / TEST build uses a "<N>-test-MM" revision --
+# e.g. DEB_REV=28-test-01 -> Version 7.3.0-rc5-sm8750-themojoman+b28-test-01 and
+# UKI 7.3.0-rc5-l1-b28-test-01.efi.  N is the CURRENT line number, i.e. REUSED,
+# never advanced: the +b<N> counter belongs to released builds only, so a test
+# build can never be mistaken for a release and the next real build (+b29)
+# supersedes every test build.  Bare "+b<N>" stays the release form.
 case "$DEB_REV" in
 ''|*[!0-9]*)
-	echo "ERROR: cannot derive +b<N> from '$INNER_NAME' (pass DEB_REV=<n>)." >&2
-	exit 1 ;;
+	case "$DEB_REV" in
+	[0-9]*-test-*) ;;                 # <N>-test-MM -> allowed (test build)
+	*)
+		echo "ERROR: cannot derive +b<N> from '$INNER_NAME' (pass DEB_REV=<n> for a release, or DEB_REV=<n>-test-MM for a PR/test build)." >&2
+		exit 1 ;;
+	esac ;;
 esac
 DEB_VERSION="${KVER}+b${DEB_REV}"
 sed -i "s/^Version: .*/Version: ${DEB_VERSION}/" "$SNAP/DEBIAN/control"
