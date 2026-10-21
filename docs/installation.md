@@ -49,7 +49,7 @@ This guide walks you through the download and setup process to dual-boot **Ubunt
 | :--- | :--- |
 | [erhai-TWRP.img](https://github.com/TheMojoMan/oneplus-erhai-ubuntu/releases/download/installer-20261018/erhai-TWRP.img) | Recovery to access the disk, partition it and flash the installer |
 | [erhai-setup_partitions.sh](https://github.com/TheMojoMan/oneplus-erhai-ubuntu/releases/download/installer-20261018/erhai-setup_partitions.sh) | Creates `esp` / `linux` / `data` partitions — and can put the disk back for Android only |
-| [erhai-ubuntu-installer.zip](https://github.com/TheMojoMan/oneplus-erhai-ubuntu/releases/download/installer-20261018/erhai-ubuntu-installer.zip) | Everything in one flashable zip: Ubuntu rootfs, ESP/boot files, dual-boot bootloader patch |
+| [erhai-ubuntu_installer.zip](https://github.com/TheMojoMan/oneplus-erhai-ubuntu/releases/download/installer-20261018/erhai-ubuntu_installer.zip) | Everything in one flashable zip: Ubuntu rootfs, ESP/boot files, dual-boot bootloader patch |
 | [erhai-bootpatch.zip](https://github.com/TheMojoMan/oneplus-erhai-ubuntu/releases/download/installer-20261018/erhai-bootpatch.zip) | **NOT NEEDED NOW!** Sideload when Ubuntu is already installed and whenever Android overwrites bootloader at update |
 
 
@@ -117,11 +117,11 @@ fastboot reboot recovery
 ```
 4. In TWRP: **Cancel** → **Advanced** → **ADB Sideload** → swipe, then on your PC:
 ```bash
-adb sideload erhai-ubuntu-installer.zip
+adb sideload erhai-ubuntu_installer.zip
 ```
 First time will throw an error -> **Cancel** → **Back** → **Advanced** → **ADB Sideload** → swipe, then again on your PC:
 ```bash
-adb sideload erhai-ubuntu-installer.zip
+adb sideload erhai-ubuntu_installer.zip
 ```
 Second time should be OK. Image is fully flashed at ~47% (don't ask me why not 100%).
 
