@@ -139,6 +139,16 @@ if [ -d /run/systemd/system ]; then
 			>/dev/null 2>&1 || true
 	fi
 	systemctl try-restart erhai-folio-gate.service >/dev/null 2>&1 || true
+	# erhai: ONE owner-tagged blank state since 2.20 (/run/erhai-panel.state,
+	# "<owner> <epoch>") instead of the two markers /run/erhai-panel-off and
+	# /run/erhai-folio-fold-blanked that every consumer had to test separately.
+	# erhai-panel-state-migrate.sh translates a blank that is in force RIGHT NOW
+	# (an upgrade in a live session must not lose it) and drops the old markers;
+	# the two watchers are then restarted so the code in memory cannot keep
+	# writing them.  /run is volatile, so a fresh boot has no state either way.
+	/usr/local/sbin/erhai-panel-state-migrate.sh || true
+	systemctl try-restart erhai-power-toggle.service >/dev/null 2>&1 || true
+	systemctl try-restart erhai-folio-fold.service >/dev/null 2>&1 || true
 	if [ -d /run/udev ]; then
 		# Re-apply the pogo touchpad integration tag on the running system
 		# (the pinned tablet-mode kernel + libinput need the touchpad

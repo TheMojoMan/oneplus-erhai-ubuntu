@@ -1,5 +1,5 @@
 Package: oneplus-erhai-desktop
-Version: 2.17
+Version: 2.22
 Section: utils
 Priority: optional
 Architecture: all
@@ -240,3 +240,81 @@ Description: Desktop glue for the OnePlus Pad 3 (erhai)
  Tests: tmp/panel-latency/gpu-external-test.sh (16 cases: pin/leave/graceful
  read-only/multi-connector/rule-content) + order-test.sh cases G-I (external
  monitor: no park, no compositor teardown, GPU re-pinned).
+ Since 2.18 a blank has ONE owner and that is ENFORCED (2026-10-22).  A
+ power-button blank was measured being undone from OUTSIDE - the kernel
+ re-enabled the DSI panel 12 min into a 51-minute blank (1 s after a folio fold,
+ `nvt_ts_panel_power_on`), the session was AWAKE behind the stale marker, and
+ from then on every press drove the DPU and the backlight correctly while the
+ screen stayed black until a reboot.  erhai-power-watch.py therefore watches two
+ signals while it owns the blank - `nvt_ts_panel_power_on` in /dev/kmsg (a CRTC
+ enable the compositor never asked for) and
+ org.gnome.ScreenSaver.ActiveChanged(false) (the session waking up behind a dark
+ screen, which an ungrabbed input device can cause) - and answers with
+ `erhai-panel-power.sh reassert [--cycle]`: the blank is put back, the lamp is
+ forced dark again (deactivating the screensaver makes gsd-power restore its own
+ brightness), and the marker, the brightness MEMORY and the GPU park are left
+ alone because they belong to the press that started the blank.  It never acts
+ while a monitor is attached (that blank is backlight-only by design, 2.17),
+ never over a folio-owned blank, at most once every 3 s, and BLANK_INTEGRITY=0 in
+ /etc/erhai/display.conf (or ERHAI_BLANK_INTEGRITY=0) disables it.  Tests:
+ tmp/panel-latency/blank-integrity-test.py (39 cases) + reassert-test.sh (23).
+ Since 2.19 an UNFOLD IS A COVER OPEN and always wakes the panel (owner, after
+ 2.18 made the blank survive: *"power button -> display dark -> keyboard folded
+ up -> waited -> folded down -> display still dark! -> power key -> display lit
+ up"*).  When the blank is the power button's, erhai-folio-fold.py hands it back
+ THROUGH THE POWER PATH (new POWER_CMD -> `erhai-panel-power.sh on`), which
+ clears /run/erhai-panel-off AND restores the lamp from the brightness memory, so
+ the power button's state machine agrees with the panel - the old "restore the
+ lamp, keep the marker" form made the next press a no-op.  A fold that finds the
+ panel already dark (power button, idle DPMS) is REMEMBERED so the unfold can act
+ on it, while an idle-DPMS blank (no marker) is still left alone;
+ UNFOLD_RELEASES_POWER_BLANK=0 in /etc/erhai/folio-fold.conf restores the
+ previous "leave it off" behaviour.  `erhai-panel-power.sh on` now also drops the
+ marker BEFORE it lights the panel: a lit panel next to a "blanked" marker is
+ exactly the window in which the blank-integrity monitor would start a re-assert
+ in the middle of a restore, and it no longer exists; the monitor additionally
+ ignores both detectors for 5 s around a press.  Tests: tmp/folio-test/selftest.sh
+ 32 checks (H-M = the cover-open ownership rules incl. the opt-out and the
+ idle-DPMS case) + blank-integrity-test.py 44.
+ Since 2.20 the two blank markers are ONE owner-tagged state file:
+ /run/erhai-panel.state, one line "<owner> <epoch>", owner = power | folio.  The
+ file existing means "the panel is wanted OFF" and the owner says who asked —
+ the two watchers (erhai-power-watch.py for the power key, erhai-folio-fold.py for
+ the cover) read and write exactly this file, whoever blanks first owns it, a
+ press or fold while it is there is a no-op, and whoever restores CLEARS it, so
+ the "dark marker next to a lit panel" state that the pair of markers kept
+ producing cannot be written any more.  A missing or garbled owner is treated as
+ "blanked, owner unknown" (never light a panel on unreadable state), the folio
+ blanks lightly (lamp only) and the power button deeply (lamp, park, DPU/DSI
+ teardown), and erhai-panel-power.sh `on` drops the state BEFORE it lights the
+ lamp so the blank-integrity monitor can never fight a restore.  The postinst
+ migrates a blank that is in force during an upgrade and restarts both watchers;
+ erhai-folio-unblank.sh (the stop safety net) and erhai-backlight-fixed.sh read
+ the same single file.  Tests: tmp/folio-test/panel-state-test.sh (the shared
+ format, bash <-> Python, malformed cases), selftest.sh, cover-open-live.sh.
+ Since 2.21 a PRESS-AND-HOLD on the power key is the blind escape: holding it for
+ POWER_HOLD_REBOOT_S (default 8 s, 0 disables; /etc/erhai/display.conf, env
+ ERHAI_HOLD_REBOOT_S) makes erhai-power-watch.py ask systemd for a CLEAN reboot
+ (systemctl reboot), so a black screen with a live SoC no longer needs a hard
+ reset - a power cut that loses the journal and every forensic marker - and it
+ fires BEFORE whatever the PMIC's own long-press reset does.  The configured
+ logind long-press poweroff never fired on this pad (measured 2026-10-22
+ 13:13:10 + 13:14:03: "Power key pressed long." with no shutdown started), which
+ is why the escape lives in the watcher that already reads the key.  A short
+ press still toggles the panel AT ONCE (the hold never delays it), one escape per
+ hold with the release re-arming it, and a failed systemctl is logged, not
+ retried.  Tests: tmp/panel-latency/powerhold-test.py (24 cases, fake clock) +
+ hold-reboot-live-test.sh (6 cases: a FIFO-fed power key against the real daemon
+ with recorder stubs for the panel and the reboot command).
+ Since 2.22 the watcher also RECORDS display-pipeline errors: it scans every
+ /dev/kmsg line for `dpu error`, `frame done timeout`, `dsi_cmds2buf_tx`,
+ `vblank timeout`, `wait for commit done returned`, `commit done failed` and
+ `failed to map buffer`, logs each to the journal (rate limited) and to the
+ fsync'd survivor log, and writes the NEWEST one to /run/erhai-display-error
+ (printed by tmp/panel-blank-diag/grabstate.sh).  Why: on 2026-10-22 (boot -1) a
+ press -> fold -> unfold left the panel BLACK with the backlight at 40 % while
+ gnome-shell was awake and unblanking (it relaunched DING on every unblank), the
+ CRTC/panel were enabled and the touch firmware reloaded on every press - and NOT
+ ONE kernel error was logged, so whatever the kernel does print must be kept with
+ a timestamp.  Tests: tmp/panel-latency/blank-integrity-test.py (58 cases, incl.
+ the recorder).

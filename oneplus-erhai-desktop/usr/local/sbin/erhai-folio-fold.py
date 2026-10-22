@@ -37,21 +37,29 @@
 # Only the FOLD is ever applied at startup; a start in the open state leaves
 # the backlight alone, so a power-button blank is never undone by this service.
 #
-# WHO OWNS THE BLANK (2026-10-22): the backlight has TWO owners — this watcher
-# and the power button (erhai-panel-power.sh, marker /run/erhai-panel-off).
-# They must never undo each other:
-#   * a FOLD only claims the blank when the panel was still lit when the fold
-#     started (i.e. when OUR toggle is the one that blanked it).  If the panel
-#     was already off (power button, idle DPMS) the fold just suppresses the
-#     input and remembers nothing — the marker is not written, so nothing this
+# WHO OWNS THE BLANK (2.20): the backlight has TWO owners — this watcher and the
+# power button (erhai-panel-power.sh) — and they share ONE owner-tagged state file
+# (/run/erhai-panel.state, "<owner> <epoch>", see the note further down).  They
+# must never undo each other:
+#   * a FOLD only claims the state when the panel was still lit when the fold
+#     started (i.e. when OUR toggle is the one that blanked it).  If the panel was
+#     already off (power button, idle DPMS) the fold just suppresses the input and
+#     remembers that a fold happened — it does NOT write the state, so nothing this
 #     service does later (unfold, stop, crash recovery) can light the panel up.
-#   * an UNFOLD (and a stop) restores the backlight ONLY while the marker says
-#     we own the blank AND the power button's marker is absent.
-# Before that rule, "power-button blank -> fold -> unfold" restored the panel
-# while the power button still held it off (measured 2026-10-22 09:18 off ...
-# 09:35:11 "UNFOLDED -> backlight on" with /run/erhai-panel-off present), which
-# left the power button's own state machine out of sync: the next press only
-# deleted the marker and the panel stayed on.
+#   * an UNFOLD is a COVER OPEN and always wakes the panel (UNFOLD_RELEASES_
+#     POWER_BLANK=1, the default).  When the state is OURS we restore it with our
+#     toggle; when the POWER BUTTON owns it we hand it back THROUGH THE POWER PATH
+#     (`erhai-panel-power.sh on`), which clears the state and restores the lamp
+#     from the brightness memory — so the button's own state machine stays in sync.
+# Why the wake (owner report 2026-10-22 evening: *"power button -> display dark
+# -> keyboard folded up -> waited -> folded down -> display still dark! -> power
+# key -> display lit up"*): the unfold ALREADY wakes the session — the folio's
+# own keys are input and gnome-shell answers by enabling the display behind our
+# blank (measured: KEY 184/185 + `nvt_ts_panel_power_on` 1 s later) — so holding
+# the panel dark leaves an awake desktop behind a black screen, which is both
+# confusing and the state that made the blank look broken.  The earlier fix
+# (leaving the power blank alone and only clearing the state, no restore) made
+# the next press a no-op; restoring through the power path has neither problem.
 import argparse
 import errno
 import fcntl
@@ -67,9 +75,14 @@ import sys
 import time
 
 CONF_DEFAULT = "/etc/erhai/folio-fold.conf"
-STATE_DEFAULT = "/run/erhai-folio-fold-blanked"
+# THE BLANK STATE (2.20): ONE owner-tagged file shared with the power button —
+# one line "<owner> <epoch>", owner = power | folio (format defined by
+# erhai-panel-power.sh, pinned by tmp/folio-test/panel-state-test.sh).  The file
+# EXISTING means "the panel is wanted OFF" and the owner says who asked, which is
+# all this watcher and erhai-power-watch.py need to keep from undoing each other.
+STATE_DEFAULT = "/run/erhai-panel.state"
 TOGGLE_DEFAULT = "/usr/local/sbin/erhai-display-toggle.sh"
-PANEL_OFF_DEFAULT = "/run/erhai-panel-off"   # the power button's blank marker
+POWER_DEFAULT = "/usr/local/sbin/erhai-panel-power.sh"   # the power button path
 BL_GLOB = "/sys/class/backlight/*/actual_brightness"
 DEBUGFS_GPIO = "/sys/kernel/debug/gpio"
 TLMM_MARK = "f100000.pinctrl"
@@ -101,6 +114,46 @@ def backlight_file(override=None):
     for p in sorted(glob.glob(BL_GLOB)):
         return p
     return ""
+
+
+def state_owner(path=STATE_DEFAULT):
+    """The owner recorded in the shared blank state ('power'/'folio'/'').
+
+    Empty string means "no blank", and an unreadable owner is left as-is: the
+    caller must treat "file exists but owner is garbage" as blanked (never light a
+    panel on state we cannot parse).
+    """
+    try:
+        with open(path) as fh:
+            line = fh.readline().split()
+    except OSError:
+        return ""
+    return line[0] if line else ""
+
+
+def state_set(owner, path=STATE_DEFAULT):
+    """Claim the blank for `owner` (see the format note above)."""
+    try:
+        with open(path, "w") as fh:
+            fh.write(f"{owner} {int(time.time())}\n")
+    except OSError as exc:
+        log(f"cannot write the blank state {path}: {exc}")
+
+
+def state_clear(path=STATE_DEFAULT):
+    """Release the blank."""
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
+def state_release_if_ours(path=STATE_DEFAULT):
+    """Drop the state only while WE own it (never erase the power button's)."""
+    if state_owner(path) in ("folio", ""):
+        state_clear(path)
+        return True
+    return False
 
 
 def read_brightness(override=None):
@@ -297,10 +350,14 @@ class FoldWatcher:
         self.log_signal = cfg_int(cfg, "LOG_SIGNAL", 0) == 1
         self.toggle = args.toggle_cmd.split() if args.toggle_cmd else \
             shlex.split(cfg.get("TOGGLE_CMD") or TOGGLE_DEFAULT)
+        # The POWER path, used when an unfold has to hand a power-button blank
+        # back (see the ownership note at the top of this file).
+        self.power = args.power_cmd.split() if args.power_cmd else \
+            shlex.split(cfg.get("POWER_CMD") or POWER_DEFAULT)
+        self.unfold_wakes = cfg_int(cfg, "UNFOLD_RELEASES_POWER_BLANK", 1) == 1
         self.state_file = args.state_file
         self.dry = args.dry_run
         self.bl_file = args.backlight_file
-        self.panel_off_marker = args.panel_off_marker
         # suppress the PANEL's own input while the panel is blanked by us (the
         # folded keyboard presses the glass and would otherwise ghost-tap the
         # desktop — touch AND pen node, see GRAB_NAMES)
@@ -315,8 +372,16 @@ class FoldWatcher:
         except OSError:
             self.mtime = None
         self.state = None            # None | "open" | "folded"
-        # inherit a blank from a previous instance of this service
-        self.blanked = (not self.dry) and os.path.exists(self.state_file)
+        # A fold that found the panel ALREADY dark (power button, idle DPMS): the
+        # blank is not ours, but the fold still happened — the unfold after it is
+        # a cover open and may have to release the POWER button's blank.
+        self.dark_fold = False
+        # inherit a blank from a previous instance of this service: we own the
+        # shared state only while it EXISTS and says so — a garbled owner counts as
+        # ours (so a hand-edited file cannot leave a dark panel behind forever),
+        # but an ABSENT file is simply "no blank" (state_owner() is "" for both)
+        self.blanked = (not self.dry and os.path.exists(self.state_file)
+                        and state_owner(self.state_file) in ("folio", ""))
         if self.blanked:
             log("inherited a blanked panel from a previous run")
             self.state = "folded"
@@ -355,39 +420,57 @@ class FoldWatcher:
         except Exception as exc:
             log(f"toggle {action} failed: {exc}")
 
+    def run_power(self, action):
+        """Run the POWER BUTTON's script (erhai-panel-power.sh).
+
+        Opening the folio hands a power-button blank back through this path and
+        not through our own toggle: `on` clears the shared blank state, restores
+        the lamp from the brightness memory and re-pins the GPU — the button's
+        state machine then agrees with the panel, which is what the old
+        "restore the lamp, keep the marker" behaviour got wrong.
+        """
+        if self.dry:
+            log(f"[dry-run] would run: {' '.join(self.power)} {action}")
+            return
+        try:
+            r = subprocess.run([*self.power, action], timeout=20)
+            if r.returncode != 0:
+                log(f"panel-power {action} exited {r.returncode}")
+        except Exception as exc:
+            log(f"panel-power {action} failed: {exc}")
+
     def set_blanked(self, on):
+        """Claim the shared blank for us, or release it while it is OURS."""
         self.blanked = on
         if self.dry:
             return
-        try:
-            if on:
-                with open(self.state_file, "w") as fh:
-                    fh.write(f"{time.time():.0f}\n")
-            elif os.path.exists(self.state_file):
-                os.unlink(self.state_file)
-        except OSError as exc:
-            log(f"state file {self.state_file}: {exc}")
+        if on:
+            state_set("folio", self.state_file)
+        else:
+            state_release_if_ours(self.state_file)
 
     # -- blank ownership ---------------------------------------------------
     def blank_owner(self):
         """Whoever already holds the panel off, or None while it is LIT.
 
-        The power button (erhai-panel-power.sh) writes /run/erhai-panel-off and
-        owns that blank until its next press, so a blank it created must survive
-        a fold/unfold cycle.  A blank with no marker at all (idle DPMS, the
-        login greeter, ...) is equally not ours to undo.  The backlight value is
-        the second half of the test on purpose: a STALE marker next to a lit
-        panel must not stop the power button (erhai-panel-power.sh asks the same
-        pair before it skips a press).
+        The shared state file names the owner (format note at the top of this
+        file): the power button blanks deeply and owns it until its next press,
+        this watcher blanks lightly while the folio is folded.  A dark panel with
+        NO state at all (idle DPMS, the login greeter, ...) is equally not ours to
+        undo, and the backlight value is part of the test on purpose: a STALE state
+        next to a lit panel is not a blank, it is state to be cleaned up.
         """
-        if os.path.exists(self.panel_off_marker):
+        owner = state_owner(self.state_file)
+        if owner == "power":
             return "power button"
+        if owner:
+            return owner          # "folio" (or a garbled value, reported as-is)
         if read_brightness(self.bl_file) == 0:
             return "another blank (idle DPMS)"
         return None
 
     def power_button_holds_blank(self):
-        return os.path.exists(self.panel_off_marker)
+        return state_owner(self.state_file) == "power"
 
     # -- input suppression while folded (ghost-touch/-pen) ------------------
     def grab_touch(self):
@@ -438,22 +521,55 @@ class FoldWatcher:
             if owner:
                 # The panel was already off before we acted: that blank belongs
                 # to someone else (the power button), so we must NOT claim it -
-                # no marker, and nothing here can undo it later.
+                # no marker, and nothing here can undo it later.  We do remember
+                # that the FOLD happened, so the unfold can treat it as a cover
+                # open (see the unfolded branch).
                 self.blanked = False
-                log(f"panel was already blanked by the {owner} -> fold remembered "
-                    "only, that blank is never undone by this watcher")
+                self.dark_fold = True
+                if owner == "power button":
+                    log("panel was already blanked by the power button -> fold "
+                        "remembered only, that blank is never claimed by this "
+                        "watcher")
+                else:
+                    log(f"panel was already dark ({owner}) -> fold remembered, "
+                        "nothing to claim and nothing to restore")
             else:
                 self.set_blanked(True)
+                self.dark_fold = False
             self.grab_touch()
             return
         self.ungrab_touch()
         if not self.blanked:
+            if self.dark_fold and self.power_button_holds_blank():
+                self.dark_fold = False
+                if self.unfold_wakes:
+                    # A COVER OPEN after a fold that found the panel already dark
+                    # by the power button: release it through the POWER path so
+                    # the marker goes away with the lamp (see the note at the top).
+                    log("UNFOLDED -> the power button's blank is released "
+                        "(opening the folio wakes the panel)")
+                    self.run_power("on")
+                else:
+                    log("UNFOLDED -> backlight left off (the power button owns that "
+                        "blank; UNFOLD_RELEASES_POWER_BLANK=0)")
+                return
+            self.dark_fold = False
             log("starts in the OPEN state -> backlight left untouched"
                 if initial else
                 "UNFOLDED -> the backlight was not blanked by us, no action")
             return
         if self.power_button_holds_blank():
-            log("UNFOLDED -> backlight left off (the power button owns that blank)")
+            if self.unfold_wakes:
+                # COVER SEMANTICS: opening the folio is the same intent as
+                # pressing the power key, and the unfold has already woken the
+                # session (the folio's keys are input), so the panel comes back
+                # through the POWER path (marker cleared, brightness memory used).
+                log("UNFOLDED -> the power button's blank is released "
+                    "(opening the folio wakes the panel)")
+                self.run_power("on")
+            else:
+                log("UNFOLDED -> backlight left off (the power button owns that "
+                    "blank; UNFOLD_RELEASES_POWER_BLANK=0)")
             self.set_blanked(False)
             return
         log("UNFOLDED -> backlight on")
@@ -516,23 +632,20 @@ class FoldWatcher:
             return False
 
 
-def unblank_stale(state_file, toggle_cmd=None, dry_run=False, marker=None):
-    """Restore the panel if a previous run left it blanked (marker present).
+def unblank_stale(state_file, toggle_cmd=None, dry_run=False):
+    """Restore the panel if a previous run of THIS service left it blanked.
 
-    Never when the POWER BUTTON owns the blank (/run/erhai-panel-off): that
-    marker outlives this service and only the next power press may undo it.
+    Only while the shared state says the blank is OURS (owner 'folio' — or a
+    garbled owner, which only this service could have written): the power button's
+    blank outlives this service and only its next press may undo it.
     """
+    owner = state_owner(state_file)
+    if owner == "power":
+        log("a stale blank state exists, but the power button owns the panel "
+            "blank -> leaving it off")
+        return False
     if not os.path.exists(state_file):
         return False
-    if os.path.exists(marker or PANEL_OFF_DEFAULT):
-        log("a stale blank marker exists, but the power button owns the panel "
-            "blank -> leaving it off")
-        if not dry_run:
-            try:
-                os.unlink(state_file)
-            except OSError:
-                pass
-        return True
     log("watcher is idle/disabled while the panel is blanked -> restoring it")
     if not dry_run:
         cmd = shlex.split(toggle_cmd or TOGGLE_DEFAULT)
@@ -540,10 +653,7 @@ def unblank_stale(state_file, toggle_cmd=None, dry_run=False, marker=None):
             subprocess.run([*cmd, "on"], timeout=10)
         except Exception as exc:
             log(f"restore failed: {exc}")
-        try:
-            os.unlink(state_file)
-        except OSError:
-            pass
+        state_release_if_ours(state_file)
     return True
 
 
@@ -555,15 +665,15 @@ def main(argv=None):
                     "folio is folded onto the screen.")
     ap.add_argument("--config", default=CONF_DEFAULT, metavar="FILE")
     ap.add_argument("--state-file", default=STATE_DEFAULT, metavar="FILE",
-                    help="marker file written while we hold the panel blanked")
+                    help="the SHARED blank state file (owner-tagged; also read and "
+                         "written by the power button) — default %s" % STATE_DEFAULT)
     ap.add_argument("--toggle-cmd", default=None, metavar="CMD",
                     help="override TOGGLE_CMD (used by tests)")
+    ap.add_argument("--power-cmd", default=None, metavar="CMD",
+                    help="override POWER_CMD, the power button's script (tests)")
     ap.add_argument("--backlight-file", default=None, metavar="FILE",
                     help="'actual_brightness' path used to tell a blank apart "
                          "(default: the first /sys/class/backlight/ entry)")
-    ap.add_argument("--panel-off-marker", default=PANEL_OFF_DEFAULT, metavar="FILE",
-                    help="the power button's blank marker (default %s)"
-                         % PANEL_OFF_DEFAULT)
     ap.add_argument("--dry-run", action="store_true",
                     help="log the transitions but never touch the backlight")
     ap.add_argument("--duration", type=float, default=0.0, metavar="SECS",
@@ -575,7 +685,7 @@ def main(argv=None):
         cfg = load_conf(a.config)
         if cfg_int(cfg, "ENABLED", 0) != 1 or not cfg.get("SIGNAL"):
             unblank_stale(a.state_file, a.toggle_cmd or cfg.get("TOGGLE_CMD"),
-                          a.dry_run, a.panel_off_marker)
+                          a.dry_run)
             now = time.time()
             if now - logged >= UNCONFIGURED_LOG_S:
                 logged = now
@@ -592,7 +702,7 @@ def main(argv=None):
         source = open_signal(cfg)
         if source is None:
             unblank_stale(a.state_file, a.toggle_cmd or cfg.get("TOGGLE_CMD"),
-                          a.dry_run, a.panel_off_marker)
+                          a.dry_run)
             if a.duration:
                 return 1
             time.sleep(CONFIG_RECHECK_S)

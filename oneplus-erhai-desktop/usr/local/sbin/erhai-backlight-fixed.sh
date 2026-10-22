@@ -32,9 +32,9 @@ if [ "$cur" = 0 ]; then
 	log "panel is blanked (actual_brightness 0) - not touching it"
 	exit 0
 fi
-for m in /run/erhai-panel-off /run/erhai-folio-fold-blanked; do
+for m in /run/erhai-panel.state; do
 	if [ -e "$m" ]; then
-		log "blank marker $m present - not touching the panel"
+		log "blank state $m present ($(read -r o _ < "$m"; echo "${o:-unknown}")) - not touching the panel"
 		exit 0
 	fi
 done

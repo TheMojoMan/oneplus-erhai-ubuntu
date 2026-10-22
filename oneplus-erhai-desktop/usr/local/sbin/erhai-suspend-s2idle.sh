@@ -296,7 +296,7 @@ fi
 # in the evdev ring buffer and delivered to erhai-power-watch.py after resume
 # (kernel input core: the event is only read by clients whose fd was open AT
 # the time). With the watcher running it treats that same physical press as a
-# NEW toggle and calls erhai-panel-power.sh — which, with no /run/erhai-panel-off
+# NEW toggle and calls erhai-panel-power.sh — which, with no /run/erhai-panel.state
 # marker and the panel still physically down, BLANKS the freshly-restored
 # screen (seen 18:42:14-16: STEP6 display on -> nvt_ts_suspend). Stopping the
 # service closes its fd, so the wake event is never delivered to it; the fresh

@@ -26,6 +26,7 @@ for f in usr/local/sbin/erhai-user-groups.sh \
 	 usr/local/sbin/erhai-touch-rebind.sh \
 	 usr/local/sbin/erhai-display-toggle.sh \
 	 usr/local/sbin/erhai-panel-power.sh \
+	 usr/local/sbin/erhai-panel-state-migrate.sh \
 	 usr/local/sbin/erhai-power-watch.py \
 	 usr/local/sbin/erhai-suspend-gnome.sh \
 	 usr/local/sbin/erhai-suspend-s2idle.sh \

@@ -252,29 +252,70 @@ or removes the same patch outside the package.
 `pkill -f ding.js` makes gnome-shell respawn it with the new files (a full
 logout/login or reboot is the safe path).
 
-## Panel blanks have one owner — and a blanked panel is deaf (2.15)
+## The blind escape: press-and-hold = CLEAN reboot (2.21)
 
-Two features blank the internal panel, and until 2.15 they did not know about
-each other:
+A black screen with a live SoC used to have exactly one exit: a **hard reset** — a
+power cut that loses the journal and every forensic marker (that is how the
+2026-10-22 "blank, fold, display never came back" session ended).  The configured
+logind long-press poweroff never fired on this pad either (`Power key pressed
+long.` at 13:13:10 and 13:14:03, no shutdown started).
 
-| blank | marker | what owns it |
-|-------|--------|--------------|
-| power button (`erhai-panel-power.sh`) | `/run/erhai-panel-off` | the power button, until its next press |
-| folio folded onto the screen (`erhai-folio-fold.py`) | `/run/erhai-folio-fold-blanked` | the watcher, until the folio opens |
+So the watcher that already reads the key owns the escape: **hold the power key**
+for `POWER_HOLD_REBOOT_S` (default **8 s**) and `erhai-power-watch.py` runs
+`systemctl reboot` — a clean shutdown that keeps the journal and every marker.
 
-**The bug this fixes.** Turning the display off with the power button and then
-folding the keyboard up (and opening it again) switched the panel back on: the
-watcher claimed whatever blank it found, so the unfold "restored" a blank the
-power button still held (`/run/erhai-panel-off` was present the whole time) —
-and the power button's next press then only deleted its marker, so the screen
-stayed on. A fold now claims the blank **only when the panel was still lit when
-the fold started**; if the panel was already off (power button, idle DPMS) the
-fold just suppresses the input and writes no marker, so nothing the watcher does
-later (unfold, stop, restart, unconfigured-idle) can light that panel up. The
-power button skips a blank the folio already holds (it checks the folio's marker
-AND the backlight, so a stale marker next to a lit panel can never block it),
-and `erhai-folio-unblank.sh` (the stop safety net) leaves a power-button blank
-alone.
+* a **short press** still toggles the panel **immediately** (the hold never delays
+  it), and a hold fires **before** whatever the PMIC's own long-press reset does;
+* **one escape per hold**; the release re-arms it;
+* `POWER_HOLD_REBOOT_S=0` (or `ERHAI_HOLD_REBOOT_S=0`) disables it, e.g. if you
+  ever want the old "long press does nothing" behaviour;
+* the action is logged (`power key held 8s -> CLEAN REBOOT (systemctl reboot)`) and
+  written to the fsync'd survivor log, so a post-mortem shows it;
+* a failing `systemctl` is logged, not retried (the hardware reset is still there).
+
+Verify / drive it:
+
+```
+journalctl -u erhai-power-toggle -b | tail -5     # "press-and-hold escape at 8s"
+tmp/panel-latency/powerhold-test.py               # 24 unit cases (fake clock)
+tmp/panel-latency/hold-reboot-live-test.sh        # 6 live cases (FIFO-fed key)
+```
+
+## The blank state: TWO watchers, ONE owner-tagged file (2.20)
+
+Two features blank the internal panel, and they must not undo each other:
+
+| blank | how it is applied | what owns it |
+|-------|-------------------|--------------|
+| power button (`erhai-panel-power.sh`) | **deep**: lamp, GPU park, DPU/DSI teardown (`ScreenSaver.SetActive`) | until its next press |
+| folio folded onto the screen (`erhai-folio-fold.py`) | **light**: lamp only (instant, no teardown) | until the folio opens |
+
+Up to 2.19 each had its OWN marker file (`/run/erhai-panel-off` and
+`/run/erhai-folio-fold-blanked`) and every consumer had to test both, in the right
+order, against the backlight value — which is how the pair of markers produced the
+"dark marker next to a lit panel" states (the 09:18 bug: an unfold restored a
+panel the power button still held, so the button's next press was a no-op).
+
+**Since 2.20 there is ONE file**, `/run/erhai-panel.state`, one line
+`<owner> <epoch>` with owner = `power` | `folio`:
+
+* the file **existing** means "the panel is wanted OFF"; its **owner** says who
+  asked — that is all the two watchers need to keep from undoing each other;
+* whoever blanks first owns it, a press (or a fold) while it already exists is a
+  no-op, and **whoever restores clears it**, so "dark marker, lit panel" cannot be
+  written any more;
+* an **unfold is a cover open**: it always wakes the panel, and when the owner is
+  the power button it hands the state back THROUGH the power path
+  (`erhai-panel-power.sh on`, which clears the file *before* it lights the lamp, so
+  the blank-integrity monitor can never see a lit panel next to "blanked" state);
+* a missing or garbled owner is treated as "blanked, owner unknown": never light a
+  panel on state we cannot read;
+* `UNFOLD_RELEASES_POWER_BLANK=0` in `/etc/erhai/folio-fold.conf` keeps a
+  power-button blank through an unfold instead.
+
+The format is one line of text on purpose (bash and Python both read it with no
+dependency), and `tmp/folio-test/panel-state-test.sh` pins bash's and Python's
+views of it to each other, including the malformed cases.
 
 **The ghost input.** While folded, the folio lies on the glass, so the panel's
 own input devices must be suppressed — and the *touch* node alone is not enough:
@@ -287,26 +328,27 @@ now grabbed while folded (`NVTCapacitiveTouchScreen` + `NVTCapacitivePen`;
 `GRAB_DEVICES` in `/etc/erhai/folio-fold.conf` overrides the list).
 
 `erhai-power-watch.py` applies the same suppression for as long as **its** blank
-lasts: `EVIOCGRAB` on both panel nodes while `/run/erhai-panel-off` exists *and*
-the backlight reads 0, released before the panel is restored. It is
-fail-safe by construction — the grab belongs to the fds, so the process dying
-(including the deliberate stop the suspend harness does) releases it — and
-`PANEL_INPUT_GUARD=0` in `/etc/erhai/display.conf` (or
-`ERHAI_PANEL_INPUT_GUARD=0`) disables it. The power key is **never** grabbed: it
-is the only way out of a blank.
+lasts: `EVIOCGRAB` on both panel nodes while the state file exists *and* the
+backlight reads 0, released before the panel is restored. It is fail-safe by
+construction — the grab belongs to the fds, so the process dying (including the
+deliberate stop the suspend harness does) releases it — and `PANEL_INPUT_GUARD=0`
+in `/etc/erhai/display.conf` (or `ERHAI_PANEL_INPUT_GUARD=0`) disables it. The
+power key is **never** grabbed: it is the only way out of a blank.
 
 Verify / drive it from a shell:
 
 ```
 journalctl -t erhai-folio -b | tail            # FOLDED/UNFOLDED, GRABBED/RELEASED
 journalctl -u erhai-power-toggle -b | tail -20 # guard lines while blanked
-ls -l /run/erhai-panel-off /run/erhai-folio-fold-blanked
+cat /run/erhai-panel.state                     # the owner, or "No such file"
 ```
 
-Tests (workspace `tmp/folio-test/`): `selftest.sh` (26 cases: state machine +
-the ownership rules H-K), `ownership-test.py` (15), `powerwatch-guard-test.py`
-(16), `live-grab-test.py` (9 — grabs the REAL nodes as root and proves with a
-second `EVIOCGRAB` that they are exclusively held, then released).
+Tests (workspace `tmp/folio-test/`): `selftest.sh` (state machine + the ownership
+rules H-M), `ownership-test.py`, `powerwatch-guard-test.py`,
+`panel-state-test.sh` (the shared format, bash <-> Python), `cover-open-live.sh`
+(the real watcher + the real panel script with fakes), `live-grab-test.py` (grabs
+the REAL nodes as root and proves with a second `EVIOCGRAB` that they are
+exclusively held, then released).
 
 ## The panel blank is high priority and immediate (2.16)
 

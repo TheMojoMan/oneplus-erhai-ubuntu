@@ -5,6 +5,9 @@
 #   erhai-panel-power.sh          toggle   (power button)
 #   erhai-panel-power.sh off      real panel teardown (with GPU parked first)
 #   erhai-panel-power.sh on       restore display + re-pin GPU
+#   erhai-panel-power.sh reassert [--cycle]   put a blank that something ELSE
+#                                 undid (kernel re-enabled the panel / the session
+#                                 woke up) back where the power button left it
 #
 # WHY THIS SEQUENCE (b29, gpu-MEMORY-2026-09-12.md):
 #   * The display-off silent POR is a race between display teardown and the
@@ -45,25 +48,52 @@
 #   * The post-run `dmesg` tail (53-168 ms of forks) moved off the user path.
 #
 # The click sounds, brightness memory and alsd guard come from
-# erhai-display-toggle.sh (it plays the audio as the session user). State is
-# /run/erhai-panel-off.
+# erhai-display-toggle.sh (it plays the audio as the session user).
+#
+# THE BLANK STATE (2.20): ONE owner-tagged file, /run/erhai-panel.state, one line
+# "<owner> <epoch>", owner = power | folio.  The file EXISTING means "the panel is
+# wanted OFF"; its owner says who asked, and that is all the two watchers (the
+# power key and the folio) need to keep from undoing each other:
+#   * the power button blanks DEEPLY (lamp, GPU park, DPU/DSI teardown) and owns
+#     the file while that is in force,
+#   * the folio blanks LIGHTLY (lamp only — it must stay cheap and instant) and
+#     owns the file while IT is in force,
+#   * a press while the file is already there is a no-op (the owner keeps it), and
+#     `on` clears the file, so the state machine can never end up "dark marker,
+#     lit panel" — the stale-state trap that the old pair of markers had.
+# A missing or garbled owner is treated as "blanked, owner unknown": never light a
+# panel on state we cannot read.
+# FORMAT is pinned by tmp/folio-test/panel-state-test.sh (bash <-> python).
 
 set -u
 ACTION=${1:-toggle}
 PARK_WAIT=${PARK_WAIT:-1.5}         # best-effort fresh-park budget before teardown
 ON_SETTLE_MS=${ON_SETTLE_MS:-0}     # settle between SetActive false and the lamp
+RESYNC_GAP_MS=${RESYNC_GAP_MS:-200} # `reassert --cycle`: compositor round-trip gap
 LOG=${LOG:-/media/data/develop/erhai/tmp/gpu-hang-capture/panel-power.log}
 SURVLOG=${ERHAI_SURVLOG:-/usr/local/sbin/erhai-surv-log}
 GPU=${ERHAI_GPU:-/sys/devices/platform/soc@0/3d00000.gpu/power}
 TOGGLE=${ERHAI_TOGGLE:-/usr/local/sbin/erhai-display-toggle.sh}
-MARKER=${ERHAI_MARKER:-/run/erhai-panel-off}
-FOLIO_MARKER=${ERHAI_FOLIO_MARKER:-/run/erhai-folio-fold-blanked}
+STATE=${ERHAI_PANEL_STATE:-/run/erhai-panel.state}
 DP_STATUS=${ERHAI_DP_STATUS:-/sys/class/drm/card1-DP-1/status}
 BL=${ERHAI_BL:-/sys/class/backlight/ktz8868-backlight}
 USER_NAME=${ERHAI_SESSION_USER:-themojoman}
 UID_N=$(id -u "$USER_NAME" 2>/dev/null || echo 1000)
 GID_N=$(id -g "$USER_NAME" 2>/dev/null || echo 1000)
 RT=/run/user/$UID_N
+
+state_owner() {   # prints the owner (may be empty), non-zero when no blank
+    [ -e "$STATE" ] || return 1
+    local o=''
+    read -r o _ < "$STATE" 2>/dev/null || true
+    printf '%s' "$o"
+}
+state_set() {     # $1 = owner: claim the blank
+    printf '%s %s\n' "$1" "$(date +%s)" > "$STATE" 2>/dev/null
+}
+state_clear() { rm -f "$STATE"; }
+state_is_blanked() { [ -e "$STATE" ]; }
+blank_is_dark() { [ "$(cat "$BL/actual_brightness" 2>/dev/null)" = 0 ]; }
 GENPD=/sys/kernel/debug/pm_genpd/pm_genpd_summary
 
 # Ahead of everything else: a few hundred ms of work that must not queue behind
@@ -144,15 +174,14 @@ pin_gpu() {
     say "pin: cannot write $GPU/control"
     return 1
 }
-# The folio-fold watcher (erhai-folio-fold.py) blanks the panel while the pogo
-# keyboard lies on the screen and OWNS that blank until the folio is opened.
-# A power press must not create a second, power-button-owned blank on top of it
-# (that used to leave two markers and made the next press a no-op): nothing to
-# do while the folio holds it.  The backlight value is part of the test so a
-# STALE folio marker next to a lit panel can never block the power button.
-folio_holds_blank() {
-    [ -e "$FOLIO_MARKER" ] || return 1
-    [ "$(cat "$BL/actual_brightness" 2>/dev/null)" = 0 ] || return 1
+# The folio-fold watcher (erhai-folio-fold.py) blanks the panel LIGHTLY while the
+# pogo keyboard lies on the screen and OWNS that state until the folio is opened.
+# A power press must not claim a second, power-owned blank on top of it (that used
+# to leave two markers and made the next press a no-op): nothing to do while the
+# state file names another owner.
+state_owned_by_folio() {
+    [ -e "$STATE" ] || return 1
+    [ "$(state_owner)" = folio ] || return 1
     return 0
 }
 park_gpu() {    # unpin + wait for a FRESH runtime park (best-effort, BOUNDED)
@@ -178,22 +207,28 @@ park_gpu() {    # unpin + wait for a FRESH runtime park (best-effort, BOUNDED)
 }
 
 do_off() {
-    [ -e "$MARKER" ] && { say "off: already off (marker present)"; return 0; }
-    if folio_holds_blank; then
-        say "off: folio-fold watcher holds the panel blanked -> nothing to do"
-        return 0
+    if state_is_blanked; then
+        if blank_is_dark; then
+            say "off: already blanked (state: $(state_owner))"
+            return 0
+        fi
+        # The state says blanked but the panel is LIT: a stale state (a script that
+        # was killed mid-blank, a hand-written file).  Drop it and take the blank
+        # properly — the old pair of markers made this a permanent no-op.
+        say "off: stale state ($(state_owner)) next to a lit panel -> taking over"
+        state_clear
     fi
     if external_up; then
         say "off: DP-1 connected -> backlight-only fallback (GPU stays ACTIVE)"
         "$TOGGLE" off
-        touch "$MARKER"
+        state_set power
         pin_gpu
         say "off: fallback done $(snap)"
         return 0
     fi
     say "off: blank begin $(snap)"
     "$TOGGLE" off                 # 1) VISIBLE: the panel goes dark NOW
-    touch "$MARKER"               # 2) the blank has an owner before anything slow
+    state_set power               # 2) the blank has an owner before anything slow
     park_gpu                      # 3) best-effort GPU park (bounded)
     say "off: SetActive true -> $(ss_active true)"   # 4) real DPU/DSI teardown
     say "off: done $(snap)"
@@ -203,12 +238,20 @@ do_off() {
 }
 
 do_on() {
-    [ -e "$MARKER" ] || { say "on: already on (no marker)"; return 0; }
+    state_is_blanked || { say "on: already on (no blank state)"; return 0; }
+    local was; was=$(state_owner)
+    say "on: restoring (state was ${was:-unknown}) bl=$(cat "$BL/actual_brightness" 2>/dev/null)"
+    # The blank stops being in force the moment we decide to restore, so the state
+    # file goes FIRST: every other actor (the input guard's blanked(), the folio
+    # watcher, erhai-power-watch.py's BLANK INTEGRITY monitor — which fires on the
+    # panel-on record this call is about to produce, ~10-50 ms later) must never
+    # see a LIT panel next to a state that says "blanked".  That window is exactly
+    # what makes a re-assert fight a restore.
+    state_clear
     if external_up; then
         say "on: DP-1 connected -> backlight-only restore (GPU re-pinned)"
         "$TOGGLE" on
         pin_gpu
-        rm -f "$MARKER"
         say "on: fallback done $(snap)"
         return 0
     fi
@@ -222,13 +265,74 @@ do_on() {
     fi
     "$TOGGLE" on
     pin_gpu
-    rm -f "$MARKER"
     say "on: done $(snap)"
 }
 
+# REASSERT (2026-10-22, sensor-MEMORY-2026-10-22.md §9): the blank is OURS and
+# something OUTSIDE this path undid it.  Measured on boot 866f5cf7b7464aa7: the
+# DSI panel was re-enabled by the kernel 12 min into a 51-min blank (right at a
+# folio fold, `nvt_ts_panel_power_on`), the session was awake behind the stale
+# marker, and after that NO press produced a picture again until a reboot - the
+# half-on state (panel enabled, nobody asked for it) is what a screen that never
+# comes back looks like.
+#
+# The marker, the brightness MEMORY and the GPU park are left exactly as they
+# are - they belong to the press that started the blank.  The only goal is that
+# the panel ends where the power button put it: dark, with the DPU/DSI REALLY
+# torn down.
+#   reassert          the session woke up behind the blank (an input event from a
+#                     device the blank does not grab) -> blank it again
+#   reassert --cycle  the panel was enabled BEHIND the compositor's back -> give
+#                     the compositor a real false->true round trip, because a
+#                     plain SetActive true is a no-op while the compositor
+#                     already believes it is blanked (and the CRTC would stay up)
+reassert() {
+    local cycle=no was
+    [ "${1:-}" = "--cycle" ] && cycle=yes
+    [ -e "$STATE" ] || { say "reassert: no blank to protect"; return 0; }
+    if state_owned_by_folio && blank_is_dark; then
+        say "reassert: the folio owns this blank -> nothing to do"
+        return 0
+    fi
+    if external_up; then
+        # With a monitor attached the blank is backlight-only ON PURPOSE (the
+        # desktop keeps rendering on the DP output, 2.17), so an "awake session"
+        # is the normal state there - blanking it would kill the user's monitor.
+        say "reassert: DP-1 is connected (backlight-only blank) -> nothing to do"
+        return 0
+    fi
+    was=$(cat "$BL/actual_brightness" 2>/dev/null)
+    if [ "$cycle" = yes ]; then
+        say "reassert: the panel came back behind the compositor -> round trip (bl=$was)"
+        say "reassert: SetActive false -> $(ss_active false)"
+        # Keep the lamp dark THROUGH the round trip: deactivating the screensaver
+        # makes gsd-power restore its own brightness, and a flash of the desktop
+        # is not part of "the panel is off".
+        if [ "$(cat "$BL/actual_brightness" 2>/dev/null)" != 0 ]; then
+            echo 0 > "$BL/brightness" 2>/dev/null \
+                && say "reassert: lamp held at 0 through the round trip"
+        fi
+        sleep "$(awk -v m="$RESYNC_GAP_MS" 'BEGIN { printf "%.3f", m / 1000 }')"
+        say "reassert: SetActive true -> $(ss_active true)"
+    else
+        say "reassert: the session woke up behind the blank -> re-blanking (bl=$was)"
+        say "reassert: SetActive true -> $(ss_active true)"
+    fi
+    # The lamp must END dark.  Deactivating the screensaver makes gsd-power
+    # restore its own brightness, so a plain re-blank can leave a LIT panel
+    # behind.  erhai-display-toggle.sh must NOT be used here: it would store that
+    # restored value as the brightness to come back to, and it plays a click.
+    if [ "$(cat "$BL/actual_brightness" 2>/dev/null)" != 0 ]; then
+        echo 0 > "$BL/brightness" 2>/dev/null \
+            && say "reassert: the lamp was lit again -> forced back to 0"
+    fi
+    say "reassert: done $(snap)"
+}
+
 case "$ACTION" in
-    off)    do_off ;;
-    on)     do_on ;;
-    toggle) if [ -e "$MARKER" ]; then do_on; else do_off; fi ;;
-    *) say "unknown action '$ACTION' (use on|off|toggle)"; exit 2 ;;
+    off)      do_off ;;
+    on)       do_on ;;
+    reassert) reassert "${2:-}" ;;
+    toggle)   if [ -e "$STATE" ]; then do_on; else do_off; fi ;;
+    *) say "unknown action '$ACTION' (use on|off|toggle|reassert)"; exit 2 ;;
 esac
