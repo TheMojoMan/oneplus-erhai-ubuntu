@@ -7,6 +7,20 @@ Type=simple
 ExecStart=/usr/local/sbin/erhai-power-watch.py
 Restart=always
 RestartSec=2
+# The panel path must not queue behind a compile/encode (owner 2026-10-22: "the
+# display off/on task needs high priority — it can take several seconds before
+# the screen turns off when a process with high CPU load is running").  The
+# daemon itself is idle (it blocks in select) and spawns only the short panel
+# script, which raises itself to -20 again and keeps this value if renice is
+# unavailable.  CPU weight/IO weight keep the press responsive under load; it is
+# NOT a foreground-guarantee (the compositor still handles the unblank at its own
+# priority).
+Nice=-20
+CPUWeight=10000
+IOWeight=10000
+IOSchedulingClass=best-effort
+IOSchedulingPriority=0
+OOMScoreAdjust=-500
 
 [Install]
 WantedBy=multi-user.target

@@ -149,6 +149,11 @@ if [ -d /run/systemd/system ]; then
 		# the watcher starts without waiting for an attach/detach edge.
 		udevadm trigger --action=change --subsystem-match=serial \
 			>/dev/null 2>&1 || true
+		# 72-erhai-gpu-external.rules: if an external display is connected
+		# right now, re-pin the GPU (the power-button blank parks it, and a
+		# monitor must never find it parked).
+		udevadm trigger --action=change --subsystem-match=drm \
+			>/dev/null 2>&1 || true
 	fi
 fi
 udevadm control --reload >/dev/null 2>&1 || true

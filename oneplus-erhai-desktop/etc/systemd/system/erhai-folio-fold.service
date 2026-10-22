@@ -14,3 +14,11 @@ ExecStopPost=/usr/local/sbin/erhai-folio-unblank.sh
 TimeoutStopSec=10
 Restart=always
 RestartSec=2
+# A fold must reach the backlight promptly too, but this watcher runs a
+# continuous magnetometer stream (ssccli), so it only takes a moderate bump: the
+# toggle script it spawns raises itself to -20 for the actual blank.
+Nice=-5
+CPUWeight=5000
+IOWeight=5000
+IOSchedulingClass=best-effort
+IOSchedulingPriority=0

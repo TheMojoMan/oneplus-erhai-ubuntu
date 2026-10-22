@@ -26,6 +26,14 @@ BL=/sys/class/backlight/ktz8868-backlight
 STATE=/run/erhai-display-last-brightness
 ACTION=${1:-toggle}
 
+# The blank/unblank must not queue behind a compile/encode (owner 2026-10-22):
+# a fold or a power press needs the panel dark NOW, and this script is what both
+# paths use.  Only root may renice; the value dies with the script.
+if [ "$(id -u)" = 0 ]; then
+    renice -n -20 -p $$ >/dev/null 2>&1 || true
+    ionice -c2 -n0 -p $$ >/dev/null 2>&1 || true
+fi
+
 CLICK=/usr/share/sounds/erhai/panel-off.wav
 CLICK_ON=/usr/share/sounds/erhai/panel-on.wav
 SOUND_PLAYER=$(command -v pw-play 2>/dev/null \
@@ -53,6 +61,19 @@ session_user() {
     done
 }
 
+# Run a command as the session user.  setpriv is preferred over runuser: no PAM
+# round trip, measured 4x faster under CPU load (the click must not sit behind a
+# compile either).
+run_as_user() {   # $1 user, $2 uid, $3 gid, rest = command
+    local u=$1 uid=$2 gid=$3
+    shift 3
+    if command -v setpriv >/dev/null 2>&1; then
+        setpriv --reuid="$uid" --regid="$gid" --init-groups "$@"
+    else
+        runuser -u "$u" -- "$@"
+    fi
+}
+
 # play a sound file through the session audio (never blocking the toggle)
 play_file() {
     case "${1:-}" in ''|off|0|no) return 0 ;; esac
@@ -64,14 +85,15 @@ play_file() {
         u=$(session_user)
         [ -n "$u" ] || return 0
         uid=$(id -u "$u" 2>/dev/null) || return 0
+        gid=$(id -g "$u" 2>/dev/null) || gid=$uid
         rt=/run/user/$uid
         [ -d "$rt" ] || return 0
         if [ -n "$SOUND_PLAYER" ]; then
-            runuser -u "$u" -- env XDG_RUNTIME_DIR="$rt" \
+            run_as_user "$u" "$uid" "$gid" env XDG_RUNTIME_DIR="$rt" \
                 DBUS_SESSION_BUS_ADDRESS="unix:path=$rt/bus" \
                 "$SOUND_PLAYER" "$1" >/dev/null 2>&1 &
         else
-            runuser -u "$u" -- env XDG_RUNTIME_DIR="$rt" \
+            run_as_user "$u" "$uid" "$gid" env XDG_RUNTIME_DIR="$rt" \
                 DBUS_SESSION_BUS_ADDRESS="unix:path=$rt/bus" \
                 canberra-gtk-play --id=bell >/dev/null 2>&1 &
         fi

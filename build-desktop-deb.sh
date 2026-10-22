@@ -34,6 +34,8 @@ for f in usr/local/sbin/erhai-user-groups.sh \
 	 usr/local/sbin/erhai-folio-fold.py \
 	 usr/local/sbin/erhai-folio-gate.sh \
 	 usr/local/sbin/erhai-folio-unblank.sh \
+	 usr/local/sbin/erhai-gpu-external-pin.sh \
+	 etc/udev/rules.d/72-erhai-gpu-external.rules \
 	 usr/local/sbin/erhai-folio-calibrate \
 	 usr/local/sbin/erhai-folio-probe.py \
 	 etc/udev/rules.d/71-erhai-folio-udev.rules \
@@ -165,6 +167,16 @@ mkdir -p "$SRC/usr/share/sounds/erhai"
 for f in usr/share/sounds/erhai/panel-off.wav usr/share/sounds/erhai/panel-on.wav; do
 	[ -s "$SRC/$f" ] || { echo "missing $f in $SRC" >&2; exit 1; }
 done
+
+# Pre-pack guard: a Python bytecode cache is NOT payload.  A test that imports a
+# script from this tree (importlib over usr/local/sbin/erhai-*.py) writes
+# __pycache__ next to it, and a .pyc shipped in the deb would be a stale,
+# root-owned copy of the script that dpkg -V cannot check against the source.
+if find "$SRC" \( -name __pycache__ -o -name '*.pyc' \) -print -quit | grep -q .; then
+	echo "refusing to pack: Python bytecode cache inside $SRC" >&2
+	find "$SRC" \( -name __pycache__ -o -name '*.pyc' \) >&2
+	exit 1
+fi
 
 find "$SRC" -type d -exec chmod 755 {} \;
 chmod 755 "$SRC"/DEBIAN/postinst

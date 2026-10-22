@@ -1,0 +1,11 @@
+# erhai (OnePlus Pad 3): a DP monitor over USB-C must never find the Adreno
+# runtime-parked.
+#
+# erhai-panel-power.sh parks the GPU on purpose when the INTERNAL panel is
+# switched off (`echo auto`), but the external display keeps rendering — and this
+# pad's policy is that the Adreno is always pinned active (erhai-gpu-pin.sh,
+# 2026-09-13: the unpinned path is where the GMU resume hang / display POR came
+# from).  DRM connectors emit KOBJ_CHANGE on attach/detach/modeset, so this fires
+# on every DP connector event; the helper filters on the connector status and is
+# idempotent (~2 reads when nothing has to change).
+ACTION=="add|change", SUBSYSTEM=="drm", KERNEL=="card*-DP-*", RUN+="/usr/local/sbin/erhai-gpu-external-pin.sh"

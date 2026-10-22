@@ -1,5 +1,5 @@
 Package: oneplus-erhai-desktop
-Version: 2.14
+Version: 2.17
 Section: utils
 Priority: optional
 Architecture: all
@@ -165,3 +165,78 @@ Description: Desktop glue for the OnePlus Pad 3 (erhai)
  park can never exist without its record) and only a recorded park is released,
  exactly once; the manual switch keeps its own record in
  /etc/default/erhai-charge.  No kernel change is needed.
+ Since 2.15 the PANEL BLANK HAS ONE OWNER AT A TIME, and a blanked panel is
+ DEAF.  Two features blank this panel - the power button (marker
+ /run/erhai-panel-off) and the folio-fold watcher (marker
+ /run/erhai-folio-fold-blanked) - and the watcher used to claim ANY blank it saw
+ and restore it on unfold: turning the display off with the power button, then
+ folding the pogo keyboard up and opening it again, lit the panel back up while
+ the power button still held it off (measured 2026-10-22 09:18 off ... 09:35:11
+ "UNFOLDED -> backlight on" with /run/erhai-panel-off present), which left the
+ power button's own state machine out of sync - its next press only deleted the
+ marker and the screen stayed on.  The watcher now claims the blank ONLY when
+ the panel was still lit when the fold started, never restores while the power
+ button's marker exists (unfold, shutdown and the idle/unconfigured path all
+ honour that), and erhai-panel-power.sh skips a blank the folio already holds.
+ And the fold used to grab the TOUCH node only, while the folded keyboard lying
+ on the glass also makes the panel's PEN node emit frames - live proof
+ 2026-10-22 09:23:57/09:24:34, DURING a grabbed fold: libinput "event5 -
+ NVTCapacitivePen: Ignoring pressure offset greater than 50%" - so those
+ reached the compositor as pointer activity and woke the session behind a
+ dark screen.  Both panel nodes (NVTCapacitiveTouchScreen + NVTCapacitivePen,
+ GRAB_DEVICES to override) are suppressed while folded, and erhai-power-watch.py
+ suppresses them for as long as ITS blank lasts too (EVIOCGRAB, released
+ before the panel comes back, dies with the process, PANEL_INPUT_GUARD=0 in
+ /etc/erhai/display.conf disables) - the power key is never grabbed.  Tests:
+ tmp/folio-test/{selftest.sh (26),ownership-test.py (15),
+ powerwatch-guard-test.py (16),live-grab-test.py (9, real nodes)}.
+ Since 2.16 the PANEL BLANK IS HIGH PRIORITY AND IMMEDIATE.  The owner reported
+ that turning the display off "can take several seconds before the screen turns
+ off when a process with high CPU load is running", and that a resume from s2idle
+ brings the display back faster than the power button does - both were true:
+   * ORDER - the old sequence was park GPU -> SetActive true -> sleep 2 ->
+     backlight off, and the park waits for the GPU to runtime-suspend, which does
+     NOT happen while the desktop renders (measured >5.5 s idle, 1.7 s under load,
+     budget 10 s), so the panel stayed LIT for 2-12 s after the press.  The
+     visible blank (erhai-display-toggle.sh off) is now the FIRST action, the
+     ownership marker follows, THEN the bounded park (PARK_WAIT, default 1.5 s)
+     and the DPU/DSI teardown - the park-before-teardown ordering that fixed the
+     POR is unchanged, only its wait is bounded and it no longer delays the dark
+     screen.  do_on dropped its sleep 3 + sleep 1: the s2idle harness has always
+     restored the lamp back-to-back with SetActive false (STEP6) and that is the
+     proven path (the DSI rail is down while the panel is dark, so an early lamp
+     shows nothing); ON_SETTLE_MS keeps a knob in case a flash is ever seen.
+   * PRIORITY - erhai-power-toggle.service runs at Nice=-20 with CPUWeight/
+     IOWeight 10000 and best-effort I/O priority 0, and both panel scripts renice
+     themselves to -20 (children inherit) so nothing queues behind a compile;
+     erhai-folio-fold.service takes a moderate -5 (it runs a magnetometer stream).
+   * FORKS - the compositor call uses setpriv instead of runuser (no PAM round
+     trip: 26 ms vs 101 ms under 8 sysbench threads), the click player likewise,
+     say()/snap() no longer spawn date/cut/tee/cat/grep/awk (bash builtins +
+     redirects), the 50-170 ms dmesg tail moved off the user path, and the
+     daemon's per-press survivability line is fire-and-forget.
+   Measured after the change: backlight dark 16 ms idle / 47 ms under 8-thread
+   load, lamp restored 13 ms / 35 ms, and the whole `off` stays under 0.5 s even
+   when the GPU never parks (was 2-12 s).  Tests: tmp/panel-latency/
+   {order-test.sh (19 stub-driven ordering + latency + ownership cases),
+   probe.sh (per-stage timings, LOAD=1 for the loaded case), measure-e2e.sh
+   (real path on demand, clicks muted)}.
+ Since 2.17 the GPU IS NEVER PARKED WHILE AN EXTERNAL DISPLAY IS CONNECTED
+ (owner: *"Make sure that GPU is NOT parked when external monitor is connected!"*).
+ The power-button blank parks the Adreno on purpose (`echo auto`) - it is only
+ needed to make the GPU/MMCX collapse safe once the internal DPU is torn down -
+ but a DP monitor over USB-C keeps rendering while the panel is off, and this
+ pad's policy is that the Adreno stays pinned always-active (erhai-gpu-pin.sh,
+ 2026-09-13: the unpinned path is where the GMU resume hang and the display POR
+ came from).  Three layers now guarantee it: `park_gpu()` REFUSES to park while
+ DP-1 reads `connected` (and re-pins instead), both `do_off`/`do_on` external
+ fallbacks call `pin_gpu()`, and a new udev rule
+ (etc/udev/rules.d/72-erhai-gpu-external.rules) runs
+ usr/local/sbin/erhai-gpu-external-pin.sh on every card*-DP-* add/change event,
+ which re-pins the GPU when a monitor is attached while the panel is blanked
+ (idempotent: it writes only if a DP connector reads `connected` AND the GPU is
+ not already `on`, so repeated uevents cost two reads).  The postinst also fires
+ a drm trigger so a monitor that is already attached is handled at install time.
+ Tests: tmp/panel-latency/gpu-external-test.sh (16 cases: pin/leave/graceful
+ read-only/multi-connector/rule-content) + order-test.sh cases G-I (external
+ monitor: no park, no compositor teardown, GPU re-pinned).

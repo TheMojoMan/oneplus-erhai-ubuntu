@@ -252,3 +252,128 @@ or removes the same patch outside the package.
 `pkill -f ding.js` makes gnome-shell respawn it with the new files (a full
 logout/login or reboot is the safe path).
 
+## Panel blanks have one owner — and a blanked panel is deaf (2.15)
+
+Two features blank the internal panel, and until 2.15 they did not know about
+each other:
+
+| blank | marker | what owns it |
+|-------|--------|--------------|
+| power button (`erhai-panel-power.sh`) | `/run/erhai-panel-off` | the power button, until its next press |
+| folio folded onto the screen (`erhai-folio-fold.py`) | `/run/erhai-folio-fold-blanked` | the watcher, until the folio opens |
+
+**The bug this fixes.** Turning the display off with the power button and then
+folding the keyboard up (and opening it again) switched the panel back on: the
+watcher claimed whatever blank it found, so the unfold "restored" a blank the
+power button still held (`/run/erhai-panel-off` was present the whole time) —
+and the power button's next press then only deleted its marker, so the screen
+stayed on. A fold now claims the blank **only when the panel was still lit when
+the fold started**; if the panel was already off (power button, idle DPMS) the
+fold just suppresses the input and writes no marker, so nothing the watcher does
+later (unfold, stop, restart, unconfigured-idle) can light that panel up. The
+power button skips a blank the folio already holds (it checks the folio's marker
+AND the backlight, so a stale marker next to a lit panel can never block it),
+and `erhai-folio-unblank.sh` (the stop safety net) leaves a power-button blank
+alone.
+
+**The ghost input.** While folded, the folio lies on the glass, so the panel's
+own input devices must be suppressed — and the *touch* node alone is not enough:
+the folded keyboard also makes the panel's **pen node** emit frames, which reach
+the compositor as pointer/pen activity and wake the session behind the dark
+screen (live proof 2026-10-22 09:23:57 + 09:24:34, 1 s apart, *during* a fold
+whose touch node was already grabbed: `libinput error: event5 -
+NVTCapacitivePen: Ignoring pressure offset greater than 50%`). Both nodes are
+now grabbed while folded (`NVTCapacitiveTouchScreen` + `NVTCapacitivePen`;
+`GRAB_DEVICES` in `/etc/erhai/folio-fold.conf` overrides the list).
+
+`erhai-power-watch.py` applies the same suppression for as long as **its** blank
+lasts: `EVIOCGRAB` on both panel nodes while `/run/erhai-panel-off` exists *and*
+the backlight reads 0, released before the panel is restored. It is
+fail-safe by construction — the grab belongs to the fds, so the process dying
+(including the deliberate stop the suspend harness does) releases it — and
+`PANEL_INPUT_GUARD=0` in `/etc/erhai/display.conf` (or
+`ERHAI_PANEL_INPUT_GUARD=0`) disables it. The power key is **never** grabbed: it
+is the only way out of a blank.
+
+Verify / drive it from a shell:
+
+```
+journalctl -t erhai-folio -b | tail            # FOLDED/UNFOLDED, GRABBED/RELEASED
+journalctl -u erhai-power-toggle -b | tail -20 # guard lines while blanked
+ls -l /run/erhai-panel-off /run/erhai-folio-fold-blanked
+```
+
+Tests (workspace `tmp/folio-test/`): `selftest.sh` (26 cases: state machine +
+the ownership rules H-K), `ownership-test.py` (15), `powerwatch-guard-test.py`
+(16), `live-grab-test.py` (9 — grabs the REAL nodes as root and proves with a
+second `EVIOCGRAB` that they are exclusively held, then released).
+
+## The panel blank is high priority and immediate (2.16)
+
+*"It can take several seconds before the screen turns off when a process with
+high CPU load is running"* — and a resume from s2idle looked faster than the
+power button. Both were real, and both were ordering/priority, not firmware:
+
+| | before 2.16 | 2.16 |
+|---|---|---|
+| actions on `off` | park GPU (budget **10 s**) → `SetActive true` → **sleep 2** → backlight off | **backlight off** → marker → bounded park (**1.5 s**) → `SetActive true` |
+| actions on `on` | `SetActive false` → **sleep 3** → backlight on → GPU pin → **sleep 1** | `SetActive false` → backlight on → GPU pin |
+| the GPU park | waits for a runtime suspend that never comes while the desktop renders (measured >5.5 s idle, 1.7 s under 8 threads) | unchanged ordering (it still precedes the DPU teardown, which is what fixed the silent POR), only the wait is bounded |
+| priority | nice 0, same as any compile | service `Nice=-20` + CPU/IO weight, scripts renice themselves to −20 |
+| compositor call | `runuser` (PAM): 101 ms under load | `setpriv`: 26 ms |
+| `say`/`snap` logging | `date`+`cut`+`tee`, `cat`/`grep`/`awk` per line | bash builtins + redirects |
+| the dmesg tail | 53–168 ms on the user path | backgrounded |
+
+Measured after: **backlight dark 16 ms idle / 47 ms under 8 CPU threads**, lamp
+restored **13 ms / 35 ms**, and the whole `off` stays under 0.5 s even when the
+GPU never parks (it used to be 2–12 s). The `on` path copies what the s2idle
+harness has always done at STEP6 (`SetActive false` → backlight on back-to-back);
+while the DSI rail is down the lit lamp shows nothing, and `ON_SETTLE_MS` is
+there if a flash is ever reported. Nothing in the park-before-teardown order that
+fixed the display-off POR was changed — only how long it waits.
+
+Tools (workspace `tmp/panel-latency/`): `order-test.sh` (19 cases — stub-driven
+ordering, latency, ownership guards), `probe.sh` (per-stage timings; `LOAD=1`
+runs it under 8 sysbench threads), `measure-e2e.sh` (real path, `CONFIRM=1`,
+clicks muted through a temporary display.conf).
+
+## The GPU is never parked while an external display is connected (2.17)
+
+The power-button blank parks the Adreno on purpose (`echo auto`) — the park is
+what makes the GPU/MMCX collapse safe once the internal DPU has been torn down.
+But a **DP monitor over USB-C keeps rendering** while the internal panel is off,
+and this pad's policy is that the Adreno stays **pinned always-active**
+(`erhai-gpu-pin.sh`, 2026-09-13 — the unpinned path is where the GMU resume hang
+and the display silent POR came from). So the two must not meet:
+
+| layer | what it does |
+|---|---|
+| `park_gpu()` in `erhai-panel-power.sh` | **refuses to park** while `card1-DP-1` reads `connected` and re-pins the GPU instead |
+| the `do_off` / `do_on` external fallbacks | call `pin_gpu()` (which only writes when the value is not already `on`) |
+| `etc/udev/rules.d/72-erhai-gpu-external.rules` → `usr/local/sbin/erhai-gpu-external-pin.sh` | on every `card*-DP-*` add/change uevent, re-pins the GPU if a monitor is attached and the GPU is not pinned — this covers a monitor plugged in **while the panel is blanked**, and is idempotent (two reads when nothing has to change) |
+
+The postinst fires a `drm` trigger after install, so a monitor that is already
+attached is handled immediately instead of waiting for the next hotplug.
+
+Tests: `tmp/panel-latency/gpu-external-test.sh` (16 cases: pinned/parked,
+already-pinned (no write), disconnected, no connector, second connector,
+read-only control, and the rule's own content) and `order-test.sh` cases G–I
+(external monitor: backlight-only blank, GPU stays/re-gets `on`, no compositor
+teardown).
+
+## Simulating heavy / full load
+
+```
+sudo bash tmp/panel-latency/load-and-measure.sh              # 8 sysbench threads, 120 s
+sudo CONFIRM=1 bash tmp/panel-latency/load-and-measure.sh    # + measure the panel path
+sudo LOAD=mixed CONFIRM=1 bash tmp/panel-latency/load-and-measure.sh   # + memory load
+sudo GPU=1 CONFIRM=1 bash tmp/panel-latency/load-and-measure.sh        # + fullscreen glmark2
+```
+
+Without `CONFIRM=1` it only starts the load and tells you what to watch while you
+press the power button yourself. The CPU arm alone reproduces the contention
+(the panel path is CPU/fork bound); `GPU=1` adds a real GL ES workload **with the
+thermal harness's GPU-hang watchdog** (GL only — never OpenCL/llama.cpp on this
+Adreno while a session is up). The project's own full-load tool remains
+`tmp/thermal-stress-profiles.sh` (CPU profiles × optional GPU).
+
