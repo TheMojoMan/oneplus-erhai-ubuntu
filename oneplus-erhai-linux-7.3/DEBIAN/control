@@ -1,5 +1,5 @@
 Package: oneplus-erhai-linux-7.3
-Version: 7.3.0-rc5-sm8750-themojoman+b30
+Version: 7.3.0-rc5-sm8750-themojoman+b31
 Architecture: arm64
 Maintainer: TheMojoMan <themojoman@gmx.net>
 Section: kernel
