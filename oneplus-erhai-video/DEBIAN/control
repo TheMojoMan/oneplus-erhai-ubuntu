@@ -1,5 +1,5 @@
 Package: oneplus-erhai-video
-Version: 1.2
+Version: 1.3
 Section: video
 Priority: optional
 Architecture: arm64
@@ -30,3 +30,9 @@ Description: Hardware video decoding for the OnePlus Pad 3 (erhai, SM8750)
  log out and back in once.
  .
  The iris-vaapi source tree ships in /usr/src/oneplus-erhai-video/iris-vaapi.
+ .
+ 1.3 (2026-10-23): the 1.2 payload ALSO shipped the vendored iris-vaapi's .git
+ directory -- 44 entries: the object store, the hooks and commit signatures with the
+ author's identity -- because that build still ran from a tree carrying the clone
+ metadata.  No code changed (the driver is rebuilt from the same source, byte for
+ byte); the tree is clean and build-video-deb.sh now REFUSES to pack a nested .git.

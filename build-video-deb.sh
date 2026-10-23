@@ -28,6 +28,19 @@ install -m755 "$BUILD/iris_drv_video.so" \
 	"$SRC/usr/lib/aarch64-linux-gnu/dri/iris_drv_video.so"
 rm -rf "$BUILD"
 
+# Pre-pack guard: a nested .git in the payload is dev cruft, never payload.  The
+# 1.2 build (2026-09-29) SHIPPED the vendored iris-vaapi's .git -- 44 entries: the
+# object store, the hooks and commit signatures carrying the author's identity --
+# because the tree still had its clone metadata.  The tree is clean since, and this
+# makes a recurrence impossible (the same reason build-desktop-deb.sh refuses a
+# Python bytecode cache: anything a build must never ship is a hard error here).
+if find "$SRC" -name .git -print -quit | grep -q .; then
+	echo "refusing to pack: a nested .git inside $SRC" >&2
+	find "$SRC" -name .git >&2
+	echo "  remove it -- the payload must not carry git metadata" >&2
+	exit 1
+fi
+
 find "$SRC" -type d -exec chmod 755 {} \;
 chmod 644 "$SRC/usr/lib/aarch64-linux-gnu/dri/iris_drv_video.so"
 chmod 644 "$SRC"/etc/udev/rules.d/*.rules "$SRC"/etc/environment.d/*.conf \

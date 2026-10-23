@@ -23,6 +23,7 @@ PKG=$(awk '/^Package:/ {print $2}' "$SRC/DEBIAN/control")
 VER=$(awk '/^Version:/ {print $2}' "$SRC/DEBIAN/control")
 
 for f in usr/local/sbin/erhai-user-groups.sh \
+	 usr/local/sbin/erhai-keyring-unlock.sh \
 	 usr/local/sbin/erhai-touch-rebind.sh \
 	 usr/local/sbin/erhai-display-toggle.sh \
 	 usr/local/sbin/erhai-panel-power.sh \

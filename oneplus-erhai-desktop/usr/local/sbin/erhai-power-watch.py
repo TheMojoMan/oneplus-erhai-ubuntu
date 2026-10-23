@@ -23,6 +23,7 @@ import errno
 import fcntl
 import glob
 import os
+import pwd
 import select
 import shlex
 import signal
@@ -631,17 +632,114 @@ def ss_monitor(uid=1000, gid=1000, rt=None):
         return None
 
 
-SESSION_USER = os.environ.get('ERHAI_SESSION_USER', 'themojoman')
+def _active_graphical_user():
+    """Name of the user of the ACTIVE graphical logind session, or None.
 
-
-def session_ids(user=SESSION_USER):
-    """(uid, gid) of the desktop user, the same default the panel script uses."""
+    The same rule erhai-desktop-users.sh's erhai_active_user() and
+    erhai-display-toggle.sh's session_user() apply: Active=yes AND
+    Type=wayland|x11 AND a human account (uid >= 1000) — a greeter or a system
+    session must never win.
+    """
     try:
-        import pwd
-        p = pwd.getpwnam(user)
-        return p.pw_uid, p.pw_gid
+        out = subprocess.run(['loginctl', 'list-sessions', '--no-legend'],
+                             capture_output=True, text=True, timeout=5).stdout
     except Exception:
-        return 1000, 1000
+        return None
+    for line in out.splitlines():
+        parts = line.split()
+        if not parts:
+            continue
+        try:
+            props = subprocess.run(
+                ['loginctl', 'show-session', parts[0], '-p', 'Active', '-p',
+                 'Type', '-p', 'Name', '-p', 'User'],
+                capture_output=True, text=True, timeout=5).stdout
+        except Exception:
+            continue
+        f = {}
+        for ln in props.splitlines():
+            if '=' in ln:
+                k, v = ln.split('=', 1)
+                f[k] = v
+        if f.get('Active') != 'yes':
+            continue
+        if not (f.get('Type', '').startswith('wayland')
+                or f.get('Type') == 'x11'):
+            continue
+        name, uid = f.get('Name', ''), f.get('User', '')
+        if name and uid.isdigit() and int(uid) >= 1000:
+            return name
+    return None
+
+
+def _human_entry(key, uid=False):
+    """pwd entry for a NAME (str) or a UID (int) — human accounts only."""
+    try:
+        p = pwd.getpwuid(key) if uid else pwd.getpwnam(key)
+    except (KeyError, TypeError, ValueError):
+        return None
+    return p if 1000 <= p.pw_uid < 65534 else None
+
+
+def _first_human_entry():
+    """The first human account — the rule erhai_desktop_users() uses."""
+    for p in pwd.getpwall():
+        if (1000 <= p.pw_uid < 65534 and p.pw_dir.startswith('/home/')
+                and not p.pw_shell.endswith(('nologin', 'false'))):
+            return p
+    return None
+
+
+def session_ids(user=None, lookup=None, active=None, first=None):
+    """(uid, gid) of the desktop user whose session this daemon talks to.
+
+    NEVER a baked-in name: the image can be built with no account at all (gnome-
+    initial-setup creates it on first boot) and this package is installed on
+    other people's pads, where the author's account does not exist — the old
+    default made every session call (the blank-integrity monitor, SetActive)
+    address a user that is not there.  Order, the same as erhai-desktop-users.sh
+    erhai_session_user() and erhai-panel-power.sh:
+
+      1. $ERHAI_SESSION_USER / $ERHAI_USER (an explicit override, must resolve)
+      2. the ACTIVE graphical logind session
+      3. uid 1000 (the first human account by construction)
+      4. the first human account
+
+    It is re-resolved on EVERY call on purpose: this service starts around
+    multi-user.target, i.e. possibly before the user logged in at all, and a
+    logout/login replaces the session bus — so a session that appears later (or
+    a desktop account that is not uid 1000) is picked up by the retry loop.
+    `lookup`/`active`/`first` are injection points for the tests.
+    """
+    lookup = lookup or _human_entry
+    active = active or _active_graphical_user
+    first = first or _first_human_entry
+
+    for name in (user, os.environ.get('ERHAI_SESSION_USER'),
+                 os.environ.get('ERHAI_USER')):
+        if not name:
+            continue
+        p = lookup(name)
+        if p is not None:
+            return p.pw_uid, p.pw_gid
+
+    name = active()
+    if name:
+        p = lookup(name)
+        if p is not None:
+            return p.pw_uid, p.pw_gid
+
+    p = lookup(1000, uid=True)
+    if p is not None:
+        return p.pw_uid, p.pw_gid
+
+    p = first()
+    if p is not None:
+        return p.pw_uid, p.pw_gid
+
+    # Nothing human at all (a pathological system): keep the numeric default so
+    # the setpriv calls stay well formed.  It will simply reach no session.
+    return 1000, 1000
 
 
 def main(argv=None):
@@ -759,6 +857,10 @@ def main(argv=None):
                     next_mon = time.monotonic() + MON_RETRY_S
                     if mon_tries < MON_MAX_TRIES:
                         mon_tries += 1
+                        # Re-resolve: a session may exist by now, and the desktop
+                        # account need not be uid 1000 (session_ids() never bakes
+                        # a name in — see there).
+                        uid, gid = session_ids()
                         if ss_get_active(uid, gid) is False:
                             integrity.act('session-awake')
                         mon = ss_monitor(uid, gid)

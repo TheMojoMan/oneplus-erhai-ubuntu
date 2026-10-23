@@ -203,17 +203,22 @@ else
 fi
 chmod 755 "$ROOTDIR"/usr/local/sbin/erhai-*
 
-# KNOWN GAP (2026-09-28, tracked here so it is not forgotten): the autologin
-# login-keyring unlock is NOT wired into the image yet.  On the running system
-# /etc/pam.d/gdm-autologin carries a
+# CLOSED 2026-10-23: the autologin login-keyring unlock NOW SHIPS in
+# oneplus-erhai-desktop (2.24) -- /usr/local/sbin/erhai-keyring-unlock.sh is a
+# package payload file, it resolves the account at RUN TIME (human accounts only:
+# the uid from PAM_USER, plus the ONE account the pass file's group names -- no
+# name is baked in any more), and that deb's postinst/postrm own the
 #     session optional pam_exec.so seteuid /usr/local/sbin/erhai-keyring-unlock.sh
-# line placed BEFORE pam_gnome_keyring's auto_start, and that helper unlocks the
-# login keyring from /etc/erhai/keyring.pass (root:<desktop-user> 0640) -- without
-# it the first secret reader at login (goa-daemon, Brave/Chromium Safe Storage)
-# pops a gcr prompt.  Neither the helper nor the pass file is owned by a
-# package, and the helper hardcodes the user name, so the right fix is to ship
-# it in oneplus-erhai-desktop with the user resolved at runtime (PAM_USER vs the
-# group owner of keyring.pass) and let that deb's postinst own the pam line.
+# line in /etc/pam.d/gdm-autologin, inserted BEFORE pam_gnome_keyring's
+# auto_start (it must run first: gnome-keyring-daemon can only be STARTED with the
+# password, it cannot unlock a daemon that is already running).  Without it the
+# first secret reader at login (goa-daemon, Brave/Chromium Safe Storage) pops a
+# gcr prompt.  Tests: tmp/keyring-test/keyring-unlock-test.sh (38 checks, the pam
+# logic driven through the ERHAI_PAM_DIR seam).
+# STILL MANUAL (per pad, on purpose): /etc/erhai/keyring.pass holds the password
+# that unlocks the login KEYRING -- it is the user's, not the package's, and after
+# a ROOT-side password change the keyring keeps the OLD password (see
+# sensor-MEMORY-2026-10-22.md §10 and the tools in tmp/keyring-test/).
 # PRESET_USER=0 images never autologin, so nothing is missing for them.
 
 # ------------------------------------------------- system shell extensions ---

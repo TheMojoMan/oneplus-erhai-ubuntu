@@ -168,4 +168,67 @@ if [ -d /run/systemd/system ]; then
 fi
 udevadm control --reload >/dev/null 2>&1 || true
 
+# ---------------------------------------------------------- autologin keyring ---
+# erhai: own the AUTOLOGIN LOGIN-KEYRING UNLOCK (2.24).  gdm-autologin has no
+# password to hand pam_gnome_keyring, so the login keyring stays locked and the
+# first client that reads a secret (goa-daemon, Brave/Chromium "Safe Storage")
+# pops a gcr prompt at every login.  /usr/local/sbin/erhai-keyring-unlock.sh --
+# shipped by THIS package since 2.24 and USERNAME-FREE (it takes the account from
+# PAM_USER) -- unlocks it from /etc/erhai/keyring.pass.
+#
+# /etc/pam.d/gdm-autologin belongs to gdm3, so exactly ONE line is managed here:
+# inserted BEFORE pam_gnome_keyring's auto_start (gnome-keyring-daemon can only be
+# STARTED with the password, it cannot unlock a daemon that is already running --
+# measured 2026-09-20), idempotently, never rewriting the rest of the file.  This
+# runs OUTSIDE the systemd guard below on purpose: an image build (chroot) needs
+# the line too.  It closes the KNOWN GAP tracked in build-root.sh since 2026-09-28.
+PAM_DIR=${ERHAI_PAM_DIR:-/etc/pam.d}
+PAM_FILE=$PAM_DIR/gdm-autologin
+PAM_LINE='session optional        pam_exec.so seteuid /usr/local/sbin/erhai-keyring-unlock.sh'
+PAM_ANCHOR='^session[[:space:]]+optional[[:space:]]+pam_gnome_keyring\\.so'
+PAM_MARKER='erhai-keyring-unlock.sh'          # any line that mentions our helper
+pam_install_line() {
+	[ -f "$PAM_FILE" ] || return 0            # no gdm config, nothing to own
+	if grep -qF "$PAM_MARKER" "$PAM_FILE"; then
+		return 0                          # already ours (idempotent)
+	fi
+	local tmp err
+	tmp=$(mktemp "$PAM_DIR/.erhai-pam.XXXXXX") || return 1
+	if awk -v line="$PAM_LINE" -v anchor="$PAM_ANCHOR" '
+			!done && $0 ~ anchor { print line; done = 1 }
+			{ print }
+			END { if (!done) print line }' "$PAM_FILE" > "$tmp"; then
+		# keep the original's owner/mode (numeric: this image's coreutils is the
+		# Rust uutils build -- --reference works, but numbers are unambiguous)
+		chmod "$(stat -c %a "$PAM_FILE" 2>/dev/null || echo 644)" "$tmp" 2>/dev/null || true
+		chown "$(stat -c %u "$PAM_FILE" 2>/dev/null || echo 0):$(stat -c %g "$PAM_FILE" 2>/dev/null || echo 0)" \
+			"$tmp" 2>/dev/null || true
+		mv -f "$tmp" "$PAM_FILE" 2>/dev/null || { rm -f "$tmp"; return 1; }
+		return 0
+	fi
+	rm -f "$tmp"
+	return 1
+}
+pam_install_line || echo "oneplus-erhai-desktop: could not add the keyring-unlock pam line to $PAM_FILE" >&2
+
+# /etc/erhai/keyring.pass is NOT the package's to create: it holds the password
+# that unlocks the login KEYRING, which only the user knows (see
+# sensor-MEMORY-2026-10-22.md §10).  Its documented contract is
+# root:<desktop-user> 0640, so a file whose group names NO human account (an image
+# with no account at install time, a renamed account, a chmod accident) is put
+# back on that contract; a file already owned by a human account's group is left
+# alone -- it names the account it was set up for.
+if [ -f /etc/erhai/keyring.pass ] && [ -r /usr/local/sbin/erhai-desktop-users.sh ]; then
+	# shellcheck disable=SC1091
+	. /usr/local/sbin/erhai-desktop-users.sh || true
+	KP_GID=$(stat -c %g /etc/erhai/keyring.pass 2>/dev/null || echo 0)
+	KP_HUMAN=$(getent passwd 2>/dev/null | awk -F: -v g="$KP_GID" '$4 == g { print "yes"; exit }')
+	KP_USER=$(erhai_session_user cheap 2>/dev/null | cut -d: -f1 || true)
+	if [ -z "$KP_HUMAN" ] && [ -n "$KP_USER" ]; then
+		chown "root:$KP_USER" /etc/erhai/keyring.pass 2>/dev/null || true
+		chmod 640 /etc/erhai/keyring.pass 2>/dev/null || true
+		echo "oneplus-erhai-desktop: /etc/erhai/keyring.pass re-grouped to $KP_USER (0640)" >&2
+	fi
+fi
+
 exit 0

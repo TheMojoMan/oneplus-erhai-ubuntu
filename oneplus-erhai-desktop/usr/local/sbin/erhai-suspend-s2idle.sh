@@ -104,8 +104,25 @@ BL=/sys/class/backlight/ktz8868-backlight
 BATT=/sys/class/power_supply/bq27z561-0
 GPU=/sys/devices/platform/soc@0/3d00000.gpu/power
 GENPD=/sys/kernel/debug/pm_genpd/pm_genpd_summary
-USER_NAME=themojoman
-UID_N=$(id -u "$USER_NAME")
+# --- the desktop session user this harness must reach ------------------------
+# NEVER a baked-in name (the "session username hardcoded" bug, reported against
+# 2.21): the harness
+# runs on other people's pads and the account may not even exist when the unit
+# starts.  `USER_NAME=themojoman` made `id -u` come back EMPTY on an install
+# where that user does not exist, so UID_N was empty and RT=/run/user/ pointed
+# at nothing — STEP4c/STEP6 could then neither blank nor restore the display
+# through gnome-shell (runuser -u themojoman fails, $RT/bus does not exist).
+# Order: $ERHAI_SESSION_USER / $ERHAI_USER -> the ACTIVE graphical logind
+# session -> uid 1000 -> the first human account (erhai-desktop-users.sh).
+USERS_HELPER=${ERHAI_USERS_HELPER:-/usr/local/sbin/erhai-desktop-users.sh}
+[ -r "$USERS_HELPER" ] && . "$USERS_HELPER"
+USER_NAME=''; UID_N=''
+if command -v erhai_session_user >/dev/null 2>&1; then
+    IFS=: read -r USER_NAME UID_N _gid <<<"$(erhai_session_user 2>/dev/null)"
+fi
+[ -n "$USER_NAME" ] || USER_NAME=$(id -nu 1000 2>/dev/null)
+[ -n "$UID_N" ] || UID_N=$(id -u "$USER_NAME" 2>/dev/null)
+[ -n "$UID_N" ] || UID_N=1000
 RT=/run/user/$UID_N
 
 # A pad that is not our dev workspace has no /media/data/develop/erhai/tmp: an
@@ -117,8 +134,18 @@ if ! mkdir -p "$(dirname "$LOG")" 2>/dev/null || [ ! -w "$(dirname "$LOG")" ]; t
 fi
 exec >> "$LOG" 2>&1
 rm -f "$DONEF"
+# say() MUST end with `return 0`: it is the script's LAST command, and
+# erhai-surv-log is a DEV-PAD tool that this package does NOT ship (the durable
+# copy lives under the dev workspace), so the `[ -x "$SURVLOG" ] &&` test is
+# false on every other install and the function used to return 1 — the whole
+# suspend+resume ran fine and systemd-suspend.service was marked FAILED anyway
+# (`systemctl status` on the author's pad showed "Finished" only because
+# /usr/local/sbin/erhai-surv-log happens to exist THERE).  A failing
+# systemd-suspend.service degrades the system after every sleep, so the exit
+# status of this script must never depend on an optional helper.  Same fix as
+# erhai-panel-power.sh's say().
 say() { echo "[$(date +%T) up=$(cut -d' ' -f1 /proc/uptime)] $*"; \
-        [ -x "$SURVLOG" ] && "$SURVLOG" "suspend-s2idle: $*" 2>/dev/null; }
+        [ -x "$SURVLOG" ] && "$SURVLOG" "suspend-s2idle: $*" 2>/dev/null; return 0; }
 kmsg() { echo "erhai-suspend: $*" > /dev/kmsg 2>/dev/null; }
 # live pm_test selection (the BRACKETED entry of /sys/power/pm_test).  Read out at
 # STEP4b (kmsg, survives a reset) and at STEP5, so the log PROVES which phase test

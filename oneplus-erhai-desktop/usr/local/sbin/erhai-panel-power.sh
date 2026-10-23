@@ -77,9 +77,27 @@ TOGGLE=${ERHAI_TOGGLE:-/usr/local/sbin/erhai-display-toggle.sh}
 STATE=${ERHAI_PANEL_STATE:-/run/erhai-panel.state}
 DP_STATUS=${ERHAI_DP_STATUS:-/sys/class/drm/card1-DP-1/status}
 BL=${ERHAI_BL:-/sys/class/backlight/ktz8868-backlight}
-USER_NAME=${ERHAI_SESSION_USER:-themojoman}
-UID_N=$(id -u "$USER_NAME" 2>/dev/null || echo 1000)
-GID_N=$(id -g "$USER_NAME" 2>/dev/null || echo 1000)
+# --- the desktop session user the compositor call must run as ---------------
+# NEVER a baked-in name (the "session username hardcoded" bug, reported against
+# 2.21): this package
+# runs on other people's pads, where `themojoman` does not exist — `id -u` then
+# failed and the runuser fallback below tried to switch to a user that is not
+# there (the numeric fallback kept the setpriv path alive, but nothing should
+# depend on the desktop user being uid 1000).
+# `cheap`: this is the per-press hot path and it must blank at once (2.16), so
+# the usual answer (uid 1000 = the first human account) is resolved with ONE
+# getent lookup and only a different desktop uid pays the loginctl round trip.
+# Order: $ERHAI_SESSION_USER / $ERHAI_USER -> uid 1000 -> the ACTIVE graphical
+# logind session -> the first human account (erhai-desktop-users.sh).
+USERS_HELPER=${ERHAI_USERS_HELPER:-/usr/local/sbin/erhai-desktop-users.sh}
+[ -r "$USERS_HELPER" ] && . "$USERS_HELPER"
+USER_NAME=''; UID_N=''; GID_N=''
+if command -v erhai_session_user >/dev/null 2>&1; then
+    IFS=: read -r USER_NAME UID_N GID_N <<<"$(erhai_session_user cheap 2>/dev/null)"
+fi
+[ -n "$UID_N" ] || UID_N=1000
+[ -n "$GID_N" ] || GID_N=$UID_N
+[ -n "$USER_NAME" ] || USER_NAME=$(id -nu "$UID_N" 2>/dev/null)
 RT=/run/user/$UID_N
 
 state_owner() {   # prints the owner (may be empty), non-zero when no blank

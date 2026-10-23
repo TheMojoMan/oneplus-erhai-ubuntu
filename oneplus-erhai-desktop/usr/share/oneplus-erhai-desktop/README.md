@@ -403,6 +403,83 @@ read-only control, and the rule's own content) and `order-test.sh` cases G–I
 (external monitor: backlight-only blank, GPU stays/re-gets `on`, no compositor
 teardown).
 
+## The desktop session user is asked, never assumed (2.23)
+
+Some jobs must run **as the user whose session they address** — a panel blank goes
+through gnome-shell's `ScreenSaver.SetActive` over the session bus. Three scripts
+used to name the maintainer's account (`USER_NAME=themojoman` in
+`erhai-suspend-s2idle.sh`, and the same name as the default of the env override in
+`erhai-panel-power.sh` / `erhai-power-watch.py`), so on any install whose desktop
+user is called something else `id -u` came back EMPTY, `RT` collapsed to
+`/run/user/` and the session calls reached nobody: the suspend harness could
+neither blank nor restore the panel, and the power-button toggle lost its
+`runuser` path.
+
+All three now **ask**, in this order:
+
+1. `$ERHAI_SESSION_USER` (or the older `$ERHAI_USER`) — an explicit override,
+   which must resolve;
+2. the user of the ACTIVE wayland/x11 logind session;
+3. uid 1000 — the first human account by construction;
+4. the first human account (the rule `erhai_desktop_users` uses).
+
+`erhai-desktop-users.sh` carries that as `erhai_session_user()` (prints
+`name:uid:gid`), `erhai-power-watch.py` implements the identical order in Python,
+and the daemon **re-resolves it on every session-monitor retry**, because it
+starts around `multi-user.target`, i.e. possibly before anybody logged in. The
+per-press panel path asks with `cheap` — uid 1000 first, one `getent` lookup
+instead of a `loginctl` round trip — because the blank has to be immediate.
+
+The same release fixed a second, quieter bug in the suspend harness: its `say()`
+ended with `[ -x "$SURVLOG" ] && …`, and `/usr/local/sbin/erhai-surv-log` is a
+dev-pad tool this package does NOT ship, so on every other pad `say()` returned 1
+— and the last command of the harness is a `say`, so after a suspend that had
+worked (`suspend_stats success=1`) **systemd-suspend.service was marked FAILED**
+and the system stayed degraded. `say()` now ends with `return 0`, as
+`erhai-panel-power.sh`'s always did. The dev-pad survivor log is still used when it
+exists, but it is never required.
+
+Tests: `tmp/session-user-test/session-user-test.sh` (55 checks — bash ↔ python
+agreement on every resolution arm, the real resolution blocks cut out of both
+scripts and run against a fake passwd/loginctl world, a scan that no shipped file
+bakes a username into code, and the `say()` exit status including a witness of the
+old behaviour).
+
+## The autologin keyring unlock ships with the package (2.24)
+
+`gdm-autologin` has no password to hand `pam_gnome_keyring`, so the login keyring
+would stay locked and the first client that reads a secret (goa-daemon for a GNOME
+Online Account, Brave/Chromium "Safe Storage") would pop a gcr prompt at every
+login. `erhai-keyring-unlock.sh` — until now a dev-pad-only file that **named the
+dev pad's account** — is a payload file of this package, and the postinst/postrm
+own exactly ONE line in `/etc/pam.d/gdm-autologin`:
+
+```
+session optional        pam_exec.so seteuid /usr/local/sbin/erhai-keyring-unlock.sh
+```
+
+inserted **before** `pam_gnome_keyring`'s `auto_start` (a keyring daemon can only
+be *started* with the password, it cannot unlock one that is already running),
+idempotently, preserving the file's owner/mode and every other line — and removed
+again by `postrm`, so the file gdm owns always stays usable for a normal password
+login.
+
+The helper never names an account: it takes **PAM_USER** and requires a human
+account (uid 1000…65533, so root, greeters and system accounts never match), and
+when the group of `/etc/erhai/keyring.pass` names a human account, that account must
+be the one logging in — one user's password can never be fed to another user's
+keyring. It always exits 0: it must never break a login.
+
+`/etc/erhai/keyring.pass` stays **yours**, not the package's: it holds the password
+that unlocks the login keyring (the same as your login password as long as the two
+are in sync), it is `root:<your-user> 0640`, and the postinst only puts it back on
+that contract when its group names no human account at all. The tools in
+`tmp/keyring-test/` change the keyring password and prove which one it uses.
+
+Tests: `tmp/keyring-test/keyring-unlock-test.sh` — 38 checks, the helper driven
+through PATH stubs and the pam logic through a fake pam directory (the
+`ERHAI_PAM_DIR` seam).
+
 ## Simulating heavy / full load
 
 ```

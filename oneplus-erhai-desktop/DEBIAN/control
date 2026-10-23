@@ -1,5 +1,5 @@
 Package: oneplus-erhai-desktop
-Version: 2.22
+Version: 2.24
 Section: utils
 Priority: optional
 Architecture: all
@@ -318,3 +318,47 @@ Description: Desktop glue for the OnePlus Pad 3 (erhai)
  ONE kernel error was logged, so whatever the kernel does print must be kept with
  a timestamp.  Tests: tmp/panel-latency/blank-integrity-test.py (58 cases, incl.
  the recorder).
+ Since 2.23 NO SCRIPT NAMES A DESKTOP USER ANY MORE (bug report "session username
+ hardcoded"): erhai-suspend-s2idle.sh had `USER_NAME=themojoman` hardcoded, and
+ erhai-panel-power.sh / erhai-power-watch.py defaulted to the same name, so on an
+ install whose desktop user is somebody else `id -u` came back EMPTY - RT became
+ /run/user/ and the gnome-shell SetActive calls of the suspend harness (STEP4c
+ blank / STEP6 restore) and of the power-button toggle could not reach the
+ session at all.  All three now ask the new erhai_session_user() in
+ erhai-desktop-users.sh (order: $ERHAI_SESSION_USER / $ERHAI_USER -> the user of
+ the ACTIVE graphical logind session -> uid 1000 -> the first human account), and
+ erhai-power-watch.py makes the identical decision in Python and re-resolves it on
+ every session-monitor retry, because that daemon starts around multi-user.target,
+ i.e. possibly before anybody logged in.  The per-press panel path asks with
+ `cheap`, so the usual answer (uid 1000) costs ONE getent lookup instead of a
+ loginctl round trip - the blank still has to be immediate (2.16).  The same
+ release fixes the suspend harness' EXIT STATUS: its say() ended with
+ `[ -x "$SURVLOG" ] && ...` while /usr/local/sbin/erhai-surv-log is a dev-pad tool
+ this package does NOT ship, so on every other pad say() returned 1, the LAST
+ command of the script is a say, and systemd-suspend.service was marked FAILED
+ after a suspend that had worked (`suspend_stats success=1`), leaving the system
+ degraded; the author's pad only looked fine because that tool exists THERE.
+ say() now ends with `return 0`, exactly as erhai-panel-power.sh's always did.
+ Tests: tmp/session-user-test/session-user-test.sh (55 checks: bash <-> python
+ agreement on every resolution arm, the real resolution blocks cut out of both
+ shell scripts and run against a fake passwd/loginctl world, a scan that no
+ shipped file bakes a username into code, and the say() exit status including a
+ witness of the old behaviour).
+ Since 2.24 the AUTOLOGIN LOGIN-KEYRING UNLOCK ships with this package (closing the
+ gap build-root.sh tracked since 2026-09-28): /usr/local/sbin/erhai-keyring-unlock.sh
+ used to exist only on the dev pad and its second statement was
+ `[ "$PAM_USER" = "themojoman" ] || exit 0`, so on any install with a different
+ account the login keyring stayed LOCKED and the first app that read a secret
+ (goa-daemon, Brave/Chromium Safe Storage) popped a gcr prompt at every login.  The
+ helper is now a payload file, takes the account from PAM_USER (human accounts only -
+ never root, a greeter or a system account) and honours the ONE account named by the
+ group of /etc/erhai/keyring.pass, so one user's password can never be fed to another
+ user's keyring; it always exits 0.  The postinst/postrm own exactly ONE line in
+ /etc/pam.d/gdm-autologin (inserted before pam_gnome_keyring's auto_start, since a
+ keyring daemon can only be STARTED with the password and not unlocked once running;
+ idempotent, owner/mode and every other line preserved, and removed again on a real
+ removal) and the postinst puts a keyring.pass whose group names no human account back
+ on the documented root:<desktop-user> 0640 contract.  The pass file itself stays the
+ USER's - it holds the password that unlocks the keyring.  Tests:
+ tmp/keyring-test/keyring-unlock-test.sh (38 checks: the helper through PATH stubs,
+ the pam logic through the ERHAI_PAM_DIR seam).
