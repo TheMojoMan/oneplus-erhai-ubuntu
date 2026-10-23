@@ -200,7 +200,7 @@ ROOTOWNED="$(find "$SNAP" -user root -print -quit 2>/dev/null || true)"
 if [ -n "$ROOTOWNED" ]; then
 	echo "ERROR: root-owned entries in the payload snapshot (e.g. $ROOTOWNED)." >&2
 	echo "       A previous run executed as root. Fix ownership, then rebuild:" >&2
-	echo "         rootdo.py themojoman <pw> 'chown -R themojoman:themojoman $SNAP'" >&2
+	echo "         sudo -S sh -c 'chown -R \$(id -un):\$(id -gn) $SNAP'   # rootdo.py is GONE (2026-10-23)" >&2
 	exit 1
 fi
 mkdir -p "$SNAP/boot" "$SNAP/usr/lib/modules"
