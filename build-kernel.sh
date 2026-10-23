@@ -247,10 +247,14 @@ DEB_REV="${DEB_REV:-${INNER_NAME##*+b}}"
 # never advanced: the +b<N> counter belongs to released builds only, so a test
 # build can never be mistaken for a release and the next real build (+b29)
 # supersedes every test build.  Bare "+b<N>" stays the release form.
+# A GPU/driver test build may use "<N>-gp-MM" instead (e.g. 32-gp-01); both
+# forms rank ABOVE "+b<N>" for dpkg (the split is at the LAST '-'), so a
+# <N>-test-MM / <N>-gp-MM deb must NEVER be published -- keep it in debs/.
 case "$DEB_REV" in
 ''|*[!0-9]*)
 	case "$DEB_REV" in
 	[0-9]*-test-*) ;;                 # <N>-test-MM -> allowed (test build)
+	[0-9]*-gp-*)   ;;                 # <N>-gp-MM   -> allowed (GPU/driver test build)
 	*)
 		echo "ERROR: cannot derive +b<N> from '$INNER_NAME' (pass DEB_REV=<n> for a release, or DEB_REV=<n>-test-MM for a PR/test build)." >&2
 		exit 1 ;;
