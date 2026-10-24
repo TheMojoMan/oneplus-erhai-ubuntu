@@ -1,0 +1,27 @@
+[Unit]
+Description=Pin the Adreno 830 for the boot bring-up, release it once the GPU is up
+Documentation=file:/usr/share/oneplus-erhai-desktop/README.md
+DefaultDependencies=no
+After=local-fs.target
+Before=display-manager.service gdm.service
+[Service]
+# TWO STEPS, ONE UNIT (2026-10-24 owner workaround, see erhai-gpu-pin-once.sh):
+#   ExecStartPre  runs SYNCHRONOUSLY before the start job completes, and this
+#                 unit is ordered Before=gdm.service — so the GPU is pinned and
+#                 active before the greeter/session first touches it (the boot
+#                 bring-up window that failed on an unpinned boot).
+#   ExecStart     is the waiter.  Type=simple marks the unit started as soon as
+#                 it is forked, so gdm is NOT delayed while it waits for the
+#                 conditions; when the GPU is up it writes runtime-PM 'auto' and
+#                 exits (the unit then goes inactive — a released GPU is the
+#                 intended end state, not a failure).
+# A timeout never releases: the GPU stays pinned and the reason is logged.
+# MODE=always in /etc/erhai/gpu-pin.conf turns the release into a no-op (the
+# permanent pin then belongs to erhai-gpu-pin.service, which the postinst
+# enables for that mode instead of this unit).
+Type=simple
+ExecStartPre=/usr/local/sbin/erhai-gpu-pin-once.sh pin
+ExecStart=/usr/local/sbin/erhai-gpu-pin-once.sh release
+Nice=10
+[Install]
+WantedBy=multi-user.target

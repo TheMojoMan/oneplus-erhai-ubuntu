@@ -63,6 +63,22 @@ remove|purge)
 	done
 
 	pam_remove_line || echo "oneplus-erhai-desktop: could not drop the keyring-unlock pam line from $PAM_FILE" >&2
+
+	# erhai: GPU pin policy (2.25).  erhai-gpu-pin-once.service is enabled by
+	# this package's postinst, so a removal must not leave its dangling
+	# multi-user.target.wants link behind; if the pre-2.25 permanent pin is
+	# still on disk, re-arm it so the pad is never left with an unpinned Adreno
+	# and no policy at all.
+	if [ -d /run/systemd/system ]; then
+		# 2.28: the 2.27/2.28 GPU wedge watchdog is retired, so this package
+		# ships no file for it any more — nothing to disable here.  (An upgrade
+		# FROM 2.27/2.28 is cleaned up by this package's postinst.)
+		rm -f /etc/systemd/system/multi-user.target.wants/erhai-gpu-pin-once.service
+		if [ -e /etc/systemd/system/erhai-gpu-pin.service ]; then
+			systemctl enable erhai-gpu-pin.service >/dev/null 2>&1 || true
+		fi
+		systemctl daemon-reload >/dev/null 2>&1 || true
+	fi
 	;;
 esac
 

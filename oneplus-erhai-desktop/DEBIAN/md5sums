@@ -1,6 +1,7 @@
 1673e73710a92cb6e6d3e543020765f5  etc/dconf/db/local.d/00-erhai
 b38c0460f7b1b4e6e7f7a599229a4046  etc/dconf/profile/gdm
 15e272d1b7f84a0cfcc3e741c9b2e4b3  etc/default/erhai-charge
+e612b000a9d362391310470e5aed75e5  etc/erhai/gpu-pin.conf
 d4550f43e21808cbb2d45bd565ebc49c  etc/polkit-1/rules.d/50-erhai-bypass-charge.rules
 084da443656d4d048b4ee3e0b2b80906  etc/systemd/logind.conf.d/10-erhai-powerkey.conf
 b718cd60cfd0922dd71eda02e7abdd67  etc/systemd/system/erhai-backlight.service
@@ -9,6 +10,7 @@ b718cd60cfd0922dd71eda02e7abdd67  etc/systemd/system/erhai-backlight.service
 bea8c53903d18e7b5a85562c81fd0e72  etc/systemd/system/erhai-desktop-gl.service
 aaf1e09f7ba79f0c330e6d080686e5d6  etc/systemd/system/erhai-folio-fold.service
 dd386dcf3d0ad5b4511b98d676eda2f3  etc/systemd/system/erhai-folio-gate.service
+6146c52b139951a5ce51581971b4fc6b  etc/systemd/system/erhai-gpu-pin-once.service
 75c2c935510fe9a0de3b3fab91edddf8  etc/systemd/system/erhai-gpu-pin.service
 96edbd3f982849d79b26dc6e0ccac80f  etc/systemd/system/erhai-greeter-brightness.service
 a3aeeb8b59b5fbde7861093dc7d9319e  etc/systemd/system/erhai-host-charge.service
@@ -32,12 +34,13 @@ f7c5e2a2f7c5f72418a2157fb7706a1c  usr/local/sbin/erhai-folio-calibrate
 3cbee38db62c155c777c46b43dac9473  usr/local/sbin/erhai-folio-gate.sh
 a979f5302127406cc05171aff0e55cac  usr/local/sbin/erhai-folio-probe.py
 517739c4e2e2f950b30a625fda8e883c  usr/local/sbin/erhai-folio-unblank.sh
-1fddc73a4bd47cb2a6bc76731237da67  usr/local/sbin/erhai-gpu-external-pin.sh
-cb21cb52597705a08c186944089f8f7b  usr/local/sbin/erhai-gpu-pin.sh
+9d9bc86ff2221861e5b53af630b851b6  usr/local/sbin/erhai-gpu-external-pin.sh
+0a8ce4a2b3d4962373a936335da2adff  usr/local/sbin/erhai-gpu-pin-once.sh
+1b25ac14f2a8218b898828b6e02e7696  usr/local/sbin/erhai-gpu-pin.sh
 8229d4574d0b6a37ef699e1a1d2e8787  usr/local/sbin/erhai-greeter-brightness.py
 e6f9d2bff7c192936afdbd236c58490b  usr/local/sbin/erhai-host-charge.sh
 2e6476164c38e0363caf0efe0d31ef8d  usr/local/sbin/erhai-keyring-unlock.sh
-37fece240cee079edc18386d2128332c  usr/local/sbin/erhai-panel-power.sh
+7582e83f389cb6f1be1ffac63e79445a  usr/local/sbin/erhai-panel-power.sh
 94814a5165a6a1cb2fa0034be7a96c01  usr/local/sbin/erhai-panel-state-migrate.sh
 67ce8778d280768ed97078a7852b366a  usr/local/sbin/erhai-pogo-activate.sh
 de6e899429cb709ba3d5c3828db2f9a1  usr/local/sbin/erhai-pogo-osk.py
@@ -103,7 +106,7 @@ a9f1dd524f5b40187a792a41ea976bdc  usr/share/libinput/erhai-pogo.quirks
 50f7f02feca0f4a3c830753de9c28de3  usr/share/oneplus-erhai-desktop/ding-touch/app/desktopGrid.js
 427c22bb38f891d2bbdd86d8daf3b590  usr/share/oneplus-erhai-desktop/ding-touch/app/desktopIconItem.js
 15158a8cb519eca7b03e55e6fe918193  usr/share/oneplus-erhai-desktop/ding-touch/app/desktopManager.js
-0013077f0388b5dae0624c346e1c5fc0  usr/share/oneplus-erhai-desktop/README.md
+686da544e9dbde510067514aa9f806ec  usr/share/oneplus-erhai-desktop/README.md
 6ad4fd9c4e733845f1e0de41ceb9668f  usr/share/oneplus-erhai-desktop/ubuntu-dock-dash.js
 dc2063252411085a9f66435d3879dd05  usr/share/sounds/erhai/panel-off.wav
 925a6c726b033f75077254f7ea6bf79f  usr/share/sounds/erhai/panel-on.wav

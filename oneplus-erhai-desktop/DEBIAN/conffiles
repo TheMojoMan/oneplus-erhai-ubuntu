@@ -1,1 +1,2 @@
 /etc/default/erhai-charge
+/etc/erhai/gpu-pin.conf

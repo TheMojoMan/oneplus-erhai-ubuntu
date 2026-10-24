@@ -21,7 +21,13 @@
 # So check the same thing erhai-desktop-gl.sh checks, and do nothing if the
 # kernel has no GPU.
 
-status=$(cat /proc/device-tree/soc@0/gpu@*/status 2>/dev/null | tr -d '\0')
+# Test seams (defaults are the real paths; tmp/gpu-pin-once-test/ drives this
+# script through them — erhai-gpu-pin-once.sh `pin` calls it):
+#   ERHAI_GPU_DT_STATUS  the device-tree status file of the GPU node
+#   ERHAI_GMU_GATE       the dev kernel's GMU arming parameter
+#   ERHAI_GPU            the GPU's sysfs power directory
+DT_STATUS=${ERHAI_GPU_DT_STATUS:-/proc/device-tree/soc@0/gpu@*/status}
+status=$(cat $DT_STATUS 2>/dev/null | tr -d '\0')
 case "$status" in
 okay|ok)
 	;;
@@ -34,12 +40,12 @@ esac
 # The dev kernel gates the GMU behind a module parameter and needs it armed here.
 # The public kernel carries no such gate -- its a8xx driver brings the GMU up at
 # probe -- so the parameter is simply absent there and nothing needs arming.
-GATE=/sys/module/msm/parameters/erhai_gmu_enable
+GATE=${ERHAI_GMU_GATE:-/sys/module/msm/parameters/erhai_gmu_enable}
 if [ -w "$GATE" ]; then
 	echo 1 > "$GATE"
 fi
 
-G=/sys/devices/platform/soc@0/3d00000.gpu/power
+G=${ERHAI_GPU:-/sys/devices/platform/soc@0/3d00000.gpu/power}
 for i in $(seq 1 50); do [ -e "$G/control" ] && break; sleep 0.1; done
 if [ ! -e "$G/control" ]; then
 	echo "erhai-gpu-pin: $G/control never appeared, leaving the GPU unpinned" >&2

@@ -393,15 +393,25 @@ and the display silent POR came from). So the two must not meet:
 | `park_gpu()` in `erhai-panel-power.sh` | **refuses to park** while `card1-DP-1` reads `connected` and re-pins the GPU instead |
 | the `do_off` / `do_on` external fallbacks | call `pin_gpu()` (which only writes when the value is not already `on`) |
 | `etc/udev/rules.d/72-erhai-gpu-external.rules` → `usr/local/sbin/erhai-gpu-external-pin.sh` | on every `card*-DP-*` add/change uevent, re-pins the GPU if a monitor is attached and the GPU is not pinned — this covers a monitor plugged in **while the panel is blanked**, and is idempotent (two reads when nothing has to change) |
+| the same helper, **2.26** | with **nothing** connected it hands a monitor-only pin back through `erhai-gpu-pin-once.sh unpin ext-detach` (so `/run/erhai-gpu-pin-once.state` records the release) — only for the once-pin policy's own states: `released`, or `kept … external` (the boot release was declined *for* a monitor). `pinned`, `kept mode=always`, `absent` and an older image keep their permanent pin |
 
 The postinst fires a `drm` trigger after install, so a monitor that is already
 attached is handled immediately instead of waiting for the next hotplug.
 
-Tests: `tmp/panel-latency/gpu-external-test.sh` (16 cases: pinned/parked,
+The detach half matters because of the boot-only pin policy below: a pin taken
+for a monitor used to outlive the monitor, which left the GPU permanently pinned
+(`pm_runtime_forbid()`) — the exact state in which the DRM recovery cannot
+collapse the CX domain.
+
+Tests: `tmp/panel-latency/gpu-external-test.sh` (34 cases: pinned/parked,
 already-pinned (no write), disconnected, no connector, second connector,
-read-only control, and the rule's own content) and `order-test.sh` cases G–I
-(external monitor: backlight-only blank, GPU stays/re-gets `on`, no compositor
-teardown).
+read-only control, the rule's own content, and the **2.26 detach release** —
+`released` and `kept … external` → `auto` with the state file rewritten to
+`released … ext-detach`, `kept mode=always`/`kept timeout:…`/`pinned`/no state
+file → untouched, already-`auto` idempotent, monitor attached while released →
+pinned) and
+`order-test.sh` cases G–I (external monitor: backlight-only blank, GPU
+stays/re-gets `on`, no compositor teardown).
 
 ## The desktop session user is asked, never assumed (2.23)
 
@@ -496,3 +506,101 @@ thermal harness's GPU-hang watchdog** (GL only — never OpenCL/llama.cpp on thi
 Adreno while a session is up). The project's own full-load tool remains
 `tmp/thermal-stress-profiles.sh` (CPU profiles × optional GPU).
 
+## The GPU is pinned for the BOOT BRING-UP only (2.25)
+
+`erhai-gpu-pin.sh` used to pin the Adreno **always-active** (`runtime-PM on`) on
+every boot (2026-09-13 policy). Two problems met in that setting:
+
+* an **unpinned boot could not bring the desktop up** — the session was started
+  but no login was possible until the GPU was pinned by hand (tty3) — that is the
+  CM3/GMU bring-up fragility the pin exists for;
+* a **permanently pinned** GPU is `pm_runtime_forbid()`, and that is exactly what
+  made the DRM recovery a no-op for two months (the CX domain could never
+  collapse — `gpu-MEMORY-2026-10-23.md`).
+
+So the pin is now a **boot-only hand-hold**, one unit, two steps
+(`erhai-gpu-pin-once.service` → `usr/local/sbin/erhai-gpu-pin-once.sh`):
+
+| step | when | what |
+|---|---|---|
+| `pin` | `ExecStartPre`, ordered `Before=gdm.service` | arms the GMU (`erhai_gmu_enable`, dev kernel) and writes `on` — the GPU is already active when the greeter/session first touches it |
+| `release` | the service's main process (`Type=simple`, so gdm is **not** delayed) | waits until the GPU is demonstrably **up and in use**, then writes `auto` |
+
+"Up and in use" means **all** of: `gdm.service` active, the internal panel lit
+(frames on the glass), the GPU runtime status `active`, and the GPU clock seen
+above its idle floor at least once (real submissions, not probe) — held for
+`SETTLE` seconds (default 15).
+
+Safety rules, in order:
+
+* a **timeout never releases**: the GPU stays pinned and the reason is logged;
+* an **external DP monitor keeps it pinned** (checked on every poll and again
+  right before the write — owner 2026-10-22);
+* `MODE=always` in `/etc/erhai/gpu-pin.conf` (conffile) makes the release a
+  no-op and the postinst enables the old permanent-pin unit
+  (`erhai-gpu-pin.service`) instead — the rollback;
+* after a release, `erhai-panel-power.sh`'s `pin_gpu()` does **not** take the
+  permanent pin back on a panel blank/restore (it reads
+  `/run/erhai-gpu-pin-once.state`), so a panel toggle cannot silently end the
+  policy. An external monitor still wins there;
+* a pin taken **for an external monitor** is given back when that monitor is
+  unplugged (2.26: `erhai-gpu-external-pin.sh` calls `erhai-gpu-pin-once.sh
+  unpin ext-detach` on a `card*-DP-*` uevent with nothing attached, so the state
+  file records the release instead of going stale) — a monitor must never leave
+  the GPU pinned for the rest of the boot. This also covers a monitor that was
+  attached at boot (state `kept … external`).
+
+Inspect / drive it by hand:
+
+```
+erhai-gpu-pin-once.sh status      # mode= state= control= runtime_status= gdm= panel= external= clock= floor=
+erhai-gpu-pin-once.sh unpin [why] # release now, no waiting (tty / test; the
+                                  # default reason is 'manual', the DP helper
+                                  # passes 'ext-detach')
+systemctl status erhai-gpu-pin-once.service
+journalctl -b | grep erhai-gpu-pin-once
+```
+
+`/run/erhai-gpu-pin-once.state` is one line, `<pinned|released|kept> <epoch>
+[reason]`; a `kept` reason is `external`, `mode=always`, `timeout:<why>` or
+`write-failed`, and a `released` reason is `clock=<Hz>`, `manual`, `control=auto`
+or `ext-detach`.
+
+Tests: `tmp/gpu-pin-once-test/test-gpu-pin-once.sh` (pin/release gates, the
+timeout-stays-pinned rule, external display, mode=always, status, and the
+panel-power interaction, all through the `ERHAI_*` seams) and
+`tmp/panel-latency/order-test.sh` (cases M–N: a released GPU is not re-pinned by
+a panel restore, an external monitor still re-pins it).
+
+## The GPU wedge watchdog is RETIRED (2.28, owner decision 2026-10-24)
+
+2.27/2.28 shipped `erhai-gpu-watch.service`: it read `/dev/kmsg` and SIGKILLed a
+task whose work kept hanging the Adreno, escalating to `lxc-stop -k` on the
+container it lived in.  **It is gone from this package again**, by owner
+decision, for three measured reasons:
+
+* it could not clear the real Waydroid wedge - the 3rd strike killed
+  `surfaceflinger`, the kernel kept naming the same (now zombie) submit, and a
+  GPU reset cannot retire a submit whose DRM context is never released, so the
+  pad still needed a reboot;
+* the daemon itself was free (0.376 s CPU per 30 min 23 s up = 0.02 % of one
+  core, 11.0 MB RSS, 0 restarts, no forks) - the *investigation* was the cost;
+* every upgrade re-armed it (the postinst enabled and restarted it), so a local
+  `systemctl disable` was never durable.
+
+What stays is the kernel half, which is the part that works: **kernel `+b33`**
+makes a *pinned* Adreno recoverable again (`a8xx_recover()` lifts the
+`pm_runtime` block that `power/control=on` sets - with it `a6xx_gmu_stop()`
+never ran and `cx gdsc didn't collapse` looped forever; `a6xx_gpu_sw_reset()` is
+a no-op on a8xx, so the CX collapse is the only reset) and frees the
+`pwrup_reglist` BO at destroy.  The recovery-cycle test on `+b32-gp-02`/`+b33`
+passes 3 unpinned + 3 pinned cycles with 0 timeouts and 0 GEM warnings.
+
+Nothing to configure: an upgrade from 2.27/2.28 stops, disables and deletes the
+unit, `usr/local/sbin/erhai-gpu-watch.py`, `/etc/erhai/gpu-watch.conf` and the
+`/run/erhai-gpu-watch.*` state.  The full source, the 82 + 23-check test suite,
+the Waydroid evidence and the old 2.28 deb are archived in
+`tmp/gpu-watch-retired-20261024/` (workspace) - if it is ever wanted again, take
+it from there and re-open `gpu-MEMORY-2026-10-24.md` sections 10/11 first: the
+two defects recorded there (`escalate()` discarding the `lxc-stop` return code,
+and the postinst's reload storm) are still unfixed in the archived copy.

@@ -73,6 +73,9 @@ RESYNC_GAP_MS=${RESYNC_GAP_MS:-200} # `reassert --cycle`: compositor round-trip 
 LOG=${LOG:-/media/data/develop/erhai/tmp/gpu-hang-capture/panel-power.log}
 SURVLOG=${ERHAI_SURVLOG:-/usr/local/sbin/erhai-surv-log}
 GPU=${ERHAI_GPU:-/sys/devices/platform/soc@0/3d00000.gpu/power}
+# The once-pin policy (2.25, erhai-gpu-pin-once.sh): when the boot-time pin was
+# RELEASED to runtime-PM, a panel restore must not take the permanent pin back.
+PIN_ONCE_STATE=${ERHAI_GPU_PIN_ONCE_STATE:-/run/erhai-gpu-pin-once.state}
 TOGGLE=${ERHAI_TOGGLE:-/usr/local/sbin/erhai-display-toggle.sh}
 STATE=${ERHAI_PANEL_STATE:-/run/erhai-panel.state}
 DP_STATUS=${ERHAI_DP_STATUS:-/sys/class/drm/card1-DP-1/status}
@@ -185,6 +188,17 @@ external_up() { [ "$(cat "$DP_STATUS" 2>/dev/null)" = connected ] && return 0 ||
 pin_gpu() {
     [ -w "$GPU/control" ] || { say "pin: $GPU/control is not writable"; return 1; }
     [ "$(cat "$GPU/control" 2>/dev/null)" = on ] && return 0
+    # 2.25: with the ONCE-PIN policy (erhai-gpu-pin-once.sh) the GPU was handed
+    # back to runtime-PM after the boot bring-up, and re-pinning it here would
+    # silently end that policy at the first panel toggle.  An external display
+    # still wins (owner 2026-10-22: a monitor must never find the Adreno
+    # parked), and MODE=always never writes the release, so nothing changes for
+    # the permanent pin.
+    if [ "$(awk 'NR==1{print $1}' "$PIN_ONCE_STATE" 2>/dev/null)" = released ] &&
+       ! external_up; then
+        say "pin: skipped - once-pin policy: the GPU is released to runtime-PM"
+        return 0
+    fi
     if echo on > "$GPU/control" 2>/dev/null; then
         say "pin: GPU re-pinned always-active"
         return 0

@@ -68,13 +68,41 @@ if [ -d /run/systemd/system ]; then
 		dconf update || true
 	fi
 	systemctl daemon-reload >/dev/null 2>&1 || true
-	for unit in erhai-gpu-pin.service erhai-desktop-gl.service \
+	# erhai-gpu-pin.service is NOT in this list any more: which of the two GPU
+	# pin policies is armed depends on /etc/erhai/gpu-pin.conf (see the block
+	# below).
+	for unit in erhai-desktop-gl.service \
 	            erhai-host-charge.service erhai-power-toggle.service \
 	            erhai-pogo-osk.service erhai-touchscreen.service \
 	            erhai-backlight.service erhai-greeter-brightness.service \
 	            erhai-rtc-sync.service erhai-bypass-charge.service; do
 		systemctl enable "$unit" >/dev/null 2>&1 || true
 	done
+	# ------------------------------------------------------- GPU pin policy ---
+	# 2.25 (2026-10-24 owner workaround): the Adreno is no longer pinned
+	# forever by default.  /etc/erhai/gpu-pin.conf (a conffile) decides:
+	#   MODE=once    erhai-gpu-pin-once.service pins the GPU for the BOOT
+	#                BRING-UP only (before gdm) and releases it to runtime-PM
+	#                'auto' once gdm runs, the panel is lit and the GPU clock
+	#                has risen above its idle floor (settled SETTLE seconds) —
+	#                an unpinned boot could not bring the desktop up, a
+	#                permanently pinned GPU makes the DRM recovery a no-op.
+	#   MODE=always  the pre-2.25 permanent pin (erhai-gpu-pin.service).
+	# Exactly ONE of the two is enabled, so a boot can never run both.
+	GPU_PIN_CONF=${ERHAI_GPU_PIN_CONF:-/etc/erhai/gpu-pin.conf}
+	GPU_MODE=$(sed -n 's/^[[:space:]]*MODE[[:space:]]*=[[:space:]]*//p' \
+		"$GPU_PIN_CONF" 2>/dev/null | tail -n1 | tr -d '\r ' | tr 'A-Z' 'a-z')
+	case "$GPU_MODE" in
+	always)
+		systemctl enable erhai-gpu-pin.service >/dev/null 2>&1 || true
+		systemctl disable erhai-gpu-pin-once.service >/dev/null 2>&1 || true
+		;;
+	*)
+		systemctl enable erhai-gpu-pin-once.service >/dev/null 2>&1 || true
+		systemctl disable erhai-gpu-pin.service >/dev/null 2>&1 || true
+		;;
+	esac
+
 	# erhai: bypass charging (GNOME Quick Settings switch).
 	#   * erhai-bypass-charge.service is the holder: it re-applies the persisted
 	#     choice from /etc/default/erhai-charge and re-asserts the ADSP
@@ -149,6 +177,27 @@ if [ -d /run/systemd/system ]; then
 	/usr/local/sbin/erhai-panel-state-migrate.sh || true
 	systemctl try-restart erhai-power-toggle.service >/dev/null 2>&1 || true
 	systemctl try-restart erhai-folio-fold.service >/dev/null 2>&1 || true
+	# erhai: GPU WEDGE WATCHDOG — RETIRED (2.28, owner decision 2026-10-24).
+	# 2.27/2.28 shipped erhai-gpu-watch.service, which SIGKILLed a task that kept
+	# hanging the Adreno.  It could NOT clear the real Waydroid wedge (a GPU reset
+	# cannot retire a submit held by an unreaped zombie), the investigation cost
+	# far more than the daemon ever did (0.376 s CPU per 30 min, 11 MB RSS), and
+	# the owner had it turned off.  The payload is gone from this package, so an
+	# upgrade from 2.27/2.28 must undo what those versions armed: stop + disable
+	# the unit, drop the wants symlink dpkg cannot own, and delete the script,
+	# unit, conffile and per-boot state the new payload no longer ships.
+	# --no-reload everywhere: dpkg has already asked for one, and the 2.27
+	# postinst's implicit reloads cost a measured 14-reload storm.
+	if [ -e /etc/systemd/system/erhai-gpu-watch.service ] || \
+	   [ -e /etc/systemd/system/multi-user.target.wants/erhai-gpu-watch.service ]; then
+		systemctl disable --now --no-reload erhai-gpu-watch.service \
+			>/dev/null 2>&1 || true
+	fi
+	rm -f /etc/systemd/system/multi-user.target.wants/erhai-gpu-watch.service
+	rm -f /etc/systemd/system/erhai-gpu-watch.service \
+	      /usr/local/sbin/erhai-gpu-watch.py \
+	      /etc/erhai/gpu-watch.conf
+	rm -f /run/erhai-gpu-watch.log /run/erhai-gpu-watch.state
 	if [ -d /run/udev ]; then
 		# Re-apply the pogo touchpad integration tag on the running system
 		# (the pinned tablet-mode kernel + libinput need the touchpad

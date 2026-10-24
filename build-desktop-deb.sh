@@ -36,6 +36,9 @@ for f in usr/local/sbin/erhai-user-groups.sh \
 	 usr/local/sbin/erhai-folio-fold.py \
 	 usr/local/sbin/erhai-folio-gate.sh \
 	 usr/local/sbin/erhai-folio-unblank.sh \
+	 usr/local/sbin/erhai-gpu-pin-once.sh \
+	 etc/systemd/system/erhai-gpu-pin-once.service \
+	 etc/erhai/gpu-pin.conf \
 	 usr/local/sbin/erhai-gpu-external-pin.sh \
 	 etc/udev/rules.d/72-erhai-gpu-external.rules \
 	 usr/local/sbin/erhai-folio-calibrate \

@@ -1,5 +1,5 @@
 Package: oneplus-erhai-desktop
-Version: 2.24
+Version: 2.28
 Section: utils
 Priority: optional
 Architecture: all
@@ -8,9 +8,27 @@ Depends: python3
 Recommends: gnome-shell, dconf-cli, oneplus-erhai-sensors
 Description: Desktop glue for the OnePlus Pad 3 (erhai)
  Everything the GNOME desktop needs on top of the base image: bringing up the
- Adreno 830 GMU before session start (erhai-gpu-pin; the GPU is PINNED
- always-active at runtime-PM 'on' on every kernel since 2026-09-13 — it never
- runtime-suspends, so the intermittent GMU resume hang can never fire),
+ Adreno 830 GMU before session start and a boot-only GPU pin
+ (erhai-gpu-pin-once.service, 2.25: the Adreno is pinned for the boot
+ bring-up — an unpinned boot could not bring the desktop up — and released to
+ runtime-PM 'auto' once gdm runs, the panel is lit and the GPU clock has risen
+ above its idle floor; release only, a timeout stays pinned, an external
+ display keeps it pinned.  /etc/erhai/gpu-pin.conf MODE=always restores the
+ pre-2.25 permanent pin, erhai-gpu-pin.sh, where the GPU never
+ runtime-suspends.  2.26: the pin taken FOR an external DP monitor is handed
+ back when that monitor is unplugged (through 'erhai-gpu-pin-once.sh unpin
+ ext-detach', so the state file records it), covering both a monitor attached
+ later and one attached at boot (state 'kept external'), so a monitor cannot
+ leave the GPU pinned for the rest of the boot), and — 2.28 — the GPU WEDGE
+ WATCHDOG of 2.27 (erhai-gpu-watch.service) is REMOVED AGAIN by owner decision
+ (2026-10-24): it could not clear the real Waydroid wedge — a GPU reset cannot
+ retire a submit held by an unreaped zombie — so the pad relies on the kernel fix
+ instead of killing clients (kernel +b33: a PINNED Adreno can be recovered
+ again, because a8xx_recover() lifts the runtime-PM block that
+ power/control=on sets and that block made "cx gdsc didn't collapse" loop
+ forever; a6xx_destroy() also frees the pwrup reglist BO that a reload leaked).
+ An upgrade from 2.27/2.28 stops, disables and deletes the retired unit, script
+ and conffile, so no watcher process is left anywhere,
  boot-time GL environment selection
  (erhai-desktop-gl), power-key REAL panel power cycle
  (erhai-power-toggle + erhai-power-watch.py -> erhai-panel-power.sh: parks the
