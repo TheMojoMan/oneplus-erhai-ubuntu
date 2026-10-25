@@ -258,6 +258,7 @@ case "$DEB_REV" in
 	[0-9]*-test-*) ;;                 # <N>-test-MM -> allowed (test build)
 	[0-9]*-gp-*)   ;;                 # <N>-gp-MM   -> allowed (GPU/driver test build)
 	[0-9]*-panel-*) ;;                # <N>-panel-MM -> allowed (display/driver test build)
+	[0-9]*-PD-*)    ;;                # <N>-PD-MM    -> allowed (PR test build, owner's naming)
 	*)
 		echo "ERROR: cannot derive +b<N> from '$INNER_NAME' (pass DEB_REV=<n> for a release, DEB_REV=<n>-test-MM for a PR/test build, or DEB_REV=<n>-panel-MM for a display test build)." >&2
 		exit 1 ;;
