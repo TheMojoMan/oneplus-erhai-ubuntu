@@ -241,29 +241,26 @@ PKG_NAME="$(awk '/^Package:/{print $2; exit}' "$SNAP/DEBIAN/control")"
 # used to carry its own PACKAGE-wide next_deb_rev, which is what made a new
 # release line continue the old line's numbering -- dropped 2026-09-22.)
 DEB_REV="${DEB_REV:-${INNER_NAME##*+b}}"
-# 2026-10-21 (.clinerules): a PR / TEST build uses a "<N>-test-MM" revision --
-# e.g. DEB_REV=28-test-01 -> Version 7.3.0-rc5-sm8750-themojoman+b28-test-01 and
-# UKI 7.3.0-rc5-l1-b28-test-01.efi.  N is the CURRENT line number, i.e. REUSED,
-# never advanced: the +b<N> counter belongs to released builds only, so a test
-# build can never be mistaken for a release and the next real build (+b29)
-# supersedes every test build.  Bare "+b<N>" stays the release form.
-# A GPU/driver test build may use "<N>-gp-MM" instead (e.g. 32-gp-01) and a
-# DISPLAY/driver test build "<N>-panel-MM" (e.g. 33-panel-01); every such form
-# ranks ABOVE "+b<N>" for dpkg (the split is at the LAST '-'), so a
-# <N>-test-MM / <N>-gp-MM / <N>-panel-MM deb must NEVER be published -- keep it
-# in debs/.
+# 2026-10-21 (.clinerules): bare "+b<N>" is the RELEASE form.  A PR / TEST /
+# GPU / display / any other LOCAL build uses "<N>-<topic>-<no>", e.g.
+# 28-test-01, 32-gp-01, 33-panel-02, 34-PD-01 -> Version
+# 7.3.0-rc5-sm8750-themojoman+b34-PD-01, UKI 7.3.0-rc5-l1-b34-PD-01.efi.
+# N is the CURRENT line number, i.e. REUSED, never advanced: the +b<N> counter
+# belongs to released builds only, so a local build can never be mistaken for a
+# release and the next real build supersedes it.  The topic is FREE FORM
+# ([A-Za-z0-9.]+, case preserved) so a new investigation needs no edit here.
+# EVERY "<N>-<topic>-<no>" form ranks ABOVE "+b<N>" for dpkg (the split is at
+# the LAST '-'), so such a deb must NEVER be published -- keep it in debs/ or
+# debs/test-builds/.
+# BEGIN deb-rev-check  (tmp/test-debrev-forms.sh evals exactly this block)
 case "$DEB_REV" in
 ''|*[!0-9]*)
-	case "$DEB_REV" in
-	[0-9]*-test-*) ;;                 # <N>-test-MM -> allowed (test build)
-	[0-9]*-gp-*)   ;;                 # <N>-gp-MM   -> allowed (GPU/driver test build)
-	[0-9]*-panel-*) ;;                # <N>-panel-MM -> allowed (display/driver test build)
-	[0-9]*-PD-*)    ;;                # <N>-PD-MM    -> allowed (PR test build, owner's naming)
-	*)
-		echo "ERROR: cannot derive +b<N> from '$INNER_NAME' (pass DEB_REV=<n> for a release, DEB_REV=<n>-test-MM for a PR/test build, or DEB_REV=<n>-panel-MM for a display test build)." >&2
-		exit 1 ;;
-	esac ;;
+	if ! [[ "$DEB_REV" =~ ^[0-9]+-[A-Za-z0-9.]+-[0-9]+$ ]]; then
+		echo "ERROR: DEB_REV='$DEB_REV' (from '$INNER_NAME') is neither the release form <n> nor a local <line-N>-<topic>-<no> form (e.g. DEB_REV=34-PD-01)." >&2
+		exit 1
+	fi ;;
 esac
+# END deb-rev-check
 DEB_VERSION="${KVER}+b${DEB_REV}"
 sed -i "s/^Version: .*/Version: ${DEB_VERSION}/" "$SNAP/DEBIAN/control"
 
