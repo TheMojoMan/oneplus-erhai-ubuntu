@@ -54,9 +54,12 @@ declare -A BUILDERS=(
 	[npu]=build-npu-deb.sh
 	[fastrpc]=build-fastrpc-deb.sh
 	[llamacpp]=build-llamacpp-deb.sh
+	[waydroid]=build-waydroid-installer-deb.sh
 )
 
-ORDER=(wifi audio bluetooth camera cam sensors desktop thermal torch otg firmware mesa linux npu fastrpc llamacpp)
+# waydroid LAST: its builder needs the patcher project in ../tmp/waydroid-patcher
+# (source + the five stripped Mesa objects) and refuses to run without it.
+ORDER=(wifi audio bluetooth camera cam sensors desktop thermal torch otg firmware mesa linux npu fastrpc llamacpp waydroid)
 
 if [ $# -gt 0 ]; then
 	for want in "$@"; do

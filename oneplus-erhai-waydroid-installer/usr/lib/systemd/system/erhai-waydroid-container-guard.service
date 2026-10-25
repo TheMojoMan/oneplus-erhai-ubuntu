@@ -1,0 +1,17 @@
+# erhai: kill waydroid when Android shuts down on its own.
+#
+# Started/stopped together with waydroid-container.service (WantedBy it here,
+# PartOf it there).  See /usr/local/sbin/erhai-waydroid-container-guard for why
+# upstream needs this: its container daemon does not notice that the LXC
+# container exited, so the session, the window and dnsmasq would stay alive.
+[Unit]
+Description=erhai: end waydroid when Android shuts down on its own
+After=waydroid-container.service
+PartOf=waydroid-container.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/erhai-waydroid-container-guard
+
+[Install]
+WantedBy=waydroid-container.service

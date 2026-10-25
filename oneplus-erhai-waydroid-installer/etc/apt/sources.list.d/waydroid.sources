@@ -1,0 +1,14 @@
+# erhai: the official Waydroid repository, shipped by
+# oneplus-erhai-waydroid-installer so the package can install waydroid itself
+# (the deb's postinst schedules `waydroid-erhai-installer.sh setup`).
+#
+# The signing key travels in the same package: /usr/share/keyrings/waydroid.gpg
+# (fingerprint 7CE0331F71E0A238BB1002D70E406D181DCEE19C, Czarek Nakamoto).
+# This deb822 file replaces the hand-added /etc/apt/sources.list.d/waydroid.list;
+# keeping both would make apt warn that the URI is configured twice.
+Types: deb
+URIs: https://repo.waydro.id/
+Suites: resolute
+Components: main
+Architectures: arm64
+Signed-By: /usr/share/keyrings/waydroid.gpg

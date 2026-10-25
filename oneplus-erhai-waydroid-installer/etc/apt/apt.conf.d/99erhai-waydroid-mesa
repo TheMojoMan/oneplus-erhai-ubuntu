@@ -1,0 +1,8 @@
+// erhai: keep waydroid's automatic vendor.img Mesa patch across upgrades.
+//
+// `apt upgrade waydroid` replaces /usr/lib/waydroid/tools/helpers/images.py,
+// which drops the hook block we added to it.  This re-applies it after every
+// dpkg run; the helper is a no-op while the hook is in place, while waydroid is
+// not installed, and after `waydroid-erhai-installer.sh uninstall` (which drops
+// /etc/erhai/waydroid-mesa.off).
+DPkg::Post-Invoke { "/usr/local/sbin/waydroid-erhai-installer.sh reapply || true"; };

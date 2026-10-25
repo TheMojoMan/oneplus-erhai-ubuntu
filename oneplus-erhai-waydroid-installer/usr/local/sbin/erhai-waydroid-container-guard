@@ -1,0 +1,55 @@
+#!/bin/bash
+# erhai: end waydroid when Android shuts down on its own.
+#
+# Upstream's container daemon (`waydroid container start`, i.e.
+# waydroid-container.service) never notices that the LXC container exited:
+# its stop() runs only on SIGTERM or an explicit DBus Stop.  So after Android's
+# own power-off the session, the Waydroid window, the daemon and its dnsmasq
+# all keep running, and the next icon click attaches to a dead session.
+#
+# This watcher is started and stopped together with waydroid-container.service
+# (erhai-waydroid-container-guard.service, WantedBy/PartOf it).  It waits until
+# the container has really been RUNNING, and when lxc then reports STOPPED it
+# stops the unit: the daemon's own SIGTERM handler does the real cleanup
+# (hardware manager, network/dnsmasq, sensord, mounts) and sends SIGUSR1 to the
+# session, so the window closes too.
+#
+# Nothing of waydroid's code is patched, so `apt upgrade waydroid` cannot drop
+# this.  A container that is STOPPED because no session was ever started does
+# NOT trigger it (seen_running), so an idle daemon stays as upstream intends.
+set -u -o pipefail
+
+LXC_DIR=${ERHAI_WAYDROID_LXC_DIR:-/var/lib/waydroid/lxc}
+LXC_NAME=${ERHAI_WAYDROID_LXC_NAME:-waydroid}
+LXC_INFO=${ERHAI_WAYDROID_LXC_INFO:-lxc-info}
+SYSTEMCTL=${ERHAI_WAYDROID_SYSTEMCTL:-systemctl}
+LOGGER=${ERHAI_WAYDROID_LOGGER:-logger}
+UNIT=${ERHAI_WAYDROID_UNIT:-waydroid-container.service}
+POLL=${ERHAI_WAYDROID_GUARD_POLL:-2}
+
+trap 'exit 0' TERM INT HUP
+
+seen_running=0
+while :; do
+    state=$("$LXC_INFO" -P "$LXC_DIR" -n "$LXC_NAME" -sH 2>/dev/null) || state=
+    case "$state" in
+        RUNNING|FROZEN)
+            seen_running=1
+            ;;
+        STOPPED)
+            if [ "$seen_running" = 1 ]; then
+                "$LOGGER" -t erhai-waydroid-guard \
+                    "Android stopped on its own -- stopping $UNIT" 2>/dev/null || true
+                # exec: this unit is PartOf the one being stopped, so systemd
+                # SIGTERMs our whole cgroup the moment the job is queued.  A
+                # child `systemctl` would be killed mid-flight (bash prints
+                # "Terminated"); replacing ourselves with the client leaves
+                # nothing to report, and --no-block means it does not wait.
+                # The unit's own SIGTERM handler closes the session (SIGUSR1),
+                # tears down network/mounts and exits the daemon.
+                exec "$SYSTEMCTL" --no-block stop "$UNIT"
+            fi
+            ;;
+    esac
+    sleep "$POLL"
+done

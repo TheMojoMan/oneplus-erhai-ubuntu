@@ -1,0 +1,40 @@
+Package: oneplus-erhai-waydroid-installer
+Version: 0.6
+Section: utils
+Priority: optional
+Architecture: arm64
+Maintainer: TheMojoMan <themojoman@gmx.net>
+Depends: python3, e2fsprogs
+Recommends: waydroid
+Description: install Waydroid with the erhai Mesa driver payload on the OnePlus Pad 3
+ This package does the whole Waydroid setup on this tablet: it carries the
+ official Waydroid apt repository (key /usr/share/keyrings/waydroid.gpg, deb822
+ source /etc/apt/sources.list.d/waydroid.sources) and, right after its own
+ installation, runs `apt-get update` + `apt-get install waydroid` in a deferred
+ systemd unit (apt holds its lock while a postinst runs, so the install cannot
+ happen inline).  The Waydroid icon then shows up and works like upstream.
+ .
+ Shutting Android down from its own power menu also ends Waydroid now: a small
+ watcher (erhai-waydroid-container-guard.service, started/stopped with
+ waydroid-container.service) notices that the LXC container exited and stops the
+ unit, whose own SIGTERM handler closes the session and the window and tears
+ down the network.  Upstream leaves all of that running, so the next icon click
+ would attach to a dead session.
+ .
+ Waydroid's stock vendor image carries a fake "a830" Mesa driver that wedges
+ the Adreno a few seconds into every session on this tablet (SM8750, Adreno
+ 830).  This package ships the five working Mesa shared objects (stripped
+ libgallium_dri, vulkan.freedreno, libEGL_mesa, libGLESv1_CM_mesa,
+ libGLESv2_mesa), the in-place patcher erhai_vendor_patch.py and a hook that
+ runs it from waydroid's OWN image downloader, so the image the user picks in
+ Waydroid on first start is patched as it is downloaded -- and so are
+ "waydroid upgrade" and OTA image replaces.
+ .
+ The patcher rewrites the five files inside vendor.img in place (same inode,
+ so the SELinux label, mode and owner survive) and grows the image only by the
+ blocks it is really short of - normally by nothing, the payload is a net
+ shrink. It refuses a mounted image, so a running session is never touched.
+ .
+ An apt post-invoke hook re-applies the images.py hook if "apt upgrade
+ waydroid" overwrites it. Commands: waydroid-erhai-installer.sh
+ [setup|status|patch-now|reapply|uninstall].

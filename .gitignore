@@ -37,5 +37,15 @@ __pycache__/
 /postrm
 /switch-mesa-usr.sh
 
+# ------------------------------------------------- waydroid installer payload --
+# build-waydroid-installer-deb.sh GENERATES both of these from the patcher
+# project (../tmp/waydroid-patcher): the patcher file itself and the five
+# stripped Mesa objects (~33 MiB).  The .deb is the delivery vehicle, so neither
+# belongs in git -- a fresh clone rebuilds them with the builder.
+/oneplus-erhai-waydroid-installer/usr/lib/waydroid/tools/erhai_vendor_patch.py
+/oneplus-erhai-waydroid-installer/usr/share/erhai-waydroid-mesa/payload/
+/oneplus-erhai-waydroid-installer/usr/local/bin/erhai-waydroid-vendor-patch
+/oneplus-erhai-waydroid-installer/DEBIAN/md5sums
+
 # agent-local rules (contains credentials, never commit)
 .clinerules

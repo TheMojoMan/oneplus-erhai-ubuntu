@@ -1,0 +1,134 @@
+#!/bin/bash
+# oneplus-erhai-waydroid-installer: give waydroid its pristine images.py back.
+#
+# The hook lives in a file this package does not own (waydroid's
+# tools/helpers/images.py), so it has to be taken out here - dpkg only removes
+# OUR files.  Already patched images are left alone (they are the working ones);
+# a fresh `waydroid init` after the removal downloads a stock vendor.img.
+#
+# MEASURED (2026-10-24): dpkg has ALREADY deleted our payload when this script
+# runs, so calling the shipped patcher here silently did nothing (a `[ -f
+# "$PATCHER" ]` guard was false) and a purge left the hook in waydroid's file.
+# The block is therefore stripped by an inline python that needs nothing but
+# python3, and the pristine backup heals the file if the result does not
+# compile.
+set -e
+
+case "${1:-}" in
+    remove|purge) ;;
+    *) exit 0 ;;
+esac
+
+# env seams for tmp/waydroid-patcher/deb-test.sh (same names the patcher uses)
+SYSTEMCTL=${ERHAI_WAYDROID_SYSTEMCTL:-systemctl}
+WANTS_DIR=${ERHAI_WAYDROID_WANTS_DIR:-/etc/systemd/system/waydroid-container.service.wants}
+IMAGES_PY=${ERHAI_WAYDROID_IMAGES_PY:-/usr/lib/waydroid/tools/helpers/images.py}
+HOOK_BACKUP=${ERHAI_WAYDROID_HOOK_BACKUP:-/var/backups/erhai-waydroid/images.py.orig}
+OFFMARK=${ERHAI_WAYDROID_OFFMARK:-/etc/erhai/waydroid-mesa.off}
+
+strip_hook() {
+    [ -f "$IMAGES_PY" ] || return 0
+    python3 - "$IMAGES_PY" "$HOOK_BACKUP" <<'PY' || true
+import os
+import py_compile
+import sys
+import tempfile
+
+path, backup = sys.argv[1], sys.argv[2]
+BEGIN = "# >>> erhai-waydroid-vendor-patch hook >>>"
+END = "# <<< erhai-waydroid-vendor-patch hook <<<"
+CALL = "# erhai-patch-hook"
+
+with open(path, encoding="utf-8") as f:
+    text = f.read()
+if BEGIN not in text:
+    sys.exit(0)                             # nothing to do
+
+out, skipping = [], False
+for line in text.splitlines(keepends=True):
+    if line.startswith(BEGIN):
+        skipping = True
+        if out and not out[-1].strip():     # the separator line we insert
+            out.pop()
+        continue
+    if skipping:
+        if line.startswith(END):
+            skipping = False
+        continue
+    if CALL in line:
+        continue
+    out.append(line)
+stripped = "".join(out)
+
+
+def compiles(txt):
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or None)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(txt)
+        py_compile.compile(tmp, cfile=tmp + ".pyc", doraise=True)
+        return True
+    except Exception:
+        return False
+    finally:
+        for p in (tmp, tmp + ".pyc"):
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+
+
+candidates = [stripped]
+if os.path.isfile(backup):
+    with open(backup, encoding="utf-8") as f:
+        candidates.append(f.read())
+for cand in candidates:
+    if BEGIN in cand or not compiles(cand):
+        continue
+    st = os.stat(path)
+    tmp = path + ".erhai-tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(cand)
+    os.chmod(tmp, st.st_mode & 0o7777)
+    try:
+        os.chown(tmp, st.st_uid, st.st_gid)
+    except OSError:
+        pass
+    os.replace(tmp, path)
+    print("erhai-waydroid: hook removed from %s" % path)
+    sys.exit(0)
+print("erhai-waydroid: WARNING could not strip the hook from %s" % path,
+      file=sys.stderr)
+PY
+    # a stale bytecode cache would keep running the OLD images.py
+    rm -f "$(dirname "$IMAGES_PY")/__pycache__/images."*.pyc
+}
+
+strip_hook
+
+rm -f "$OFFMARK"
+
+if [ "${1:-}" = purge ]; then
+    CACHE=${ERHAI_WAYDROID_PAYLOAD_DIR:-/var/cache/erhai-waydroid-mesa/payload}
+    if [ -d "$CACHE" ]; then
+        find "$CACHE" -type f -delete
+        rmdir "$CACHE" 2>/dev/null || true
+    fi
+    rmdir "$(dirname "$CACHE")" 2>/dev/null || true
+    rm -f "$HOOK_BACKUP"
+    rmdir "$(dirname "$HOOK_BACKUP")" 2>/dev/null || true
+fi
+
+# The container guard's enablement symlink was created by `systemctl enable`, so
+# dpkg does not know it; our unit file is already gone at this point, which is
+# why the symlink is removed explicitly as well.
+if command -v "$SYSTEMCTL" >/dev/null 2>&1; then
+    "$SYSTEMCTL" disable --now erhai-waydroid-container-guard.service >/dev/null 2>&1 || true
+fi
+rm -f "$WANTS_DIR/erhai-waydroid-container-guard.service"
+rmdir "$WANTS_DIR" 2>/dev/null || true
+if command -v "$SYSTEMCTL" >/dev/null 2>&1; then
+    "$SYSTEMCTL" daemon-reload >/dev/null 2>&1 || true
+fi
+
+exit 0

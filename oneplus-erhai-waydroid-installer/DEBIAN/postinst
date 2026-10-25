@@ -1,0 +1,62 @@
+#!/bin/bash
+# oneplus-erhai-waydroid-installer: install waydroid itself, hook its image
+# downloader, then patch the vendor.img that is already on disk (if any).
+#
+# Why the waydroid install is DEFERRED: this postinst runs inside a dpkg/apt
+# transaction, so /var/lib/dpkg/lock-frontend is held -- a nested apt-get here
+# would deadlock or fail.  The real work therefore runs a few seconds later as a
+# transient systemd unit `erhai-waydroid-setup`:
+#   sudo waydroid-erhai-installer.sh setup
+# That is also the manual fallback when systemd-run is not available (chroot,
+# container, a system without systemd).
+#
+# Never fatal: a failure there leaves a working package (the apt post-invoke
+# hook puts the images.py hook in place as soon as waydroid exists, and
+# `sudo waydroid-erhai-installer.sh setup` can be re-run at any time).
+set -e
+
+case "${1:-}" in
+    configure|reconfigure|abort-upgrade|abort-remove|abort-deconfigure) ;;
+    *) exit 0 ;;
+esac
+
+chmod 755 /usr/lib/waydroid/tools/erhai_vendor_patch.py 2>/dev/null || true
+
+# Arm the "Android shut down by itself" watcher for the next container start.
+# Its WantedBy target (waydroid-container.service) may not exist yet when our
+# package is installed first -- `systemctl enable` still creates the .wants
+# symlink then (verified), and `setup` re-runs it once waydroid is installed.
+SYSTEMCTL=${ERHAI_WAYDROID_SYSTEMCTL:-systemctl}
+if command -v "$SYSTEMCTL" >/dev/null 2>&1; then
+    "$SYSTEMCTL" daemon-reload >/dev/null 2>&1 || true
+    "$SYSTEMCTL" enable erhai-waydroid-container-guard.service >/dev/null 2>&1 || true
+fi
+
+if [ -x /usr/local/sbin/waydroid-erhai-installer.sh ]; then
+    /usr/local/sbin/waydroid-erhai-installer.sh install || true
+fi
+
+# Schedule the apt part.  5 s is enough for the dpkg lock to be released after
+# this transaction even on a slow pad, and the setup waits on the lock anyway.
+defer_setup() {
+    [ -d /run/systemd/system ] || return 1
+    command -v systemd-run >/dev/null 2>&1 || return 1
+    systemd-run --quiet --collect \
+        --unit=erhai-waydroid-setup \
+        --description="install waydroid + patch vendor.img (erhai)" \
+        --on-active=5 \
+        /usr/local/sbin/waydroid-erhai-installer.sh setup
+}
+
+if [ "${ERHAI_WAYDROID_DEFER_SETUP:-1}" = 1 ] && [ -x /usr/local/sbin/waydroid-erhai-installer.sh ]; then
+    if defer_setup; then
+        echo "oneplus-erhai-waydroid-installer: installing waydroid in a few seconds"
+        echo "  progress: journalctl -u erhai-waydroid-setup"
+        echo "            /var/log/erhai-waydroid-setup.log"
+    else
+        echo "oneplus-erhai-waydroid-installer: could not schedule the waydroid install"
+        echo "  run it by hand:  sudo waydroid-erhai-installer.sh setup"
+    fi
+fi
+
+exit 0
