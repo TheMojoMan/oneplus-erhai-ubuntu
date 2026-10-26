@@ -27,6 +27,9 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# The patch is written against ONE nautilus line: pick the one matching the
+# INSTALLED upstream major (nautilus-select-boxes-51.patch for 26.10, the plain
+# nautilus-select-boxes.patch for the 50.x line and as the fallback).
 PATCH="$HERE/nautilus-select-boxes.patch"
 WORK="${ERHAI_NAUTILUS_WORK:-/media/data/develop/erhai/tmp/nautilus-erhai-build}"
 BUILD_DIR="$HERE/build"
@@ -42,6 +45,11 @@ VER="$(dpkg-query -W -f='${Version}' nautilus 2>/dev/null || true)"
 # debian version "1:50.2.2-0ubuntu0.2" -> upstream "50.2.2"
 UP="$(printf '%s' "$VER" | sed 's/^[0-9]*://; s/-.*$//')"
 echo "== installed nautilus $VER (upstream $UP)"
+MAJOR="${UP%%.*}"
+if [ -f "$HERE/nautilus-select-boxes-$MAJOR.patch" ]; then
+    PATCH="$HERE/nautilus-select-boxes-$MAJOR.patch"
+fi
+echo "== patch: $(basename "$PATCH")"
 
 mkdir -p "$WORK"
 cd "$WORK"

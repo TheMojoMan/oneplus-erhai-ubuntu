@@ -1,0 +1,840 @@
+--- a/data/org.gnome.nautilus.gschema.xml
++++ b/data/org.gnome.nautilus.gschema.xml
+@@ -168,6 +168,11 @@
+       <summary>Whether to show hidden files</summary>
+       <description>This key is deprecated and ignored. The “show-hidden” key from “org.gtk.Settings.FileChooser” is now used instead.</description>
+     </key>
++    <key type="b" name="show-select-boxes">
++      <default>false</default>
++      <summary>Whether to show selection checkboxes beside items</summary>
++      <description>If set to true, a selection checkbox is shown to the left of each file or folder, allowing multiple items to be selected at once on touchscreens. A finger swiped over the checkboxes toggles each one it passes.</description>
++    </key>
+     <key type="b" name="migrated-gtk-settings">
+       <default>false</default>
+       <summary>Whether GTK 4 settings migration happened</summary>
+--- a/src/nautilus-global-preferences.h
++++ b/src/nautilus-global-preferences.h
+@@ -118,6 +118,7 @@
+ /* Context menu options */
+ #define NAUTILUS_PREFERENCES_SHOW_DELETE_PERMANENTLY "show-delete-permanently"
+ #define NAUTILUS_PREFERENCES_SHOW_CREATE_LINK "show-create-link"
++#define NAUTILUS_PREFERENCES_SHOW_SELECT_BOXES "show-select-boxes"
+ 
+ /* Full Text Search enabled */
+ #define NAUTILUS_PREFERENCES_FTS_ENABLED "fts-enabled"
+--- a/src/nautilus-list-base.c
++++ b/src/nautilus-list-base.c
+@@ -63,6 +63,10 @@
+ 
+     gdouble amount_scrolled_for_zoom;
+     guint scroll_timeout_id;
++
++    /* Swiping over the "show select boxes" checkboxes. */
++    gboolean select_swipe_active;
++    gboolean select_swipe_target;
+ };
+ 
+ G_DEFINE_ABSTRACT_TYPE_WITH_PRIVATE (NautilusListBase, nautilus_list_base, ADW_TYPE_BIN)
+@@ -386,6 +390,149 @@
+     }
+ }
+ 
++/* Returns the NautilusViewCell containing the given point, if any. */
++static NautilusViewCell *
++get_cell_at (NautilusListBase *self,
++             gdouble           x,
++             gdouble           y)
++{
++    GtkWidget *picked = gtk_widget_pick (GTK_WIDGET (self), x, y, GTK_PICK_DEFAULT);
++
++    for (GtkWidget *w = picked; w != NULL; w = gtk_widget_get_parent (w))
++    {
++        if (NAUTILUS_IS_VIEW_CELL (w))
++        {
++            return NAUTILUS_VIEW_CELL (w);
++        }
++        if (w == GTK_WIDGET (self))
++        {
++            break;
++        }
++    }
++
++    return NULL;
++}
++
++/* Returns the cell whose selection checkbox is under the given point (with a
++ * finger-friendly margin), or NULL. */
++static NautilusViewCell *
++get_cell_under_select_box (NautilusListBase *self,
++                           gdouble           x,
++                           gdouble           y)
++{
++    NautilusViewCell *cell = get_cell_at (self, x, y);
++    graphene_point_t point;
++    graphene_point_t in_cell;
++
++    if (cell == NULL)
++    {
++        return NULL;
++    }
++
++    point = GRAPHENE_POINT_INIT (x, y);
++    if (!gtk_widget_compute_point (GTK_WIDGET (self), GTK_WIDGET (cell),
++                                   &point, &in_cell))
++    {
++        return NULL;
++    }
++
++    if (!nautilus_view_cell_point_over_select_box (cell, in_cell.x, in_cell.y))
++    {
++        return NULL;
++    }
++
++    return cell;
++}
++
++static void
++on_view_longpress_pressed (GtkGestureLongPress *gesture,
++                           gdouble              x,
++                           gdouble              y,
++                           gpointer             user_data)
++{
++    NautilusListBase *self = user_data;
++
++    /* Long-pressing an item is handled by the item's own long-press gesture;
++     * only open the background context menu when the finger is not over an
++     * item. */
++    if (get_cell_at (self, x, y) != NULL)
++    {
++        gtk_gesture_set_state (GTK_GESTURE (gesture), GTK_EVENT_SEQUENCE_DENIED);
++        return;
++    }
++
++    g_signal_emit (self, signals[POPUP_BACKGROUND_CONTEXT_MENU], 0, x, y);
++    gtk_gesture_set_state (GTK_GESTURE (gesture), GTK_EVENT_SEQUENCE_CLAIMED);
++}
++
++static void
++on_select_swipe_begin (GtkGestureDrag *gesture,
++                       gdouble         start_x,
++                       gdouble         start_y,
++                       gpointer        user_data)
++{
++    NautilusListBase *self = user_data;
++    NautilusListBasePrivate *priv = nautilus_list_base_get_instance_private (self);
++    NautilusViewCell *cell;
++
++    priv->select_swipe_active = FALSE;
++
++    cell = get_cell_under_select_box (self, start_x, start_y);
++    if (cell == NULL)
++    {
++        gtk_gesture_set_state (GTK_GESTURE (gesture), GTK_EVENT_SEQUENCE_DENIED);
++        return;
++    }
++
++    priv->select_swipe_active = TRUE;
++    priv->select_swipe_target = !nautilus_view_cell_is_selected (cell);
++    nautilus_view_cell_set_selected (cell, priv->select_swipe_target);
++
++    gtk_gesture_set_state (GTK_GESTURE (gesture), GTK_EVENT_SEQUENCE_CLAIMED);
++}
++
++static void
++on_select_swipe_update (GtkGestureDrag *gesture,
++                        gdouble         offset_x,
++                        gdouble         offset_y,
++                        gpointer        user_data)
++{
++    NautilusListBase *self = user_data;
++    NautilusListBasePrivate *priv = nautilus_list_base_get_instance_private (self);
++    gdouble start_x, start_y, x, y;
++    NautilusViewCell *cell;
++
++    if (!priv->select_swipe_active)
++    {
++        return;
++    }
++
++    gtk_gesture_drag_get_start_point (gesture, &start_x, &start_y);
++    x = start_x + offset_x;
++    y = start_y + offset_y;
++
++    /* Once a swipe has started on a checkbox, keep toggling whatever item the
++     * finger is over -- even if it drifted off the checkbox column -- and
++     * never start a drag. */
++    cell = get_cell_at (self, x, y);
++    if (cell != NULL)
++    {
++        nautilus_view_cell_set_selected (cell, priv->select_swipe_target);
++    }
++}
++
++static void
++on_select_swipe_end (GtkGestureDrag *gesture,
++                     gdouble         offset_x,
++                     gdouble         offset_y,
++                     gpointer        user_data)
++{
++    NautilusListBase *self = user_data;
++    NautilusListBasePrivate *priv = nautilus_list_base_get_instance_private (self);
++
++    priv->select_swipe_active = FALSE;
++}
++
+ static void
+ on_item_longpress_pressed (GtkGestureLongPress *gesture,
+                            gdouble              x,
+@@ -400,6 +547,52 @@
+ 
+     open_context_menu_on_press (self, cell, x, y);
+     gtk_gesture_set_state (GTK_GESTURE (gesture), GTK_EVENT_SEQUENCE_CLAIMED);
++}
++
++/* [erhai] How many fingers are currently on the glass.
++ *
++ * The emulated pointer events of a touch say nothing about the number of
++ * fingers, so a GtkDragSource could not tell a one-finger file drag from a
++ * 3-finger gesture; the raw GdkTouchEvents can (sudo-free: a legacy controller
++ * in the CAPTURE phase on the view sees every sequence before the per-cell
++ * controllers).  Used by on_item_drag_prepare() to refuse multi-finger drags.
++ * See nautilus-MEMORY-2026-10-15.md. */
++static gint erhai_live_touches = 0;
++
++static gboolean
++erhai_track_touches (GtkEventController *controller,
++                     GdkEvent           *event,
++                     gpointer            user_data)
++{
++    switch (gdk_event_get_event_type (event))
++    {
++        case GDK_TOUCH_BEGIN:
++            g_atomic_int_inc (&erhai_live_touches);
++            g_message ("erhai-DBG: TOUCH_BEGIN live=%d", g_atomic_int_get (&erhai_live_touches));
++            break;
++        case GDK_TOUCH_END:
++        case GDK_TOUCH_CANCEL:
++            g_atomic_int_add (&erhai_live_touches, -1);
++            g_message ("erhai-DBG: TOUCH_END/CANCEL live=%d", g_atomic_int_get (&erhai_live_touches));
++            if (g_atomic_int_get (&erhai_live_touches) < 0)
++            {
++                g_atomic_int_set (&erhai_live_touches, 0);
++            }
++            break;
++        default:
++            break;
++    }
++
++    return GDK_EVENT_PROPAGATE;
++}
++
++/* A view that comes back on screen starts with a clean slate: a count left over
++ * from a closed window would otherwise refuse every later drag. */
++static void
++erhai_view_mapped (GtkWidget *widget,
++                   gpointer   user_data)
++{
++    g_atomic_int_set (&erhai_live_touches, 0);
+ }
+ 
+ static GdkContentProvider *
+@@ -414,6 +607,21 @@
+     if (self == NULL)
+     {
+         /* Not bound to a listbase. */
++        return NULL;
++    }
++
++    /* [erhai] A FILE DRAG IS A ONE-FINGER GESTURE.  With a second/third finger
++     * on the glass — e.g. the 3-finger workspace swipe starting over an icon —
++     * the primary finger still drove this GtkDragSource and MOVED THE FILES.
++     * Returning NULL cancels the drag: the "prepare" signal uses a first-wins
++     * accumulator and gtk_drag_source_drag_begin() bails out on a NULL content,
++     * so gdk_drag_begin() is never called.  Mouse/trackpad drags are untouched
++     * (they do not produce GDK_TOUCH_* events, so the counter stays 0).
++     * Measured on erhai 2026-10-15; see erhai_track_touches() below. */
++    g_message ("erhai-DBG: drag prepare live=%d", g_atomic_int_get (&erhai_live_touches));
++    if (g_atomic_int_get (&erhai_live_touches) > 1)
++    {
++        g_message ("erhai-DBG: DRAG REFUSED (multi-touch)");
+         return NULL;
+     }
+ 
+@@ -428,6 +636,14 @@
+     guint i;
+ 
+     if (priv->dnd_disabled)
++    {
++        return NULL;
++    }
++
++    /* If the drag starts on a selection checkbox, the finger is swiping to
++     * select/deselect items, never to drag them.  x, y here are the gesture's
++     * START point in cell coordinates. */
++    if (nautilus_view_cell_point_over_select_box (cell, x, y))
+     {
+         return NULL;
+     }
+@@ -1322,6 +1538,15 @@
+     gtk_event_controller_set_propagation_phase (controller, GTK_PHASE_CAPTURE);
+     g_signal_connect (controller, "scroll", G_CALLBACK (on_scroll), self);
+ 
++    /* [erhai] count the fingers: on_item_drag_prepare() refuses to start a file
++     * drag while more than one is down (a 3-finger workspace swipe used to move
++     * files).  CAPTURE on the view runs before the per-cell drag sources. */
++    controller = gtk_event_controller_legacy_new ();
++    gtk_event_controller_set_propagation_phase (controller, GTK_PHASE_CAPTURE);
++    g_signal_connect (controller, "event", G_CALLBACK (erhai_track_touches), self);
++    gtk_widget_add_controller (GTK_WIDGET (self), controller);
++    g_signal_connect (self, "map", G_CALLBACK (erhai_view_mapped), NULL);
++
+     g_signal_connect_object (nautilus_preferences,
+                              "changed::" NAUTILUS_PREFERENCES_CLICK_POLICY,
+                              G_CALLBACK (set_click_mode_from_settings), self,
+@@ -1365,6 +1590,26 @@
+     gtk_gesture_single_set_button (GTK_GESTURE_SINGLE (controller), 0);
+     g_signal_connect (controller, "pressed",
+                       G_CALLBACK (on_view_click_pressed), self);
++
++    /* Long-pressing an empty area opens the background context menu, the touch
++     * equivalent of a right click. */
++    controller = GTK_EVENT_CONTROLLER (gtk_gesture_long_press_new ());
++    gtk_widget_add_controller (GTK_WIDGET (self), controller);
++    gtk_event_controller_set_propagation_phase (controller, GTK_PHASE_BUBBLE);
++    gtk_gesture_single_set_touch_only (GTK_GESTURE_SINGLE (controller), TRUE);
++    g_signal_connect (controller, "pressed",
++                      G_CALLBACK (on_view_longpress_pressed), self);
++
++    /* Swiping a finger across the selection checkboxes toggles them. */
++    controller = GTK_EVENT_CONTROLLER (gtk_gesture_drag_new ());
++    gtk_widget_add_controller (GTK_WIDGET (self), controller);
++    gtk_event_controller_set_propagation_phase (controller, GTK_PHASE_CAPTURE);
++    g_signal_connect (controller, "drag-begin",
++                      G_CALLBACK (on_select_swipe_begin), self);
++    g_signal_connect (controller, "drag-update",
++                      G_CALLBACK (on_select_swipe_update), self);
++    g_signal_connect (controller, "drag-end",
++                      G_CALLBACK (on_select_swipe_end), self);
+ 
+     /* TODO: Implement GDK_ACTION_ASK */
+     drop_target = gtk_drop_target_new (G_TYPE_INVALID, GDK_ACTION_ALL);
+--- a/src/nautilus-name-cell.c
++++ b/src/nautilus-name-cell.c
+@@ -26,6 +26,7 @@
+     GFile *file_path_base_location;
+ 
+     GtkWidget *top_child;
++    GtkWidget *select_box;
+     GtkWidget *expander;
+     GtkWidget *content;
+     GtkWidget *fixed_height_box;
+@@ -345,6 +346,8 @@
+ nautilus_name_cell_init (NautilusNameCell *self)
+ {
+     gtk_widget_init_template (GTK_WIDGET (self));
++
++    nautilus_view_cell_setup_select_box (NAUTILUS_VIEW_CELL (self), self->select_box);
+ 
+     g_signal_connect (self, "notify::icon-size",
+                       G_CALLBACK (on_icon_size_changed), NULL);
+@@ -470,6 +473,7 @@
+     /* Needs to add the direct child of the template widget to dispose it since
+      * a plain GtkWidget doesn't dispose it's child automatically. */
+     gtk_widget_class_bind_template_child (widget_class, NautilusNameCell, top_child);
++    gtk_widget_class_bind_template_child (widget_class, NautilusNameCell, select_box);
+     gtk_widget_class_bind_template_child (widget_class, NautilusNameCell, expander);
+     gtk_widget_class_bind_template_child (widget_class, NautilusNameCell, content);
+     gtk_widget_class_bind_template_child (widget_class, NautilusNameCell, fixed_height_box);
+--- a/src/nautilus-preferences-dialog.c
++++ b/src/nautilus-preferences-dialog.c
+@@ -40,6 +40,8 @@
+         "show_delete_permanently_row"
+ #define NAUTILUS_PREFERENCES_DIALOG_CREATE_LINK_WIDGET                         \
+         "show_create_link_row"
++#define NAUTILUS_PREFERENCES_DIALOG_SELECT_BOXES_WIDGET                        \
++        "show_select_boxes_row"
+ #define NAUTILUS_PREFERENCES_DIALOG_LIST_VIEW_USE_TREE_WIDGET                  \
+         "use_tree_view_row"
+ 
+@@ -195,6 +197,9 @@
+     bind_builder_bool (builder, nautilus_preferences,
+                        NAUTILUS_PREFERENCES_DIALOG_DELETE_PERMANENTLY_WIDGET,
+                        NAUTILUS_PREFERENCES_SHOW_DELETE_PERMANENTLY);
++    bind_builder_bool (builder, nautilus_preferences,
++                       NAUTILUS_PREFERENCES_DIALOG_SELECT_BOXES_WIDGET,
++                       NAUTILUS_PREFERENCES_SHOW_SELECT_BOXES);
+ 
+     setup_detailed_date (builder);
+ 
+--- a/src/nautilus-rename-file-popover.c
++++ b/src/nautilus-rename-file-popover.c
+@@ -32,6 +32,12 @@
+     GtkWidget *name_entry;
+     GtkWidget *title_label;
+ 
++    /* [erhai] Presses in the files view while the rename popover is open.  The
++     * popover deliberately does not take the compositor's popup grab, so the
++     * dismissal it used to get from the grab is done here.  Installed once on
++     * the parent widget (see setup_outside_click_controller()). */
++    GtkEventController *outside_click_controller;
++
+     gulong file_changed_handler_id;
+ };
+ 
+@@ -45,6 +51,82 @@
+     g_assert (NAUTILUS_IS_RENAME_FILE_POPOVER (self));
+ 
+     g_clear_signal_handler (&self->file_changed_handler_id, self->target_file);
++}
++
++/* [erhai] Touchscreen + on-screen-keyboard fix (2026-10-15).
++ *
++ * The rename popover used to keep GTK's default `autohide`, which makes GTK ask
++ * the compositor for a Wayland popup GRAB.  Mutter ends such a grab on the
++ * RELEASE of any press whose surface belongs to another client -- and the
++ * on-screen keyboard is a SHELL surface, with no client at all, so the first tap
++ * on an OSK key dismissed the rename popover and the typed character was lost
++ * (measured on the pad: the popover closed on the very first key, the entry text
++ * unchanged).  Without the grab (`autohide = FALSE`) the OSK types into the
++ * entry; the two things the grab used to provide are re-implemented here:
++ *   * the entry is given the keyboard focus explicitly when the popover is shown
++ *     (NautilusRenameFilePopover now grabs it in show_for_file()), and
++ *   * a press anywhere else in the parent widget -- the files view -- pops the
++ *     popover down again.
++ * Escape still closes the popover (GtkPopover handles GDK_KEY_Escape itself).
++ *
++ * The controller is installed once per popover (the popover lives as long as the
++ * files view) and does nothing while the popover is hidden; g_signal_connect_object
++ * keeps it valid if this popover is destroyed first. */
++static void
++on_outside_click_pressed (GtkGestureClick           *gesture,
++                          gint                       n_press,
++                          gdouble                    x,
++                          gdouble                    y,
++                          NautilusRenameFilePopover *self)
++{
++    GtkWidget *parent;
++    graphene_rect_t bounds;
++    graphene_point_t point;
++
++    if (!gtk_widget_get_visible (GTK_WIDGET (self)))
++    {
++        return;
++    }
++
++    parent = gtk_event_controller_get_widget (GTK_EVENT_CONTROLLER (gesture));
++    point = GRAPHENE_POINT_INIT ((float) x, (float) y);
++
++    if (gtk_widget_compute_bounds (GTK_WIDGET (self), parent, &bounds) &&
++        graphene_rect_contains_point (&bounds, &point))
++    {
++        /* The press is inside the popover: keep it open. */
++        return;
++    }
++
++    gtk_popover_popdown (GTK_POPOVER (self));
++}
++
++static void
++setup_outside_click_controller (NautilusRenameFilePopover *self)
++{
++    GtkWidget *parent;
++
++    if (self->outside_click_controller != NULL)
++    {
++        return;
++    }
++
++    parent = gtk_widget_get_parent (GTK_WIDGET (self));
++    if (parent == NULL)
++    {
++        return;
++    }
++
++    self->outside_click_controller =
++        GTK_EVENT_CONTROLLER (gtk_gesture_click_new ());
++    gtk_event_controller_set_propagation_phase (self->outside_click_controller,
++                                                GTK_PHASE_CAPTURE);
++
++    /* Observes presses without claiming the sequence, so the widget under the
++     * press still gets it. */
++    g_signal_connect_object (self->outside_click_controller, "pressed",
++                             G_CALLBACK (on_outside_click_pressed), self, 0);
++    gtk_widget_add_controller (parent, self->outside_click_controller);
+ }
+ 
+ static void
+@@ -235,6 +317,8 @@
+                                        nautilus_filename_validator_validate,
+                                        self->validator);
+ 
++    setup_outside_click_controller (self);
++
+     gtk_popover_set_pointing_to (GTK_POPOVER (self), pointing_to);
+     gtk_popover_popup (GTK_POPOVER (self));
+     if (!gtk_widget_get_mapped (GTK_WIDGET (self)))
+@@ -242,6 +326,11 @@
+         /* The compositor rejected the popover and it was closed */
+         return;
+     }
++
++    /* [erhai] Without the popup grab (autohide off) the popover does not take the
++     * keyboard focus by itself, so the entry asks for it explicitly.  The
++     * on-screen keyboard follows the focused entry. */
++    gtk_widget_grab_focus (self->name_entry);
+ 
+     if (nautilus_file_is_regular_file (self->target_file))
+     {
+@@ -261,6 +350,12 @@
+ {
+     g_type_ensure (NAUTILUS_TYPE_FILENAME_VALIDATOR);
+     gtk_widget_init_template (GTK_WIDGET (self));
++
++    /* [erhai] No compositor popup grab: a tap on the on-screen keyboard is a
++     * press on a SHELL surface, which mutter treats as an outside click and uses
++     * to end the grab -- that closed this popover on the first OSK key tap.  With
++     * autohide off the dismissal is done by on_outside_click_pressed(). */
++    gtk_popover_set_autohide (GTK_POPOVER (self), FALSE);
+ }
+ 
+ static void
+--- a/src/nautilus-view-cell.c
++++ b/src/nautilus-view-cell.c
+@@ -6,8 +6,11 @@
+ 
+ #include "nautilus-view-cell.h"
+ 
++#include "nautilus-global-preferences.h"
+ #include "nautilus-list-base.h"
++#include "nautilus-list-base-private.h"
+ #include "nautilus-view-item.h"
++#include "nautilus-view-model.h"
+ 
+ /**
+  * NautilusViewCell:
+@@ -31,6 +34,10 @@
+ 
+     guint icon_size;
+     guint position;
++
++    /* Optional selection checkbox (owned by the subclass template). */
++    GtkWidget *select_box; /* Unowned */
++    NautilusViewModel *select_box_model; /* Unowned; only compared, never dereferenced */
+ };
+ 
+ 
+@@ -148,6 +155,262 @@
+     g_clear_weak_pointer (&priv->view);
+ 
+     G_OBJECT_CLASS (nautilus_view_cell_parent_class)->dispose (object);
++}
++
++/* Selection checkbox support
++ *
++ * A subclass may place a GtkCheckButton in its template and register it with
++ * nautilus_view_cell_setup_select_box(). This base class then keeps it in sync
++ * with the selection model and shows/hides it according to the
++ * "show-select-boxes" preference. It also exposes a small API used by the view
++ * to implement finger swiping over the checkboxes. */
++
++static void update_select_box (NautilusViewCell *self);
++
++static NautilusViewModel *
++get_select_box_model (NautilusViewCell *self)
++{
++    NautilusViewCellPrivate *priv = nautilus_view_cell_get_instance_private (self);
++
++    if (priv->view == NULL)
++    {
++        return NULL;
++    }
++
++    return nautilus_list_base_get_model (priv->view);
++}
++
++static gboolean
++select_box_position_valid (NautilusViewCell  *self,
++                           NautilusViewModel **model_out,
++                           guint              *position_out)
++{
++    NautilusViewCellPrivate *priv = nautilus_view_cell_get_instance_private (self);
++    NautilusViewModel *model = get_select_box_model (self);
++    guint position = priv->position;
++
++    if (model == NULL ||
++        position == GTK_INVALID_LIST_POSITION ||
++        position >= g_list_model_get_n_items (G_LIST_MODEL (model)))
++    {
++        return FALSE;
++    }
++
++    *model_out = model;
++    *position_out = position;
++
++    return TRUE;
++}
++
++static gboolean
++get_select_box_selected (NautilusViewCell *self)
++{
++    NautilusViewModel *model;
++    guint position;
++
++    if (!select_box_position_valid (self, &model, &position))
++    {
++        return FALSE;
++    }
++
++    return gtk_selection_model_is_selected (GTK_SELECTION_MODEL (model), position);
++}
++
++static void
++set_select_box_selected (NautilusViewCell *self,
++                         gboolean          selected)
++{
++    NautilusViewModel *model;
++    guint position;
++
++    if (!select_box_position_valid (self, &model, &position))
++    {
++        return;
++    }
++
++    if (selected)
++    {
++        gtk_selection_model_select_item (GTK_SELECTION_MODEL (model), position, FALSE);
++    }
++    else
++    {
++        gtk_selection_model_unselect_item (GTK_SELECTION_MODEL (model), position);
++    }
++}
++
++static void
++on_select_box_toggled (GtkCheckButton *button,
++                       gpointer        user_data)
++{
++    set_select_box_selected (NAUTILUS_VIEW_CELL (user_data),
++                             gtk_check_button_get_active (button));
++}
++
++static void
++update_select_box (NautilusViewCell *self)
++{
++    NautilusViewCellPrivate *priv = nautilus_view_cell_get_instance_private (self);
++    gboolean show;
++
++    if (priv->select_box == NULL)
++    {
++        return;
++    }
++
++    show = g_settings_get_boolean (nautilus_preferences,
++                                   NAUTILUS_PREFERENCES_SHOW_SELECT_BOXES);
++
++    gtk_widget_set_visible (priv->select_box, show && priv->item != NULL);
++
++    g_signal_handlers_block_by_func (priv->select_box,
++                                     G_CALLBACK (on_select_box_toggled), self);
++    gtk_check_button_set_active (GTK_CHECK_BUTTON (priv->select_box),
++                                 get_select_box_selected (self));
++    g_signal_handlers_unblock_by_func (priv->select_box,
++                                       G_CALLBACK (on_select_box_toggled), self);
++}
++
++static void
++on_selection_changed (NautilusViewModel *model,
++                      guint              position,
++                      guint              n_items,
++                      gpointer           user_data)
++{
++    NautilusViewCell *self = NAUTILUS_VIEW_CELL (user_data);
++    NautilusViewCellPrivate *priv = nautilus_view_cell_get_instance_private (self);
++
++    if (priv->select_box == NULL || priv->position == GTK_INVALID_LIST_POSITION)
++    {
++        return;
++    }
++
++    if (priv->position >= position && priv->position < position + n_items)
++    {
++        update_select_box (self);
++    }
++}
++
++static void
++connect_select_box_model (NautilusViewCell *self)
++{
++    NautilusViewCellPrivate *priv = nautilus_view_cell_get_instance_private (self);
++    NautilusViewModel *model = get_select_box_model (self);
++
++    if (model == priv->select_box_model)
++    {
++        return;
++    }
++
++    priv->select_box_model = model;
++
++    if (model != NULL)
++    {
++        g_signal_connect_object (model, "selection-changed",
++                                 G_CALLBACK (on_selection_changed), self,
++                                 G_CONNECT_DEFAULT);
++    }
++}
++
++static void
++on_cell_select_box_changed (NautilusViewCell *self)
++{
++    connect_select_box_model (self);
++    update_select_box (self);
++}
++
++void
++nautilus_view_cell_setup_select_box (NautilusViewCell *self,
++                                     GtkWidget        *box)
++{
++    NautilusViewCellPrivate *priv = nautilus_view_cell_get_instance_private (self);
++
++    g_return_if_fail (NAUTILUS_IS_VIEW_CELL (self));
++    g_return_if_fail (box != NULL);
++
++    priv->select_box = box;
++
++    /* Marker used by the view to hit-test the checkbox while swiping over it. */
++    g_object_set_data (G_OBJECT (box), "nautilus-select-box", GINT_TO_POINTER (1));
++    gtk_widget_set_visible (box, FALSE);
++
++    g_signal_connect_object (box, "toggled",
++                             G_CALLBACK (on_select_box_toggled), self,
++                             G_CONNECT_DEFAULT);
++    g_signal_connect_object (self, "notify::item",
++                             G_CALLBACK (on_cell_select_box_changed), self,
++                             G_CONNECT_SWAPPED);
++    g_signal_connect_object (self, "notify::position",
++                             G_CALLBACK (on_cell_select_box_changed), self,
++                             G_CONNECT_SWAPPED);
++    g_signal_connect_object (nautilus_preferences,
++                             "changed::" NAUTILUS_PREFERENCES_SHOW_SELECT_BOXES,
++                             G_CALLBACK (on_cell_select_box_changed), self,
++                             G_CONNECT_SWAPPED);
++
++    if (priv->view != NULL)
++    {
++        g_signal_connect_object (priv->view, "notify::model",
++                                 G_CALLBACK (on_cell_select_box_changed), self,
++                                 G_CONNECT_SWAPPED);
++    }
++
++    on_cell_select_box_changed (self);
++}
++
++GtkWidget *
++nautilus_view_cell_get_select_box (NautilusViewCell *self)
++{
++    NautilusViewCellPrivate *priv = nautilus_view_cell_get_instance_private (self);
++
++    g_return_val_if_fail (NAUTILUS_IS_VIEW_CELL (self), NULL);
++
++    return priv->select_box;
++}
++
++void
++nautilus_view_cell_set_selected (NautilusViewCell *self,
++                                 gboolean          selected)
++{
++    g_return_if_fail (NAUTILUS_IS_VIEW_CELL (self));
++
++    set_select_box_selected (self, selected);
++}
++
++gboolean
++nautilus_view_cell_is_selected (NautilusViewCell *self)
++{
++    g_return_val_if_fail (NAUTILUS_IS_VIEW_CELL (self), FALSE);
++
++    return get_select_box_selected (self);
++}
++
++/* Extra slack (px) around the checkbox so a finger slightly off it still
++ * counts as "starting on the box". */
++#define SELECT_BOX_TOUCH_MARGIN 10
++
++gboolean
++nautilus_view_cell_point_over_select_box (NautilusViewCell *self,
++                                          double            x,
++                                          double            y)
++{
++    NautilusViewCellPrivate *priv = nautilus_view_cell_get_instance_private (self);
++    graphene_rect_t bounds;
++    graphene_point_t point = GRAPHENE_POINT_INIT (x, y);
++
++    if (priv->select_box == NULL ||
++        !gtk_widget_get_visible (priv->select_box))
++    {
++        return FALSE;
++    }
++
++    if (!gtk_widget_compute_bounds (priv->select_box, GTK_WIDGET (self), &bounds))
++    {
++        return FALSE;
++    }
++
++    graphene_rect_inset (&bounds, -SELECT_BOX_TOUCH_MARGIN, -SELECT_BOX_TOUCH_MARGIN);
++
++    return graphene_rect_contains_point (&bounds, &point);
+ }
+ 
+ static void
+--- a/src/nautilus-view-cell.h
++++ b/src/nautilus-view-cell.h
+@@ -27,4 +27,18 @@
+ NautilusViewItem *nautilus_view_cell_get_item (NautilusViewCell *self);
+ guint nautilus_view_cell_get_position (NautilusViewCell *self);
+ 
++/* Optional selection checkbox support (see the "show-select-boxes" setting).
++ * Subclasses that place a GtkCheckButton in their template must register it
++ * with nautilus_view_cell_setup_select_box() so that the base class can keep
++ * it in sync with the selection model and show/hide it per the setting. */
++void nautilus_view_cell_setup_select_box (NautilusViewCell *self,
++                                          GtkWidget        *box);
++GtkWidget *nautilus_view_cell_get_select_box (NautilusViewCell *self);
++void nautilus_view_cell_set_selected (NautilusViewCell *self,
++                                      gboolean          selected);
++gboolean nautilus_view_cell_is_selected (NautilusViewCell *self);
++gboolean nautilus_view_cell_point_over_select_box (NautilusViewCell *self,
++                                                   double            x,
++                                                   double            y);
++
+ G_END_DECLS
+--- a/src/resources/ui/nautilus-name-cell.blp
++++ b/src/resources/ui/nautilus-name-cell.blp
+@@ -3,6 +3,13 @@
+ 
+ template $NautilusNameCell: $NautilusViewCell {
+   Box top_child {
++    CheckButton select_box {
++      valign: center;
++      margin-start: 6;
++      margin-end: 6;
++      tooltip-text: _("Select");
++    }
++
+     TreeExpander expander {
+       indent-for-icon: false;
+       focusable: false;
+--- a/src/resources/ui/nautilus-preferences-dialog.blp
++++ b/src/resources/ui/nautilus-preferences-dialog.blp
+@@ -54,6 +54,12 @@
+ 
+       Adw.SwitchRow show_delete_permanently_row {
+         title: _("_Delete Permanently");
++        use-underline: true;
++      }
++
++      Adw.SwitchRow show_select_boxes_row {
++        title: _("Show Select _Boxes");
++        subtitle: _("Show checkboxes for selecting multiple items. Swipe over them to select or deselect several items at once.");
+         use-underline: true;
+       }
+     }
