@@ -444,6 +444,9 @@ mkdir -p "$ROOTDIR/var/log/journal"
 install -d -m755 "$ROOTDIR/etc/apt/keyrings"
 install -m644 "$SETUP/apt/packages.mozilla.org.asc" "$ROOTDIR/etc/apt/keyrings/"
 install -m644 "$SETUP/apt/mozilla-firefox.pref" "$ROOTDIR/etc/apt/preferences.d/"
+# Keeps the erhai builds of the repackaged Ubuntu artifacts (mutter, GTK4, Mesa)
+# over a newer STOCK Ubuntu version -- see the file's header.
+install -m644 "$SETUP/apt/erhai-patched-artifacts.pref" "$ROOTDIR/etc/apt/preferences.d/"
 install -m644 "$SETUP/apt/mozilla-unattended-upgrades.conf" \
 	"$ROOTDIR/etc/apt/apt.conf.d/51erhai-mozilla"
 

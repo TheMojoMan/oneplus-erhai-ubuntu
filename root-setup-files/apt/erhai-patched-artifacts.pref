@@ -1,0 +1,27 @@
+# Keep the erhai builds of the packages that REPACKAGE an Ubuntu artifact.
+# They carry a device fix on top of Ubuntu's binary, so a plain apt upgrade
+# must never trade them for a newer STOCK Ubuntu package of the same name --
+# that silently drops the fix (measured 2026-10-26: Ubuntu published
+# libmutter-18-0 50.1-0ubuntu2.5 while the erhai package is 2.4+erhai1, so
+# "apt upgrade" would have removed the touch-drag guard).
+#
+# The way forward is to REBUILD the erhai package on the new Ubuntu base
+# (BASE=<new ubuntu version> ./build-mutter-deb.sh, likewise GTK4 / Mesa).
+# Until then this pin keeps the patched build; it only bites when the package
+# is newer and comes from outside the erhai repo.
+#
+# Note for 26.10: mutter's soname changes (libmutter-18-0 -> libmutter-19-0 or
+# later), so that release gets its own package names in ppa .../ubuntu/stonking/
+# and needs no pin for them.  The entries below are the 26.04 (resolute) names.
+
+Package: libmutter-18-0 gir1.2-mutter-18 libmutter-18-0-dbgsym
+Pin: origin themojoman.github.io
+Pin-Priority: 1001
+
+Package: libgtk-4-1 libgtk-4-dev libgtk-4-1-dbgsym
+Pin: origin themojoman.github.io
+Pin-Priority: 1001
+
+Package: libgbm1 libgl1-mesa-dri libglx-mesa0 libegl-mesa0 mesa-libgallium mesa-vulkan-drivers
+Pin: origin themojoman.github.io
+Pin-Priority: 1001
