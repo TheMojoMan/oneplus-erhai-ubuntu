@@ -2,6 +2,6 @@
   "uuid": "erhai-thermal@erhai.local",
   "name": "erhai Thermal Profile",
   "description": "Switch the erhai CPU+GPU thermal ceiling (performance/balanced/cool/cold) from Quick Settings.",
-  "shell-version": ["48", "49", "50"],
+  "shell-version": ["48", "49", "50", "51"],
   "version": 1
 }

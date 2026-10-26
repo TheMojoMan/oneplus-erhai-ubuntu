@@ -2,7 +2,7 @@
   "uuid": "magnetize@nadelacruz-00.github.io",
   "name": "Magnetize",
   "description": "Magnet-style window snapping. Snap windows to halves, quarters and thirds with Ctrl+Alt shortcuts on the same keys as Magnet on macOS (QWERTY, Colemak, Dvorak, Workman and more), by dragging them to screen edges and corners, or from the top bar.",
-  "shell-version": ["47", "48", "49", "50"],
+  "shell-version": ["47", "48", "49", "50", "51"],
   "settings-schema": "org.gnome.shell.extensions.magnetize",
   "url": "https://github.com/nadelacruz-00/magnetize",
   "version-name": "1.2"

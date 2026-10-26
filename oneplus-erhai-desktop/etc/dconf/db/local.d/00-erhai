@@ -29,7 +29,7 @@ ambient-enabled=false
 # Ubuntu images ship this as true, which switches every extension off — the
 # erhai Quick Settings toggles included.
 disable-user-extensions=false
-enabled-extensions=['erhai-thermal@erhai.local', 'erhai-sensors@erhai.local']
+enabled-extensions=['ding@rastersoft.com', 'ubuntu-dock@ubuntu.com', 'tiling-assistant@ubuntu.com', 'ubuntu-appindicators@ubuntu.com', 'erhai-thermal@erhai.local', 'erhai-sensors@erhai.local', 'erhai-torch@erhai.local', 'erhai-bypass@erhai.local', 'gjsosk@vishram1123.com', 'magnetize@nadelacruz-00.github.io']
 
 [org/gnome/desktop/session]
 idle-delay=uint32 600
