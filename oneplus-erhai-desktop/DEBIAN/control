@@ -1,5 +1,5 @@
 Package: oneplus-erhai-desktop
-Version: 2.28
+Version: 2.29
 Section: utils
 Priority: optional
 Architecture: all
@@ -380,3 +380,15 @@ Description: Desktop glue for the OnePlus Pad 3 (erhai)
  USER's - it holds the password that unlocks the keyring.  Tests:
  tmp/keyring-test/keyring-unlock-test.sh (38 checks: the helper through PATH stubs,
  the pam logic through the ERHAI_PAM_DIR seam).
+ Since 2.29 the GREETER also ignores the power key: the greeter dconf seed
+ (usr/share/gdm/dconf/95-erhai-greeter) now carries power-button-action='nothing'
+ for org.gnome.settings-daemon.plugins.power.  User sessions already got it from
+ /etc/dconf/db/local.d/00-erhai, but the greeter's profile (user-db:user +
+ system-db:gdm + the compiled file-db) never reads system-db:local, so after a
+ LOGOUT the login screen fell back to Ubuntu's 10_ubuntu-settings.gschema.override
+ value 'interactive' and gsd-power answered a short power press with
+ gnome-session's EndSessionDialog ("your computer will shut down in N seconds",
+ 2026-10-26) instead of leaving the key to erhai-power-watch.py, which already
+ toggles the panel in every session (a long press stays the clean reboot).  The
+ postinst's generate-config step recompiles the file-db, so the fix reaches a
+ running gdm without a greeter restart.

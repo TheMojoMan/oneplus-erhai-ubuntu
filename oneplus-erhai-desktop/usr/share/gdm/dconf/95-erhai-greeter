@@ -23,3 +23,12 @@ session-name='gnome-login'
 # erhai's auto-brightness is erhai-alsd; GNOME's own ALS handling stays off here
 # too (its unanchored curve collapses the panel to its minimum).
 ambient-enabled=false
+# The power key belongs to erhai-power-watch.py (a system service: panel off/on
+# per short press, clean reboot on a press-and-hold), in the greeter as well.
+# /etc/dconf/db/local.d/00-erhai sets 'nothing' for user sessions, but the
+# greeter never reads that system-db -- it reads system-db:gdm + this file-db --
+# so without this line the login screen keeps Ubuntu's
+# 10_ubuntu-settings.gschema.override value 'interactive' and gsd-power turns a
+# short power press into gnome-session's EndSessionDialog ("your computer shuts
+# down in N seconds"), which is what a user saw after logging out (2026-10-26).
+power-button-action='nothing'

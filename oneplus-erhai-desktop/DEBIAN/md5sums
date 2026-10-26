@@ -52,7 +52,7 @@ b60c6831263f6164fa46fc842d14931a  usr/local/sbin/erhai-rtc-sync.py
 16b1e8005c725dd47ed687ba7032e094  usr/local/sbin/erhai-touch-rebind.sh
 1525ffc93a2fb55b818a8eccf0c2cfcd  usr/local/sbin/erhai-user-groups.sh
 7cc0c817e42043635b67a853eb0d5748  usr/local/share/gdm/greeter/wayland-sessions/gnome-greeter.desktop
-66d53863532a6fa5981f37b5978c25c2  usr/share/gdm/dconf/95-erhai-greeter
+467dc749e7366cde97f6b036b7b9e304  usr/share/gdm/dconf/95-erhai-greeter
 b27b33c1472cb7f3cea8be939b80c477  usr/share/glib-2.0/schemas/99-erhai-no-gsd-ambient.gschema.override
 c7f7628ba2f8d955ef5bea823c288a4c  usr/share/gnome-shell/extensions/erhai-bypass@erhai.local/extension.js
 28b900a6282be01d5b36b772857fb010  usr/share/gnome-shell/extensions/erhai-bypass@erhai.local/metadata.json
