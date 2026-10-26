@@ -300,6 +300,23 @@ done
 	exit 1; }
 echo "[build-root] on-screen keyboard: gjs-osk payload + dconf seed present"
 
+# ---------------------------------------------------------------- magnetize --
+# Window snapping = Magnetize (`magnetize@nadelacruz-00.github.io`, 1.2), the
+# extension the pad actually runs.  It ships the same way as gjs-osk above:
+#   * the extension tree   overlay/usr/share/gnome-shell/extensions/
+#                          magnetize@nadelacruz-00.github.io/ (copied from the
+#                          live user install; the tree+mtime loop and the
+#                          755/644 normalization further up cover it)
+#   * enabled for EVERY user by the SAME dconf seed as gjs-osk, which also
+#     lists `disabled-extensions=['tiling-assistant@ubuntu.com']`.
+# WHY THE SEED AND NOT modes/ubuntu.json: shell UNIONS the session-mode
+# `enabledExtensions` list with the user's `enabled-extensions`, so removing
+# tiling-assistant from ubuntu.json would not switch it off for a user whose
+# gsettings still lists it -- only `disabled-extensions` wins over both.
+# Leave ubuntu.json (a dpkg-owned file) alone; the seed is ours.
+# To change it: tmp/magnetize-ext/install-magnetize.sh <ROOTDIR> re-copies the
+# live tree and patches the seed idempotently (the overlay is its usual target).
+
 # GDM greeter/wizard theme: erhai wallpaper on the lock/setup background.
 # Registered as a higher-priority gdm-theme.gresource alternative so the
 # packaged Yaru theme stays untouched and dpkg updates stay clean.

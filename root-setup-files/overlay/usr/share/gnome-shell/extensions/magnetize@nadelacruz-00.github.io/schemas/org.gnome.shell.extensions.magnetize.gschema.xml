@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Defaults are Magnet's own shortcuts on QWERTY. On first run the extension
+  rewrites the letter shortcuts for your keyboard layout (see presets.js), so
+  they stay on the same physical keys on Colemak, Dvorak and others.
+-->
+<schemalist>
+  <schema id="org.gnome.shell.extensions.magnetize" path="/org/gnome/shell/extensions/magnetize/">
+
+    <!-- Halves -->
+    <key name="left-half" type="as"><default><![CDATA[['<Control><Alt>Left']]]></default><summary>Left half</summary></key>
+    <key name="right-half" type="as"><default><![CDATA[['<Control><Alt>Right']]]></default><summary>Right half</summary></key>
+    <key name="top-half" type="as"><default><![CDATA[['<Control><Alt>Up']]]></default><summary>Top half</summary></key>
+    <key name="bottom-half" type="as"><default><![CDATA[['<Control><Alt>Down']]]></default><summary>Bottom half</summary></key>
+
+    <!-- Quarters: U I J K -->
+    <key name="top-left" type="as"><default><![CDATA[['<Control><Alt>u']]]></default><summary>Top left quarter</summary></key>
+    <key name="top-right" type="as"><default><![CDATA[['<Control><Alt>i']]]></default><summary>Top right quarter</summary></key>
+    <key name="bottom-left" type="as"><default><![CDATA[['<Control><Alt>j']]]></default><summary>Bottom left quarter</summary></key>
+    <key name="bottom-right" type="as"><default><![CDATA[['<Control><Alt>k']]]></default><summary>Bottom right quarter</summary></key>
+
+    <!-- Thirds: D F G, two thirds: E R T -->
+    <key name="left-third" type="as"><default><![CDATA[['<Control><Alt>d']]]></default><summary>Left third</summary></key>
+    <key name="center-third" type="as"><default><![CDATA[['<Control><Alt>f']]]></default><summary>Center third</summary></key>
+    <key name="right-third" type="as"><default><![CDATA[['<Control><Alt>g']]]></default><summary>Right third</summary></key>
+    <key name="left-two-thirds" type="as"><default><![CDATA[['<Control><Alt>e']]]></default><summary>Left two thirds</summary></key>
+    <key name="center-two-thirds" type="as"><default><![CDATA[['<Control><Alt>r']]]></default><summary>Center two thirds</summary></key>
+    <key name="right-two-thirds" type="as"><default><![CDATA[['<Control><Alt>t']]]></default><summary>Right two thirds</summary></key>
+
+    <!-- Fourths and sixths: unbound by default, as in Magnet -->
+    <key name="first-fourth" type="as"><default>[]</default><summary>First fourth</summary></key>
+    <key name="second-fourth" type="as"><default>[]</default><summary>Second fourth</summary></key>
+    <key name="third-fourth" type="as"><default>[]</default><summary>Third fourth</summary></key>
+    <key name="fourth-fourth" type="as"><default>[]</default><summary>Fourth fourth</summary></key>
+    <key name="left-three-fourths" type="as"><default>[]</default><summary>Left three fourths</summary></key>
+    <key name="right-three-fourths" type="as"><default>[]</default><summary>Right three fourths</summary></key>
+    <key name="top-left-sixth" type="as"><default>[]</default><summary>Top left sixth</summary></key>
+    <key name="top-center-sixth" type="as"><default>[]</default><summary>Top center sixth</summary></key>
+    <key name="top-right-sixth" type="as"><default>[]</default><summary>Top right sixth</summary></key>
+    <key name="bottom-left-sixth" type="as"><default>[]</default><summary>Bottom left sixth</summary></key>
+    <key name="bottom-center-sixth" type="as"><default>[]</default><summary>Bottom center sixth</summary></key>
+    <key name="bottom-right-sixth" type="as"><default>[]</default><summary>Bottom right sixth</summary></key>
+
+    <!-- Other -->
+    <key name="maximize-window" type="as"><default><![CDATA[['<Control><Alt>Return']]]></default><summary>Maximize</summary></key>
+    <key name="center" type="as"><default><![CDATA[['<Control><Alt>c']]]></default><summary>Center</summary></key>
+    <key name="restore" type="as"><default><![CDATA[['<Control><Alt>BackSpace']]]></default><summary>Restore</summary></key>
+
+    <!-- Displays -->
+    <key name="next-display" type="as"><default><![CDATA[['<Control><Alt><Super>Right']]]></default><summary>Next display</summary></key>
+    <key name="previous-display" type="as"><default><![CDATA[['<Control><Alt><Super>Left']]]></default><summary>Previous display</summary></key>
+
+    <!-- Behaviour -->
+    <key name="drag-snapping" type="b">
+      <default>true</default>
+      <summary>Snap windows by dragging them to screen edges and corners</summary>
+    </key>
+    <key name="remove-conflicts" type="b">
+      <default>true</default>
+      <summary>Temporarily remove GNOME shortcuts that clash with these</summary>
+    </key>
+    <key name="keyboard-layout" type="s">
+      <choices>
+        <choice value="auto"/><choice value="qwerty"/><choice value="colemak"/>
+        <choice value="colemak-dh"/><choice value="colemak-dh-iso"/>
+        <choice value="dvorak"/><choice value="workman"/>
+      </choices>
+      <default>'auto'</default>
+      <summary>Layout whose keys the letter shortcuts are placed on</summary>
+    </key>
+    <key name="modifiers" type="s">
+      <choices>
+        <choice value="ctrl-alt"/><choice value="super-alt"/><choice value="ctrl-super"/>
+      </choices>
+      <default>'ctrl-alt'</default>
+      <summary>Modifier keys for the preset shortcuts</summary>
+    </key>
+    <key name="window-gap" type="i">
+      <range min="0" max="64"/>
+      <default>0</default>
+      <summary>Gap in pixels around snapped windows</summary>
+    </key>
+    <key name="top-edge" type="s">
+      <choices>
+        <choice value="maximize-hold-top-half"/><choice value="top-half-hold-maximize"/><choice value="maximize"/>
+      </choices>
+      <default>'maximize-hold-top-half'</default>
+      <summary>What dragging to the top edge does, and what holding there does</summary>
+    </key>
+    <key name="top-edge-hold-time" type="i">
+      <range min="200" max="3000"/>
+      <default>1000</default>
+      <summary>How long to hold at the top edge, in milliseconds</summary>
+    </key>
+    <key name="show-indicator" type="b">
+      <default>true</default>
+      <summary>Show the Magnetize menu in the top bar</summary>
+    </key>
+    <key name="applied-preset" type="s">
+      <default>''</default>
+      <summary>Internal: layout and modifiers the shortcuts were last written for</summary>
+    </key>
+    <key name="stash" type="s">
+      <default>'{}'</default>
+      <summary>Internal: GNOME settings changed while enabled, restored on disable</summary>
+    </key>
+  </schema>
+</schemalist>

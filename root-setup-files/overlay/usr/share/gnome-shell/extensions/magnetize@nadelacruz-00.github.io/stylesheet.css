@@ -1,0 +1,39 @@
+.magnetize-preview {
+  border-radius: 12px;
+}
+
+.magnetize-grid-item {
+  padding: 6px 12px;
+}
+
+.magnetize-thumb-button {
+  padding: 5px;
+  border-radius: 9px;
+}
+
+.magnetize-thumb-button:hover,
+.magnetize-thumb-button:focus {
+  background-color: rgba(128, 128, 128, 0.22);
+}
+
+.magnetize-thumb-button:active {
+  background-color: rgba(128, 128, 128, 0.35);
+}
+
+.magnetize-thumb {
+  width: 40px;
+  height: 26px;
+  border-radius: 5px;
+  background-color: rgba(128, 128, 128, 0.18);
+}
+
+.magnetize-thumb-zone {
+  border-radius: 3px;
+  background-color: -st-accent-color;
+}
+
+.magnetize-hint {
+  font-size: 0.9em;
+  min-height: 1.2em;
+  color: rgba(128, 128, 128, 1);
+}
