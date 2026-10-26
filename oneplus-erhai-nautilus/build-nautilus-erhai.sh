@@ -47,11 +47,11 @@ mkdir -p "$WORK"
 cd "$WORK"
 
 mkdir -p src
-DSC="$(ls src/nautilus_"$UP"*.dsc 2>/dev/null | head -1)"
+DSC="$(ls src/nautilus_"$UP"*.dsc 2>/dev/null | head -1 || true)"   # pipefail: no match is normal here
 if [ -z "$DSC" ]; then
     echo "== fetching source (nautilus $UP) =="
     ( cd src && apt-get source --download-only nautilus )
-    DSC="$(ls src/nautilus_"$UP"*.dsc 2>/dev/null | head -1)"
+    DSC="$(ls src/nautilus_"$UP"*.dsc 2>/dev/null | head -1 || true)"   # pipefail: no match is normal here
 fi
 [ -n "$DSC" ] || { echo "no .dsc for $UP" >&2; exit 1; }
 echo "== extracting a clean source tree =="
