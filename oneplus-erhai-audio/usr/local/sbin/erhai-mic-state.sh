@@ -29,8 +29,34 @@
 set -u
 
 log() { echo "erhai-mic-state: $*"; }
-c() { amixer -c 0 cset name="$1" "$2" >/dev/null 2>&1 \
-	|| log "warning: could not set '$1' to '$2'"; }
+
+# libasound 1.2.16 (Ubuntu 26.10) resolves amixer's name= lookup differently from
+# 1.2.15 (26.04): 'amixer -c 0 cget name=ADC4 Volume' fails with "Cannot find the
+# given element from control sysdefault:0" although the control is listed by
+# 'amixer -c 0 controls' -- so every setting below was skipped on stonking and
+# the mic route stayed at the driver defaults.  Try the HARDWARE mixer first
+# (-D hw:0) and both the raw CTL name ('ADC4 Volume') and the simple-element
+# name ('ADC4'); the first combination that works wins.
+amixer_dev() {	# $1 = cset|cget, rest = amixer args
+	local d
+	for d in "-D hw:0" "-c 0"; do
+		if amixer $d "$@" 2>/dev/null; then return 0; fi
+	done
+	return 1
+}
+c() {		# $1 = control name, $2 = value
+	if amixer_dev cset name="$1" "$2" >/dev/null ||
+	   amixer_dev cset name="${1% Volume}" "$2" >/dev/null; then
+		return 0
+	fi
+	log "warning: could not set '$1' to '$2'"
+}
+cg() {		# $1 = control name -> "values=.." (empty when unreadable)
+	local o
+	o="$(amixer_dev cget name="$1" | tail -1 | tr -d ' ')"
+	[ -n "$o" ] || o="$(amixer_dev cget name="${1% Volume}" | tail -1 | tr -d ' ')"
+	printf '%s' "$o"
+}
 
 # The card (and its control node) must exist; the unit's condition covers the
 # normal boot, this covers being called from the bring-up script.
@@ -91,5 +117,5 @@ c 'TX_DEC0 Volume' 94
 c 'TX_DEC1 Volume' 94
 
 # 4. Proof in the journal: the two controls whose vendor values silence the mic.
-log "TX SMIC MUX0 = $(amixer -c 0 cget name='TX SMIC MUX0' 2>/dev/null | tail -1 | tr -d ' '), TX SMIC MUX1 = $(amixer -c 0 cget name='TX SMIC MUX1' 2>/dev/null | tail -1 | tr -d ' ')"
+log "TX SMIC MUX0 = $(cg 'TX SMIC MUX0'), TX SMIC MUX1 = $(cg 'TX SMIC MUX1')"
 log "mic capture state applied"

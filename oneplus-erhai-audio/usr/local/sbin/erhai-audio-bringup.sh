@@ -19,6 +19,18 @@ SYS=/sys/bus/platform
 
 log() { echo "erhai-audio-bringup: $*"; }
 
+# libasound 1.2.16 (26.10) makes 'amixer -c 0 name=...' lookups fail even though
+# the controls exist ("Cannot find the given element from control sysdefault:0");
+# try the hardware mixer (-D hw:0) first and fall back to '-c 0'.  (microphone
+# route, measured 2026-10-26)
+amixer_dev() {	# rest = amixer args
+	local d
+	for d in "-D hw:0" "-c 0"; do
+		if amixer $d "$@" 2>/dev/null; then return 0; fi
+	done
+	return 1
+}
+
 bound() { [ -n "$(readlink "$SYS/devices/$1/driver" 2>/dev/null)" ]; }
 
 # 1. LPI pinctrl: the macros' pinctrl provider. Its driver allows manual bind.
@@ -99,19 +111,19 @@ log "applied UCM HiFi verb routing on card0"
 #     UCM path alone. Values match the verb's EnableSequence and the known-
 #     good sda18 state exactly: these mixers have TWO channels, and the
 #     working state is on,off (a bare "1" would set BOTH -> dual route).
-amixer -c 0 cset "name=SECONDARY_MI2S_RX Audio Mixer MultiMedia1" on,off >/dev/null 2>&1 \
+amixer_dev cset "name=SECONDARY_MI2S_RX Audio Mixer MultiMedia1" on,off >/dev/null 2>&1 \
 	|| log "warning: could not set MM1->SECONDARY_MI2S_RX route"
-amixer -c 0 cset "name=DISPLAY_PORT_RX_0 Audio Mixer MultiMedia2" on,off >/dev/null 2>&1 \
+amixer_dev cset "name=DISPLAY_PORT_RX_0 Audio Mixer MultiMedia2" on,off >/dev/null 2>&1 \
 	|| log "warning: could not set MM2->DISPLAY_PORT_RX_0 route"
-amixer -c 0 cset "name=MultiMedia3 Mixer TX_CODEC_DMA_TX_3" on,off >/dev/null 2>&1 \
+amixer_dev cset "name=MultiMedia3 Mixer TX_CODEC_DMA_TX_3" on,off >/dev/null 2>&1 \
 	|| log "warning: could not set MM3<-TX_CODEC_DMA_TX_3 route"
-amixer -c 0 cset "name=MultiMedia4 Mixer VA_CODEC_DMA_TX_0" on,off >/dev/null 2>&1 \
+amixer_dev cset "name=MultiMedia4 Mixer VA_CODEC_DMA_TX_0" on,off >/dev/null 2>&1 \
 	|| log "warning: could not set MM4<-VA_CODEC_DMA_TX_0 route"
 # and make sure no OTHER MM1 back-end is dual-routed (fails the DSP graph):
 for be in RX_CODEC_DMA_RX_0 WSA_CODEC_DMA_RX_0 DISPLAY_PORT_RX_0; do
-	amixer -c 0 cset "name=$be Audio Mixer MultiMedia1" off,off >/dev/null 2>&1 || true
+	amixer_dev cset "name=$be Audio Mixer MultiMedia1" off,off >/dev/null 2>&1 || true
 done
-log "routes forced; MM1 route now: $(amixer -c 0 cget "name=SECONDARY_MI2S_RX Audio Mixer MultiMedia1" 2>/dev/null | grep -o ': values=.*' || echo '?')"
+log "routes forced; MM1 route now: $(amixer_dev cget "name=SECONDARY_MI2S_RX Audio Mixer MultiMedia1" 2>/dev/null | grep -o ': values=.*' || echo '?')"
 
 # 6. Raise AW88261 smart-amp gain (+5 dB over stock). Amp mixer controls:
 #    0..360 steps of 0.25 dB (0 = -90 dB, 360 = 0 dB). Stock runtime value
@@ -120,7 +132,7 @@ log "routes forced; MM1 route now: $(amixer -c 0 cget "name=SECONDARY_MI2S_RX Au
 #    DSP protection (aw88261_acf.bin) stays fully effective.
 AMP_GAIN=320
 for ctl in Spk0 Spk1 Spk2 Spk3 Spk5 Spk6; do
-	amixer -c 0 cset name="$ctl PCM Playback Volume" "$AMP_GAIN" >/dev/null 2>&1 \
+	amixer_dev cset name="$ctl PCM Playback Volume" "$AMP_GAIN" >/dev/null 2>&1 \
 		|| log "warning: could not set $ctl PCM Playback Volume"
 done
 log "amp gain offset applied (all six AW88261 -> $AMP_GAIN)"
