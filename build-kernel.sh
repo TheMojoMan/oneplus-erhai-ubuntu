@@ -24,9 +24,10 @@
 #      + a "+b<N>" Debian revision (LINE-AWARE auto counter in the kernel tree's
 #      build-kernel.sh -- a new kernelrelease starts at +b1; override with
 #      DEB_REV=<n>), postinst/postrm are refreshed from the
-#      kernel tree, and the .deb is packed and MOVED to
-#      themojoman.github.io/ppa/oneplus-erhai/ubuntu/testing/ (the private
-#      suite; ../update-ppa.sh --cptesting moves it into main/ and republishes).
+#      kernel tree, and the .deb is packed into debs/ and LEFT THERE: a kernel
+#      build stays local until the owner publishes it with
+#      ../update-ppa.sh --mvtomain (which moves every newer .deb from debs/
+#      into main/).
 #   5. A UKI is built with ukify (same recipe as the deb's postinst, but with
 #      root=PARTLABEL=linux -- the SHIPPED image's label) and moved to
 #      ../dualboot/EFI/ubuntu/<kver>-linux.efi, where
@@ -34,6 +35,8 @@
 #
 # Environment: BRANCH (default master or $1), NO_PULL=1 (skip step 2),
 #              JOBS, KERNEL_TREE, DEB_REV, PPA_DEB_DIR (see ppa-common.sh).
+#              NO_PPA is accepted but does nothing any more (the kernel deb is
+#              never published automatically).
 
 set -euo pipefail
 
@@ -314,15 +317,19 @@ echo "payload check OK: $KO_COUNT modules, single usr/lib/modules tree, boot/ co
 OUT_DEB="$DEB_DIR/${PKG_NAME}_${DEB_VERSION}_arm64.deb"
 dpkg-deb --build --root-owner-group "$SNAP" "$OUT_DEB"
 
-# Move (not copy) into the testing suite: no leftover copy anywhere, so there
-# is exactly one canonical location per built kernel package.
-# NO_PPA=1 keeps in-development kernels local (release policy: the PPA gets a
-# kernel only when the owner asks for it).
-if [ "${NO_PPA:-0}" != 1 ]; then
-	ppa_mv "$OUT_DEB"
-else
-	echo "NO_PPA=1: kernel deb NOT published ($(basename "$OUT_DEB"))"
-fi
+# The .deb STAYS in debs/ ($DEB_DIR): a kernel is a test build until the owner
+# says otherwise, and debs/ is where it can be installed from locally
+# (dpkg -i debs/<deb>).  Publishing is a separate, explicit step:
+# update-ppa.sh --mvtomain picks up every newer .deb from debs/ and moves it into
+# main/.  (Owner rule, 2026-10-26: no automatic PPA move -- the owner decides how
+# to share a kernel.  NO_PPA=1 is kept for old callers and changes nothing.)
+# ppa-guard still runs now, so a package carrying personal data is caught at
+# build time instead of at publish time.
+"$HERE/ppa-guard.sh" "$OUT_DEB" || {
+	echo "ERROR: ppa-guard rejected $OUT_DEB -- do not publish it as is" >&2
+	exit 1
+}
+echo "kernel deb kept local: $OUT_DEB"
 
 # The inner script's own .deb/.tar are superseded -- drop them so the kernel
 # tree keeps no stale duplicates of a package that was never published.
