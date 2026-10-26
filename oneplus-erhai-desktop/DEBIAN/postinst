@@ -231,8 +231,21 @@ udevadm control --reload >/dev/null 2>&1 || true
 # measured 2026-09-20), idempotently, never rewriting the rest of the file.  This
 # runs OUTSIDE the systemd guard below on purpose: an image build (chroot) needs
 # the line too.  It closes the KNOWN GAP tracked in build-root.sh since 2026-09-28.
+#
+# 2.30: gdm-PASSWORD carries the same line.  gnome-keyring 50.0-1's own unlock
+# path -- what pam_gnome_keyring uses when it HAS the password -- rejects the
+# CORRECT password ("gkr-pam: the password for the login keyring was invalid",
+# measured 2026-10-26 on a keyring this same daemon then unlocked from the
+# command line with the very same password; the D-Bus
+# InternalUnsupportedGuiltRiddenInterface methods are broken the same way), so
+# after a manual login the keyring stayed locked and the first app that read a
+# secret popped the gcr "password no longer matches" prompt, which could not
+# unlock it either.  The helper starts the daemon with `--unlock`, the path that
+# verifies correctly, so it must run before pam_gnome_keyring's auto_start here
+# too.  Consequence (unchanged from autologin, now also for password logins):
+# /etc/erhai/keyring.pass must hold the password that unlocks the keyring.
 PAM_DIR=${ERHAI_PAM_DIR:-/etc/pam.d}
-PAM_FILE=$PAM_DIR/gdm-autologin
+PAM_FILES='gdm-autologin gdm-password'
 PAM_LINE='session optional        pam_exec.so seteuid /usr/local/sbin/erhai-keyring-unlock.sh'
 PAM_ANCHOR='^session[[:space:]]+optional[[:space:]]+pam_gnome_keyring\\.so'
 PAM_MARKER='erhai-keyring-unlock.sh'          # any line that mentions our helper
@@ -258,7 +271,11 @@ pam_install_line() {
 	rm -f "$tmp"
 	return 1
 }
-pam_install_line || echo "oneplus-erhai-desktop: could not add the keyring-unlock pam line to $PAM_FILE" >&2
+for PAM_NAME in $PAM_FILES; do
+	PAM_FILE=$PAM_DIR/$PAM_NAME
+	pam_install_line \
+		|| echo "oneplus-erhai-desktop: could not add the keyring-unlock pam line to $PAM_FILE" >&2
+done
 
 # /etc/erhai/keyring.pass is NOT the package's to create: it holds the password
 # that unlocks the login KEYRING, which only the user knows (see

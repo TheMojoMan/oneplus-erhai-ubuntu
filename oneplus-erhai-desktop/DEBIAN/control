@@ -1,5 +1,5 @@
 Package: oneplus-erhai-desktop
-Version: 2.29
+Version: 2.30
 Section: utils
 Priority: optional
 Architecture: all
@@ -392,3 +392,18 @@ Description: Desktop glue for the OnePlus Pad 3 (erhai)
  toggles the panel in every session (a long press stays the clean reboot).  The
  postinst's generate-config step recompiles the file-db, so the fix reaches a
  running gdm without a greeter restart.
+ Since 2.30 the KEYRING-UNLOCK pam_exec line is also in /etc/pam.d/gdm-password.
+ gnome-keyring 50.0-1's own unlock path -- the one pam_gnome_keyring uses when it
+ HAS the typed password -- rejects the CORRECT password ("gkr-pam: the password for
+ the login keyring was invalid", 2026-10-26, on a keyring that this same daemon
+ unlocked from the command line with the very same password; the D-Bus
+ org.gnome.keyring.InternalUnsupportedGuiltRiddenInterface unlock/change methods
+ are broken the same way), so a MANUAL password login left the login keyring
+ locked and the first app that read a secret (Brave's "Safe Storage") popped the
+ gcr "the password you use to log in no longer matches that of your login
+ keyring" prompt, which could not unlock it either.  The helper starts the daemon
+ with `--unlock` -- the path that DOES verify the password, proven at every
+ autologin -- before pam_gnome_keyring's auto_start, so both login routes now
+ behave identically.  postrm removes the line from both files again.  Consequence
+ to keep in mind: /etc/erhai/keyring.pass must hold the password that unlocks the
+ keyring (a password change re-encrypts the keyring, so update it then too).

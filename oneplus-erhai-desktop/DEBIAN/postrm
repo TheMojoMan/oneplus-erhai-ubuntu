@@ -17,12 +17,15 @@ DOCK_EXT_DIR=/usr/share/gnome-shell/extensions/ubuntu-dock@ubuntu.com
 DOCK_DASH="$DOCK_EXT_DIR/dash.js"
 DOCK_ORIG="$DOCK_DASH.erhai-orig"
 
-# erhai: drop the autologin keyring-unlock pam line this package's postinst added
-# to /etc/pam.d/gdm-autologin (2.24).  Only OUR line goes -- the file belongs to
-# gdm3 and must keep working for a normal password login.  The pass file
+# erhai: drop the keyring-unlock pam lines this package's postinst added to
+# /etc/pam.d/gdm-autologin (2.24) and /etc/pam.d/gdm-password (2.30).  Only OUR
+# lines go -- the files belong to gdm3 and must keep working for a normal
+# password login.  The pass file
 # /etc/erhai/keyring.pass is the USER's (it holds the keyring password) and is
 # never touched here.
-PAM_FILE=${ERHAI_PAM_DIR:-/etc/pam.d}/gdm-autologin
+PAM_DIR=${ERHAI_PAM_DIR:-/etc/pam.d}
+# 2.30 added the same line to gdm-password; both must go on removal.
+PAM_FILES='gdm-autologin gdm-password'
 pam_remove_line() {
 	[ -f "$PAM_FILE" ] || return 0
 	grep -qF 'erhai-keyring-unlock.sh' "$PAM_FILE" || return 0
@@ -62,7 +65,11 @@ remove|purge)
 		fi
 	done
 
-	pam_remove_line || echo "oneplus-erhai-desktop: could not drop the keyring-unlock pam line from $PAM_FILE" >&2
+	for PAM_NAME in $PAM_FILES; do
+		PAM_FILE=$PAM_DIR/$PAM_NAME
+		pam_remove_line \
+			|| echo "oneplus-erhai-desktop: could not drop the keyring-unlock pam line from $PAM_FILE" >&2
+	done
 
 	# erhai: GPU pin policy (2.25).  erhai-gpu-pin-once.service is enabled by
 	# this package's postinst, so a removal must not leave its dangling
