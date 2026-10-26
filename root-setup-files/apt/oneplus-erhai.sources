@@ -24,10 +24,15 @@ Signed-By: /etc/apt/keyrings/themojoman.gpg
 # ONLY the packages that repackage or divert an Ubuntu artifact of the same
 # name and therefore carries that release's ABI: mutter, GTK4, Mesa, steam,
 # ptyxis, nautilus (the list is oneplus-erhai-ubuntu/ppa-series-packages.txt).
+#
+# The block is delimited so an image that deliberately ships the STOCK desktop
+# stack can drop it whole (build-root/stonking deletes it by these markers).
+# >>> series-suite
 Types: deb
 URIs: https://themojoman.github.io/ppa/oneplus-erhai/ubuntu/@ERHAI_SERIES@/
 Suites: ./
 Signed-By: /etc/apt/keyrings/themojoman.gpg
+# <<< series-suite
 
 # TESTING suite -- PRIVATE, opt-in. NOT enabled in shipped images: fresh
 # builds land here first and only the repo owner's own device lists this
