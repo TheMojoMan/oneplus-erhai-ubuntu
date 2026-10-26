@@ -316,6 +316,64 @@ echo "[build-root] on-screen keyboard: gjs-osk payload + dconf seed present"
 # Leave ubuntu.json (a dpkg-owned file) alone; the seed is ours.
 # To change it: tmp/magnetize-ext/install-magnetize.sh <ROOTDIR> re-copies the
 # live tree and patches the seed idempotently (the overlay is its usual target).
+MAGNETIZE_UUID="magnetize@nadelacruz-00.github.io"
+MAGNETIZE="$ROOTDIR/usr/share/gnome-shell/extensions/$MAGNETIZE_UUID"
+for f in metadata.json extension.js prefs.js indicator.js actions.js \
+	 presets.js stylesheet.css schemas/gschemas.compiled \
+	 icons/magnetize-symbolic.svg; do
+	[ -f "$MAGNETIZE/$f" ] || {
+		echo "FATAL: magnetize payload missing from the rootfs: $MAGNETIZE/$f" >&2
+		echo "       (tmp/magnetize-ext/install-magnetize.sh <ROOTDIR> re-copies it" >&2
+		echo "        from the live ~/.local/share/gnome-shell/extensions/)" >&2
+		exit 1; }
+done
+# gnome-shell runs as the DESKTOP USER: an unreadable metadata.json makes it
+# drop the extension SILENTLY (the same trap the gjs-osk block above fixes).
+for f in metadata.json extension.js; do
+	[ "$(stat -c %a "$MAGNETIZE/$f")" = 644 ] || {
+		echo "FATAL: $MAGNETIZE/$f is not 0644 -- gnome-shell would skip it" >&2
+		exit 1; }
+done
+
+# The seed decides whether the extension is actually LOADED: it must enable
+# magnetize and keep tiling-assistant deactivated.  The seed is a binary GVDB,
+# so grep is not proof -- dump the org/gnome/shell group through a throwaway
+# profile and read the two keys.  Runs in a SUBSHELL on purpose: the probe dir
+# needs its own EXIT trap and line 88's `trap cleanup EXIT` must survive.
+seed_shell_check() (
+	set -euo pipefail
+	ROOT_ABS="$(cd "$ROOTDIR" && pwd)"
+	SEED_DB="$ROOT_ABS/etc/skel/.config/dconf/user"
+	[ -f "$SEED_DB" ] || {
+		echo "FATAL: per-user dconf seed missing: $SEED_DB" >&2; return 1; }
+	command -v dconf >/dev/null || {
+		echo "FATAL: 'dconf' is needed to verify the seed" >&2; return 1; }
+	mkdir -p "$ROOT_ABS/var/tmp"
+	PROBE="$(mktemp -d "$ROOT_ABS/var/tmp/seed-check.XXXXXX")"
+	trap 'rm -rf -- "$PROBE"' EXIT
+	printf 'file-db:%s\n' "$SEED_DB" > "$PROBE/profile"
+	DUMP="$(DCONF_PROFILE="$PROBE/profile" dconf dump /org/gnome/shell/)" || {
+		echo "FATAL: cannot read the seed $SEED_DB" >&2; return 1; }
+	ENABLED="$(printf '%s\n' "$DUMP" | sed -n 's/^enabled-extensions=//p')"
+	DISABLED="$(printf '%s\n' "$DUMP" | sed -n 's/^disabled-extensions=//p')"
+	case "$ENABLED" in
+		*"'$MAGNETIZE_UUID'"*) ;;
+		*) echo "FATAL: the seed does not enable $MAGNETIZE_UUID" >&2
+		   echo "       (tmp/magnetize-ext/install-magnetize.sh <ROOTDIR> enables it;" >&2
+		   echo "        the list lives in the overlay seed, not in this script)" >&2
+		   return 1 ;;
+	esac
+	case "$DISABLED" in
+		*"'tiling-assistant@ubuntu.com'"*) ;;
+		*) echo "FATAL: the seed does not deactivate tiling-assistant@ubuntu.com" >&2
+		   echo "       (gnome-shell unions modes/ubuntu.json with the user list," >&2
+		   echo "        so only disabled-extensions can switch it off)" >&2
+		   return 1 ;;
+	esac
+)
+seed_shell_check || exit 1
+echo "[build-root] window snapping: magnetize payload present + enabled in the seed," \
+     "tiling-assistant deactivated"
 
 # GDM greeter/wizard theme: erhai wallpaper on the lock/setup background.
 # Registered as a higher-priority gdm-theme.gresource alternative so the
