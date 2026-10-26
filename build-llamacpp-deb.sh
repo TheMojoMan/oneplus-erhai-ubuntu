@@ -176,6 +176,35 @@ rm -f "$SRC/DEBIAN/md5sums"
 
 # --------------------------------------------------------------------- build ---
 OUT="$DEB_DIR/${PKG}_${VER}_${ARCH}.deb"
+# personal data: no build path in the payload, no DWARF in the ELFs
+# ___FILE___ strings: the staged binaries come from a -g build in the dev
+# workspace, so DWARF (stripped by ppa_scrub_debug) AND the __FILE__ literals of
+# assert()/logs carry this pad's paths.  The literals are plain .rodata bytes, so
+# they are replaced IN PLACE with a SAME-LENGTH neutral path -- every offset in
+# the ELF stays valid -- and ppa_scrub_debug below then verifies the tree.
+if grep -rqla "/media/data/develop/erhai" "$PAY" 2>/dev/null; then
+	python3 - "$PAY" <<'PYEOF'
+import os, sys
+old = b"/media/data/develop/erhai"          # 25 bytes
+new = b"/opt/llamacpp-build/src//"          # 25 bytes, harmless as a path
+root = sys.argv[1]
+n = 0
+for dirpath, _dirnames, names in os.walk(root):
+    for name in names:
+        f = os.path.join(dirpath, name)
+        if os.path.islink(f):
+            continue
+        try:
+            b = open(f, "rb").read()
+        except OSError:
+            continue
+        if old in b:
+            open(f, "wb").write(b.replace(old, new))
+            n += 1
+print("==> sanitized the build path in %d file(s)" % n)
+PYEOF
+fi
+ppa_scrub_debug "$SRC"
 dpkg-deb --build --root-owner-group "$SRC" "$OUT"
 echo "built $OUT ($(du -h "$OUT" | cut -f1))"
 dpkg-deb --info "$OUT" | sed -n '1,14p'

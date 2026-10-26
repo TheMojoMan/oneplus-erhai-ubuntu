@@ -45,12 +45,65 @@ PPA_DEB_DIR="${PPA_DEB_DIR:-$PPA_TESTING_DEB_DIR}"
 DEB_DIR="${DEB_DIR:-$_PPA_COMMON_DIR/debs}"
 mkdir -p "$DEB_DIR"
 
+# ----------------------------------------------------------- ppa_scrub_debug --
+# A build made with -g records the ABSOLUTE paths of this pad (workspace tree,
+# /media/data/develop/.../tmp/<dep>/build, include dirs) in the DWARF, and those
+# shipped inside published .debs (personal-data audit 2026-10-26: camera,
+# erhaicam, sensors, video, fastrpc, llamacpp, the desktop helpers).  Every
+# builder that compiles, or installs a compiled artifact, calls this before
+# packing: debug info is stripped from every ELF in the payload and a tree that
+# still carries the build path is a HARD ERROR (no .deb is produced).
+#   ppa_scrub_debug "$SRC"
+ppa_scrub_debug() {
+	local tree f ws bad=0
+	ws="$(dirname "$_PPA_COMMON_DIR")"
+	for tree in "$@"; do
+		[ -d "$tree" ] || continue
+		while IFS= read -r f; do
+			[ -f "$f" ] || continue
+			[ "$(head -c4 "$f" 2>/dev/null | od -An -tx1 | tr -d ' \n')" = 7f454c46 ] || continue
+			strip --strip-debug "$f" 2>/dev/null || strip "$f" 2>/dev/null || true
+		done < <(find "$tree" -type f)
+		if grep -rqlaF "$ws" "$tree" 2>/dev/null; then
+			echo "ppa-common: refusing to pack $tree - the build path $ws is embedded in:" >&2
+			grep -rlaF "$ws" "$tree" 2>/dev/null | head -5 >&2
+			bad=1
+		fi
+	done
+	return $bad
+}
+
+# ---------------------------------------------------------------- ppa-guard ---
+# NOTHING is published before ppa-guard.sh has seen it: personal data (a
+# password, a keyring/browser store, a private key, a token, this machine's MAC
+# or Wi-Fi SSID, the developer's home/workspace path) must never reach a .deb in
+# the apt repo.  The guard streams the payload, so a big kernel package costs
+# seconds, and it FAILS CLOSED: a missing guard also stops the publish.
+# A deliberate bypass exists for a package you have inspected by hand:
+#     ERHAI_GUARD_ALLOW=1 ./build-…-deb.sh
+_ppa_guard() {
+	if [ "${ERHAI_GUARD_ALLOW:-0}" = 1 ]; then
+		echo "ppa-common: WARNING: ppa-guard BYPASSED (ERHAI_GUARD_ALLOW=1) for $*" >&2
+		return 0
+	fi
+	local g="$_PPA_COMMON_DIR/ppa-guard.sh"
+	if [ ! -x "$g" ]; then
+		echo "ppa-common: REFUSING to publish - $g is missing (fail closed)" >&2
+		return 1
+	fi
+	"$g" "$@" || {
+		echo "ppa-common: REFUSING to publish $* - see the ppa-guard report above" >&2
+		return 1
+	}
+}
+
 ppa_copy() {
 	[ -n "$PPA_DEB_DIR" ] || {
 		echo "ppa-common: cannot locate themojoman.github.io (set PPA_DEB_DIR)" >&2
 		return 1
 	}
 	install -d -m755 "$PPA_DEB_DIR"
+	_ppa_guard "$@" || return 1
 	local f
 	for f in "$@"; do
 		install -m644 "$f" "$PPA_DEB_DIR/"
@@ -67,6 +120,7 @@ ppa_mv() {
 		return 1
 	}
 	install -d -m755 "$PPA_DEB_DIR"
+	_ppa_guard "$@" || return 1
 	local f
 	for f in "$@"; do
 		mv -f "$f" "$PPA_DEB_DIR/"

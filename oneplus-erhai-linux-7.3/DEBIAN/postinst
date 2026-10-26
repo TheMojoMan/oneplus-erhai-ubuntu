@@ -13,7 +13,7 @@
 # and the installer ships no UKI on the ESP either.  ESP entries left by earlier
 # installs stay where they are -- nothing here deletes an .efi.  The retired ESP
 # machinery (mount by partlabel, reuse-an-already-mounted-ESP, the fallbacks) is
-# preserved in /media/data/develop/erhai/tmp/esp-uki-machinery-backup-20261017/.
+# preserved in a backup of the previous ESP machinery taken before that change.
 set -e
 
 # 1. Kernel version = this package's version minus the "+b<N>" Debian revision

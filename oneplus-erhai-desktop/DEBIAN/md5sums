@@ -32,7 +32,7 @@ b16cc77441fc28eb6023d235f3a31031  usr/local/sbin/erhai-desktop-gl.sh
 f7c5e2a2f7c5f72418a2157fb7706a1c  usr/local/sbin/erhai-folio-calibrate
 9fb9be08b136114c8e4146f57e85486c  usr/local/sbin/erhai-folio-fold.py
 3cbee38db62c155c777c46b43dac9473  usr/local/sbin/erhai-folio-gate.sh
-a979f5302127406cc05171aff0e55cac  usr/local/sbin/erhai-folio-probe.py
+e14aefb217dcfbaba57953a598d9c86b  usr/local/sbin/erhai-folio-probe.py
 517739c4e2e2f950b30a625fda8e883c  usr/local/sbin/erhai-folio-unblank.sh
 9d9bc86ff2221861e5b53af630b851b6  usr/local/sbin/erhai-gpu-external-pin.sh
 0a8ce4a2b3d4962373a936335da2adff  usr/local/sbin/erhai-gpu-pin-once.sh
@@ -40,14 +40,14 @@ a979f5302127406cc05171aff0e55cac  usr/local/sbin/erhai-folio-probe.py
 8229d4574d0b6a37ef699e1a1d2e8787  usr/local/sbin/erhai-greeter-brightness.py
 e6f9d2bff7c192936afdbd236c58490b  usr/local/sbin/erhai-host-charge.sh
 2e6476164c38e0363caf0efe0d31ef8d  usr/local/sbin/erhai-keyring-unlock.sh
-7582e83f389cb6f1be1ffac63e79445a  usr/local/sbin/erhai-panel-power.sh
+c01ca798c86aa860863e0b5d0742af57  usr/local/sbin/erhai-panel-power.sh
 94814a5165a6a1cb2fa0034be7a96c01  usr/local/sbin/erhai-panel-state-migrate.sh
 67ce8778d280768ed97078a7852b366a  usr/local/sbin/erhai-pogo-activate.sh
 de6e899429cb709ba3d5c3828db2f9a1  usr/local/sbin/erhai-pogo-osk.py
 93499275dd4308b4188e6085b1707fc1  usr/local/sbin/erhai-power-watch.py
 b60c6831263f6164fa46fc842d14931a  usr/local/sbin/erhai-rtc-sync.py
-6f98d5d7a1896ef533fe40e83a76eeb7  usr/local/sbin/erhai-suspend-gnome.sh
-55de72054f509c155446f42649777c94  usr/local/sbin/erhai-suspend-s2idle.sh
+17b29ffc5594c9bf8c5ad859fe97b8b1  usr/local/sbin/erhai-suspend-gnome.sh
+690145e982c31634279be7ef18caab15  usr/local/sbin/erhai-suspend-s2idle.sh
 1fc610bdc3ff38aeb4dcfa95602dd647  usr/local/sbin/erhai-suspend-wlan-guard.sh
 16b1e8005c725dd47ed687ba7032e094  usr/local/sbin/erhai-touch-rebind.sh
 1525ffc93a2fb55b818a8eccf0c2cfcd  usr/local/sbin/erhai-user-groups.sh

@@ -3,8 +3,8 @@
 # source, staged into $STAGE so nothing is installed into the running system
 # before it has been reviewed.
 set -x
-SRC=/media/data/develop/erhai/tmp/qnn/fastrpc-src
-STAGE=/media/data/develop/erhai/tmp/qnn/fastrpc-stage
+SRC=${FASTRPC_SRC:-/usr/src/fastrpc-src}     # build tree (FASTRPC_SRC overrides)
+STAGE=${FASTRPC_STAGE:-/tmp/fastrpc-stage}   # staging dir (FASTRPC_STAGE overrides)
 
 cd "$SRC" || exit 1
 rm -rf "$STAGE"

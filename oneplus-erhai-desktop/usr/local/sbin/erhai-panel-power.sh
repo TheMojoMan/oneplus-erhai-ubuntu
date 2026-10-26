@@ -70,7 +70,11 @@ ACTION=${1:-toggle}
 PARK_WAIT=${PARK_WAIT:-1.5}         # best-effort fresh-park budget before teardown
 ON_SETTLE_MS=${ON_SETTLE_MS:-0}     # settle between SetActive false and the lamp
 RESYNC_GAP_MS=${RESYNC_GAP_MS:-200} # `reassert --cycle`: compositor round-trip gap
-LOG=${LOG:-/media/data/develop/erhai/tmp/gpu-hang-capture/panel-power.log}
+# log next to the other erhai runtime state, never in a developer tree
+LOG=${LOG:-/run/erhai/panel-power.log}
+mkdir -p "$(dirname "$LOG")" 2>/dev/null || LOG=/dev/null
+[ -w "$(dirname "$LOG")" ] || LOG=/dev/null
+[ -w "$LOG" ] || [ -w "$(dirname "$LOG")" ] || LOG=/dev/null
 SURVLOG=${ERHAI_SURVLOG:-/usr/local/sbin/erhai-surv-log}
 GPU=${ERHAI_GPU:-/sys/devices/platform/soc@0/3d00000.gpu/power}
 # The once-pin policy (2.25, erhai-gpu-pin-once.sh): when the boot-time pin was

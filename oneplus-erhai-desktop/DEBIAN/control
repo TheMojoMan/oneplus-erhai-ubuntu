@@ -1,5 +1,5 @@
 Package: oneplus-erhai-desktop
-Version: 2.30
+Version: 2.31
 Section: utils
 Priority: optional
 Architecture: all
@@ -407,3 +407,25 @@ Description: Desktop glue for the OnePlus Pad 3 (erhai)
  behave identically.  postrm removes the line from both files again.  Consequence
  to keep in mind: /etc/erhai/keyring.pass must hold the password that unlocks the
  keyring (a password change re-encrypts the keyring, so update it then too).
+ Since 2.31 NO DEVELOPER PATH SHIPS ANY MORE (personal-data audit, 2026-10-26).
+ The suspend/panel helpers used to bake a developer workspace/tmp/
+ gpu-hang-capture into the package: erhai-suspend-s2idle.sh took its helper
+ directory and its log from there (D=, LOG=, plus the "SKIPPED"/"fall back to
+ /var/log" comments), erhai-suspend-gnome.sh fell back to a copy of the harness
+ in that tree, erhai-panel-power.sh logged there, and erhai-folio-probe.py
+ carried it as WORKSPACE.  On any pad that is not the author's those paths do not
+ exist (the suspend log then only worked because of a /var/log fallback), and
+ they leaked the maintainer's filesystem layout into a public .deb.  All five are
+ now install paths or runtime state: D=${ERHAI_SUSPEND_DIR:-/usr/local/sbin},
+ LOG=${ERHAI_SUSPEND_LOG:-/var/log/erhai-suspend-s2idle.log} (an unwritable
+ directory falls back to /dev/null instead of killing the sleep),
+ HARNESS=${ERHAI_SUSPEND_HARNESS:-/usr/local/sbin/erhai-suspend-s2idle.sh},
+ LOG=${LOG:-/run/erhai/panel-power.log} in the panel helper, and
+ WORKSPACE=$ERHAI_WORKSPACE (unset by default) with /var/lib/erhai/folio-probe as
+ the probe's output directory.  The rule is enforced from now on: every builder
+ publishes through ppa-common.sh's ppa_copy/ppa_mv, which run ppa-guard.sh first
+ (secrets from /etc/erhai/*.pass + the workspace .clinerules + ~/.config/erhai/
+ ppa-denylist, private keys, keyring/browser stores, API tokens, this machine's
+ MAC addresses and Wi-Fi SSIDs, /home/<user> and the workspace path), and
+ update-ppa.sh --mvtomain guards every .deb it promotes to the public suite.
+ Both fail closed; ERHAI_GUARD_ALLOW=1 is the consciously unsafe bypass.

@@ -17,8 +17,8 @@ dfc2c5b0e7e8ab51628bd8fe87457395  usr/lib/rfsa/adsp/libggml-htp-v75.so
 939a270b0eb43150a6dc770be1029e36  usr/lib/rfsa/cdsp/fastrpc_shell_unsigned_3
 15b80d39d7d002d894226d7deff993c8  usr/lib/rfsa/cdsp/libbenchmark_skel.so
 82beefbcc2d0fb047307fe502923f1eb  usr/lib/rfsa/cdsp/libc++abi.so.1
-eb42daffe16aeec97e740cc1d71e2980  usr/lib/rfsa/cdsp/libcrm_test_skel.so
 5ed2f594557ce92c537454a7a3b2b035  usr/lib/rfsa/cdsp/libc++.so.1
+eb42daffe16aeec97e740cc1d71e2980  usr/lib/rfsa/cdsp/libcrm_test_skel.so
 6633c147a124f10526fe9953071b890c  usr/lib/rfsa/cdsp/libhcpfrc.so
 69d7dc9977b6c25c2e0a88a04541d3af  usr/lib/rfsa/cdsp/libhcp_rpc_skel.so
 41d4eaf7b7b61e30a6407b762110aa23  usr/lib/rfsa/cdsp/libloadalgo_skel.so
@@ -62,9 +62,9 @@ cf07924a4c5438cf411d73c272dd1e68  usr/local/share/fastrpc_test/v75/libmultithrea
 2b243a69107d672ae7325c5a6ddea6ef  usr/local/share/man/man1/fastrpc-healthcheck.1
 bf42de1775a6c4ccfcc34b5ecbf2bfb1  usr/local/share/man/man3/fastrpc.3
 5ffb827c1cf7a3211f54c7532d3e11a2  usr/local/share/man/man8/dsprpcd.8
-eb885878e1f837d6c713320eb71ce345  usr/share/doc/oneplus-erhai-fastrpc/build-fastrpc.sh
+c2c2c405a1f9412534a204e1ed671c6b  usr/share/doc/oneplus-erhai-fastrpc/build-fastrpc.sh
 f2d12be4302979fdd6cac1b47a5faf22  usr/share/doc/oneplus-erhai-fastrpc/README.md
-eb885878e1f837d6c713320eb71ce345  usr/share/oneplus-erhai-fastrpc/build-fastrpc.sh
+c2c2c405a1f9412534a204e1ed671c6b  usr/share/oneplus-erhai-fastrpc/build-fastrpc.sh
 f2d12be4302979fdd6cac1b47a5faf22  usr/share/oneplus-erhai-fastrpc/README.md
 5956511d8e9a7d57128d7f607c6b004c  usr/share/qcom/hexagon/v79/fastrpc_shell_3
 939a270b0eb43150a6dc770be1029e36  usr/share/qcom/hexagon/v79/fastrpc_shell_unsigned_3

@@ -61,6 +61,8 @@ chmod 755 "$SRC"/usr/local/lib/oneplus-erhai-erhaicam/*.py
 # ships one; this builder was the exception until 1.6).
 ( cd "$SRC" && find . -path ./DEBIAN -prune -o -type f -print0 |
 	sed -z 's|^\./||' | sort -z | xargs -0 -r md5sum > DEBIAN/md5sums )
+# personal data: no build path in the payload, no DWARF in the ELFs
+ppa_scrub_debug "$SRC"
 dpkg-deb --build --root-owner-group "$SRC" "$DEB_DIR/${PKG}_${VER}_${ARCH}.deb"
 
 # NO_PPA=1 builds locally without publishing (in-development iterations;

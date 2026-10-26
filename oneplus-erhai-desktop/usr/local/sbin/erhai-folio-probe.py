@@ -58,15 +58,18 @@ import sys
 import threading
 import time
 
-WORKSPACE = "/media/data/develop/erhai"
+# No developer path may be baked into a shipped file: the workspace is opt-in
+# through the environment, the default lives where other runtime state lives.
+WORKSPACE = os.environ.get("ERHAI_WORKSPACE", "")
 
 
 def _default_out():
-    """Workspace-local tmp/ when the dev workspace exists, else /var/lib."""
+    """$ERHAI_FOLIO_PROBE_OUT, else <workspace>/tmp/pogo-fold-probe when
+    $ERHAI_WORKSPACE names one, else /var/lib/erhai/folio-probe."""
     env = os.environ.get("ERHAI_FOLIO_PROBE_OUT")
     if env:
         return env
-    if os.path.isdir(os.path.dirname(WORKSPACE)):
+    if WORKSPACE and os.path.isdir(WORKSPACE):
         return os.path.join(WORKSPACE, "tmp", "pogo-fold-probe")
     return "/var/lib/erhai/folio-probe"
 

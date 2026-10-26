@@ -190,6 +190,8 @@ rm -f "$SRC/DEBIAN/md5sums"
 
 # --------------------------------------------------------------------- build ---
 OUT="$DEB_DIR/${PKG}_${VER}_${ARCH}.deb"
+# personal data: no build path in the payload, no DWARF in the ELFs
+ppa_scrub_debug "$SRC"
 dpkg-deb --build --root-owner-group "$SRC" "$OUT"
 echo "built $OUT ($(du -h "$OUT" | cut -f1))"
 dpkg-deb --info "$OUT" | sed -n '1,12p'

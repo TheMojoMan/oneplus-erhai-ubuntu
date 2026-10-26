@@ -22,8 +22,7 @@
 # The harness also STOPs erhai-power-toggle.service across the sleep window
 # (STEP2b/STEP6), so the wake press is never misread as a panel-toggle, and
 # freezes the WCN psoc-idle timer (STEP2d/STEP6) so idle-shutdown can't race.
-HARNESS=/usr/local/sbin/erhai-suspend-s2idle.sh
-[ -x "$HARNESS" ] || HARNESS=/media/data/develop/erhai/tmp/gpu-hang-capture/erhai-suspend-s2idle.sh
+HARNESS=${ERHAI_SUSPEND_HARNESS:-/usr/local/sbin/erhai-suspend-s2idle.sh}
 
 export WAKE_SECS="${WAKE_SECS:-0}"
 export RTC_ALARM="${RTC_ALARM:-0}"

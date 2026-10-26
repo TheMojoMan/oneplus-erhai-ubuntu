@@ -41,11 +41,18 @@ pkg-config --exists $PKGS || {
 	exit 1
 }
 mkdir -p "$SRC/usr/local/bin"
+# -fdebug-prefix-map/--ffile-prefix-map + the strip below: a -g build embeds the
+# ABSOLUTE build paths of THIS pad (workspace tree, tmp/gst-dev include dirs) in
+# the DWARF, and they shipped in 1.3's public .deb (personal-data audit
+# 2026-10-26, caught by ppa-guard.sh).  The shipped tool needs no debug info.
 ${CXX:-g++} -O2 -g -std=c++20 -Wall -Wextra -Wpedantic \
+	-fdebug-prefix-map="$HERE"=. -ffile-prefix-map="$HERE"=. \
 	$(pkg-config --cflags $PKGS) \
 	-o "$SRC/usr/local/bin/erhai-autofocus" \
 	"$SRC/src/erhai-autofocus.cpp" \
 	$(pkg-config --libs $PKGS)
+# the shared scrub also refuses a payload that still carries the build path
+ppa_scrub_debug "$SRC"
 
 find "$SRC" -type d -exec chmod 755 {} \;
 chmod 755 "$SRC"/DEBIAN/postinst "$SRC"/usr/local/sbin/*.sh \

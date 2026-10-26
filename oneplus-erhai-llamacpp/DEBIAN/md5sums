@@ -111,6 +111,6 @@ d716603e44318ffd541a75c39a8fc014  opt/llama.cpp/bin/test-sampling
 021a0ff94887857a2f1581272c560d64  opt/llama.cpp/bin/test-tokenizer-1-spm
 b25593f661f8d436f9bd38e1680bd105  opt/llama.cpp/bin/test-unicode
 3a86ed1f91eb03faaee34b7c9141bfab  usr/local/bin/llama-erhai
-91a0df69816d02cdbf05f10652befdbf  usr/share/doc/oneplus-erhai-llamacpp/patches/llama-cpp-erhai.patch
+9868d89f3c505ee7f28cf1d46086fa43  usr/share/doc/oneplus-erhai-llamacpp/patches/llama-cpp-erhai.patch
 24780798c684601bb4f71db13af34688  usr/share/doc/oneplus-erhai-llamacpp/patches/llamacpp-offload-spec.patch
 4860199bafc7bf80f4fd6a5205c1f352  usr/share/doc/oneplus-erhai-llamacpp/README.md

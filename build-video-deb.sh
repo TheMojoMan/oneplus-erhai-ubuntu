@@ -53,6 +53,8 @@ cd "$SRC"
 find etc usr -type f -exec md5sum {} \; > DEBIAN/md5sums
 cd "$HERE"
 
+# personal data: no build path in the payload, no DWARF in the ELFs
+ppa_scrub_debug "$SRC"
 dpkg-deb --build --root-owner-group "$SRC" "$DEB_DIR/${PKG}_${VER}_arm64.deb"
 
 # NO_PPA=1 builds locally without publishing (in-development iterations;

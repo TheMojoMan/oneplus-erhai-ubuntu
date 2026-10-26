@@ -72,6 +72,8 @@ rm -f "$SRC/DEBIAN/md5sums"
 	sed -z 's|^\./||' | sort -z | xargs -0 -r md5sum > DEBIAN/md5sums )
 echo "==> md5sums: $(grep -c '' "$SRC/DEBIAN/md5sums") files"
 
+# personal data: no build path in the payload, no DWARF in the ELFs
+ppa_scrub_debug "$SRC"
 dpkg-deb --build --root-owner-group "$SRC" "$DEB_DIR/${PKG}_${VER}_${ARCH}.deb"
 
 # NO_PPA=1 builds locally without publishing (in-development iterations;

@@ -30,7 +30,7 @@
 # USAGE (always as a SYSTEM unit so it survives session teardown):
 #   systemd-run --unit=erhai-suspend-s2idle --collect \
 #     --setenv=WAKE_SECS=25 --setenv=QUIESCE=1 --setenv=DISPLAY_OFF_FIRST=1 \
-#     /bin/bash /media/data/develop/erhai/tmp/gpu-hang-capture/erhai-suspend-s2idle.sh
+#     /bin/bash /usr/local/sbin/erhai-suspend-s2idle.sh
 #
 # KNOBS
 #   WAKE_SECS=25        RTC alarm = now + this (auto-resume; also the timeout)
@@ -81,10 +81,12 @@ WIFI_WATCH_B=${WIFI_WATCH_B:-60}         # post-resume: after explicit re-enable
 # WITHOUT unbinding (the old behaviour = HC-death risk).
 USB_GUARD=${USB_GUARD:-1}
 USB_GUARD_ABORT=${USB_GUARD_ABORT:-1}
-D=/media/data/develop/erhai/tmp/gpu-hang-capture
+# Every path here is the INSTALLED one: this package runs on other people's pads,
+# a developer tree must never be baked into it (ERHAI_SUSPEND_DIR/LOG override).
+D=${ERHAI_SUSPEND_DIR:-/usr/local/sbin}
 RESUMEDF=/run/erhai-suspend-resumed
 
-LOG=/media/data/develop/erhai/tmp/gpu-hang-capture/suspend-s2idle.log
+LOG=${ERHAI_SUSPEND_LOG:-/var/log/erhai-suspend-s2idle.log}
 DONEF=/run/erhai-suspend-done
 SURVLOG=/usr/local/sbin/erhai-surv-log
 TOGGLE=/usr/local/sbin/erhai-display-toggle.sh
@@ -125,12 +127,13 @@ fi
 [ -n "$UID_N" ] || UID_N=1000
 RT=/run/user/$UID_N
 
-# A pad that is not our dev workspace has no /media/data/develop/erhai/tmp: an
-# `exec >>` into a missing directory is FATAL to the whole suspend (the unit dies
-# before it can even blank the panel), so fall back to /var/log (MEMORY-2026-10-21
-# §2: the three hardcoded dev paths in the panel/suspend helpers).
+# An `exec >>` into a missing/unwritable directory is FATAL to the whole suspend
+# (the unit dies before it can even blank the panel), so the log directory is
+# created, and an unwritable one falls back to /dev/null instead of killing the
+# sleep (MEMORY-2026-10-21 §2: the three hardcoded dev paths in the panel/suspend
+# helpers).
 if ! mkdir -p "$(dirname "$LOG")" 2>/dev/null || [ ! -w "$(dirname "$LOG")" ]; then
-    LOG=/var/log/erhai-suspend-s2idle.log
+    LOG=/dev/null
 fi
 exec >> "$LOG" 2>&1
 rm -f "$DONEF"

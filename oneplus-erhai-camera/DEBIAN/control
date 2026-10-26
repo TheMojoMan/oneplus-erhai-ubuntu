@@ -1,5 +1,5 @@
 Package: oneplus-erhai-camera
-Version: 1.3
+Version: 1.4
 Section: utils
 Priority: optional
 Architecture: arm64
@@ -20,3 +20,9 @@ Description: Camera bring-up for the OnePlus Pad 3 (erhai)
  i2c helper scripts stay as manual CLI tools.
  VCM writes are granted to the desktop user via the included udev uaccess
  rules (CCI adapter + lens subdev); requires the kernel cn3927 module.
+ 1.4: the shipped erhai-autofocus is no longer a -g binary.  The DWARF of 1.3
+ (and earlier) carried this pad's absolute build paths (the workspace tree and
+ its tmp/gst-dev include dirs) into a public .deb; the builder now maps the
+ prefix and strips the debug info, and refuses to pack a binary that still
+ contains the build directory.  No functional change.
+

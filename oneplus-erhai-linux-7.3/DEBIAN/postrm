@@ -7,7 +7,7 @@
 # running one's boot entry.  An install deletes no .efi at all; this script is the
 # only thing that removes one, and only its own.  The ESP is not touched any more
 # (2026-10-17; the retired ESP machinery is preserved in
-# /media/data/develop/erhai/tmp/esp-uki-machinery-backup-20261017/).
+# a backup of the previous ESP machinery taken before that change).
 set -e
 
 # 1. Only on real removal, not on the remove step of an upgrade.
