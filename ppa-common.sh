@@ -30,8 +30,38 @@ _ppa_repo_root() {
 }
 PPA_MAIN_DEB_DIR="${PPA_MAIN_DEB_DIR:-$(_ppa_repo_root)/ppa/oneplus-erhai/ubuntu/main}"
 PPA_TESTING_DEB_DIR="${PPA_TESTING_DEB_DIR:-$(_ppa_repo_root)/ppa/oneplus-erhai/ubuntu/testing}"
+
+# ----------------------------------------------------------- release series --
+# main carries only packages that are INDEPENDENT of the Ubuntu release (erhai's
+# own kernel, firmware, scripts, the compiled helpers).  Packages that repackage
+# or divert an Ubuntu artifact of the same name (the mutter/GTK4/Mesa repacks,
+# steam, the ptyxis/nautilus divert overrides) are bound to one release's ABI
+# and live in a PER-RELEASE suite:  ppa/oneplus-erhai/ubuntu/<series>/
+# (<series> = the Ubuntu codename: resolute = 26.04, stonking = 26.10).
+# The package list is one file, shared with ../update-ppa.sh:
+#     ppa-series-packages.txt
+# Builds default to the HOST release; override for a 26.10 chroot build:
+#     ERHAI_SERIES=stonking ./build-mutter-deb.sh
+_ppa_host_series() {
+	local c
+	c="$(sed -n 's/^VERSION_CODENAME=//p' /etc/os-release 2>/dev/null | tr -d '\"')"
+	echo "${c:-resolute}"
+}
+ERHAI_SERIES="${ERHAI_SERIES:-$(_ppa_host_series)}"
+PPA_SERIES_DEB_DIR="${PPA_SERIES_DEB_DIR:-$(_ppa_repo_root)/ppa/oneplus-erhai/ubuntu/$ERHAI_SERIES}"
+PPA_SERIES_LIST="${PPA_SERIES_LIST:-$_PPA_COMMON_DIR/ppa-series-packages.txt}"
+export ERHAI_SERIES PPA_SERIES_DEB_DIR PPA_SERIES_LIST
+
+# ppa_is_series_pkg <package-name>  -> 0 when the package belongs to the
+# per-release suite instead of the universal main suite.
+ppa_is_series_pkg() {
+	[ -f "$PPA_SERIES_LIST" ] || return 1
+	grep -qxF -- "$1" "$PPA_SERIES_LIST"
+}
+
 # Builders publish to testing by default; ../update-ppa.sh --cptesting promotes
-# tested debs to main.
+# tested debs to main (universal packages) or to the release suite (the ones
+# listed in ppa-series-packages.txt).
 PPA_DEB_DIR="${PPA_DEB_DIR:-$PPA_TESTING_DEB_DIR}"
 
 # --------------------------------------------------------------- build output --

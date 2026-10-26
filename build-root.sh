@@ -50,7 +50,20 @@
 
 set -euo pipefail
 
-VERSION="26.04"
+VERSION="${ERHAI_VERSION:-26.04}"
+# The erhai apt repo splits into the UNIVERSAL suite (main: kernel, firmware,
+# scripts, the compiled helpers) and one PER-RELEASE suite per Ubuntu codename
+# (ppa/oneplus-erhai/ubuntu/<series>/), which carries the packages that repack
+# or divert an Ubuntu artifact of the same name (mutter, GTK4, Mesa, steam,
+# ptyxis, nautilus) -- see oneplus-erhai-ubuntu/ppa-series-packages.txt.
+# The image gets whichever suite matches its own base release; the xtradeb
+# PPA's "Suites:" line tracks the same codename.
+case "$VERSION" in
+	26.04) SERIES_DEFAULT=resolute ;;
+	26.10) SERIES_DEFAULT=stonking ;;
+	*)     SERIES_DEFAULT=resolute ;;
+esac
+SERIES="${ERHAI_SERIES:-$SERIES_DEFAULT}"
 # Build artifacts live OUTSIDE this directory tree (it may be published
 # online); override via environment if your layout differs:
 IMG="${ERHAI_ROOTFS_IMG:-../rootfs.img}"
@@ -498,6 +511,19 @@ install -m644 "$SETUP/apt/mozilla.sources" "$ROOTDIR/etc/apt/sources.list.d/"
 install -m644 "$SETUP/apt/brave-browser.sources" "$ROOTDIR/etc/apt/sources.list.d/"
 install -m644 "$SETUP/apt/xtradeb-apps.sources" "$ROOTDIR/etc/apt/sources.list.d/"
 install -m644 "$SETUP/apt/oneplus-erhai.sources" "$ROOTDIR/etc/apt/sources.list.d/"
+
+# Both third-party definitions name an Ubuntu codename; it MUST be the one this
+# image is built on.  xtradeb publishes per-series PPAs and the erhai repo keeps
+# its Ubuntu-ABI-bound packages (mutter/GTK4/Mesa/steam/ptyxis/nautilus) in
+# ppa/oneplus-erhai/ubuntu/<series>/ -- the template carries @ERHAI_SERIES@.
+sed -i "s|^Suites:.*|Suites: $SERIES|" \
+	"$ROOTDIR/etc/apt/sources.list.d/xtradeb-apps.sources"
+sed -i "s|@ERHAI_SERIES@|$SERIES|g" \
+	"$ROOTDIR/etc/apt/sources.list.d/oneplus-erhai.sources"
+grep -q "@ERHAI_SERIES@" "$ROOTDIR/etc/apt/sources.list.d/oneplus-erhai.sources" && {
+	echo "FATAL: oneplus-erhai.sources still carries @ERHAI_SERIES@ (series=$SERIES)" >&2
+	exit 1; }
+echo "apt suites for this image: erhai main + $SERIES, xtradeb $SERIES"
 
 # -------------------------------------------------------------- packages -----
 cat > "$ROOTDIR/tmp/erhai-stage-packages.sh" <<EOF

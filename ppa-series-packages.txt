@@ -1,0 +1,32 @@
+# Packages that belong to the PER-RELEASE suite of the erhai PPA
+# (ppa/oneplus-erhai/ubuntu/<series>/, series = the Ubuntu codename:
+# resolute = 26.04, stonking = 26.10) instead of the universal main suite.
+#
+# One DEB package name per line, '#' comments and blank lines ignored.
+# Read by ppa-common.sh (ppa_is_series_pkg) and by ../update-ppa.sh --mvtomain.
+#
+# WHY a package is listed here: it repacks or diverts an UBUNTU artifact of the
+# same name, so it always carries that release's ABI (soname, ABI-dir, package
+# version) and must never be offered to another release:
+#   * mutter repack      -- patched libmutter-<N>.so, soname is in the package name
+#   * GTK4 repack        -- patched libgtk-4.so.1.<abi>, ABI dir is in the filename
+#   * Mesa /usr repack   -- Ubuntu's own package names, built against the release
+#   * steam              -- Ubuntu-adjacent `steam` name, conflicts with universe's
+#   * ptyxis, nautilus   -- dpkg-divert overrides of Ubuntu's own binaries
+# Everything else (kernel, firmware, audio, wifi, sensors, camera, ...) is
+# release-independent and stays in main.
+libmutter-18-0
+libmutter-18-0-dbgsym
+gir1.2-mutter-18
+libgtk-4-1
+libgtk-4-1-dbgsym
+libgtk-4-dev
+libgbm1
+mesa-libgallium
+libgl1-mesa-dri
+libglx-mesa0
+libegl-mesa0
+mesa-vulkan-drivers
+steam
+oneplus-erhai-ptyxis
+oneplus-erhai-nautilus
