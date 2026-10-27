@@ -1020,6 +1020,23 @@ systemctl enable systemd-networkd.socket || true
 systemctl enable erhai-touchscreen.service   # rebinds NVT touch, then starts gdm
 systemctl enable erhai-desktop-gl.service    # GL env follows the booted kernel
 systemctl enable erhai-gpu-pin.service       # arm + pin the Adreno 830 pre-gdm
+# GPU pin policy of the SHIPPED IMAGES: MODE=always (owner 2026-10-27).
+# The deb defaults to MODE=once -- pin for the boot bring-up, then hand the GPU
+# back to runtime-PM 'auto'.  That release is the fragile state: an unpinned
+# Adreno can hit the CM3/GMU resume hang (see gpu-MEMORY-2026-09-12.md) and the
+# owner has seen occasional reboots, so the images keep the permanent pin that
+# never runtime-suspends.  This is done HERE and not in the deb, which is a
+# released, owner-tested artifact: the sed leaves /etc/erhai/gpu-pin.conf
+# locally modified, so a later package upgrade keeps MODE=always instead of
+# flipping the pad back to the once policy from the postinst.
+sed -i 's/^\([[:space:]]*\)MODE[[:space:]]*=.*/\1MODE=always/' /etc/erhai/gpu-pin.conf
+grep -qx 'MODE=always' /etc/erhai/gpu-pin.conf || {
+	echo "FATAL: could not set MODE=always in /etc/erhai/gpu-pin.conf" >&2
+	exit 1
+}
+# Two units, TWO policies: never both.  erhai-gpu-pin.service is the owner of
+# the permanent pin; the once-unit would only ever release it.
+systemctl disable erhai-gpu-pin-once.service >/dev/null 2>&1 || true
 # (no erhai-audio-route.service any more: the oneplus-erhai-audio deb's UCM
 # profile is applied by WirePlumber/ACP at session start)
 # (no erhai-bt-up.service any more: retired by oneplus-erhai-bluetooth 2.2 --
