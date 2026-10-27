@@ -1,5 +1,5 @@
 Package: oneplus-erhai-erhaicam
-Version: 2.10-test-02
+Version: 2.11
 Section: graphics
 Priority: optional
 Architecture: arm64
@@ -22,6 +22,14 @@ Description: ErhaiCam — standalone camera app for the OnePlus Pad 3 (erhai)
  below the button for manual focus (VCM, 0..1023) or exposure (sensor lines,
  1..6396 rear / 1..3120 front) — the faders stretch with the window and stop
  50 px above its bottom edge.
+ .
+ A RECORDING GETS A STEADY PICTURE: AE IS FROZEN.  While a take runs the
+ exposure loop no longer writes the sensor — neither the exposure register nor
+ the low-light frame length.  Every correction used to land as a brightness step
+ inside the video, and a frame-length change also moved the frame rate
+ mid-take.  The exposure is held at the value the preview had settled on, AE
+ resumes on Stop, and the manual exposure fader still works during a take.  The
+ journal says "recording: AE frozen at exposure N lines".
  .
  THE ANALYZER NEEDS NO NPU.  Until now the four AF/AE statistics were produced
  by an ONNX graph on the Hexagon NPU through ONNX Runtime's QNN execution

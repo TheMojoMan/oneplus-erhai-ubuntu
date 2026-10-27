@@ -1460,6 +1460,14 @@ static void ae_step(App *app, GstSample *sample)
 
 	if (!ae.enabled || !app->sensor_ok || !app->camera_ok)
 		return;
+	/* A RECORDING WANTS A STEADY PICTURE.  AE writes the sensor's exposure
+	 * register and, in low light, the frame length too, so every correction
+	 * lands as a brightness step in the take (and a length change also moves
+	 * the frame rate).  While a recording runs the exposure is FROZEN at the
+	 * value the preview had settled on; the loop picks up again on Stop, and
+	 * the manual exposure fader still works if the owner wants to move it. */
+	if (app->recording)
+		return;
 	if (++ae.stride < kAeStride)
 		return;
 	ae.stride = 0;
@@ -1902,6 +1910,8 @@ static void app_record_stop(App *app)
 	if (!app->recording)
 		return;
 	app->recording = false;
+	if (app->ae.enabled && app->ae.measured)
+		std::cerr << "erhai-cam: recording done: AE resumes\n";
 	res_set_locked(app, false);
 	if (app->btn_rec) {
 		gtk_button_set_label(GTK_BUTTON(app->btn_rec), "Record");
@@ -2148,6 +2158,16 @@ static void app_record_start(App *app)
 			app->rsrc = src;
 			app->raudio = mic;
 			app->recording = true;
+			if (app->ae.enabled && app->ae.measured)
+				std::cerr << "erhai-cam: recording: AE frozen at "
+					  << "exposure " << app->ae.exposure
+					  << " lines"
+					  << (app->sensor_ok
+						      ? " (" + std::to_string(
+								app->sensor->frame_lines()) +
+								"-line frame)"
+						      : std::string())
+					  << "\n";
 			/* The resolution is fixed for the whole take. */
 			res_set_locked(app, true);
 			/* The mic's dead air is trimmed at the source (see
