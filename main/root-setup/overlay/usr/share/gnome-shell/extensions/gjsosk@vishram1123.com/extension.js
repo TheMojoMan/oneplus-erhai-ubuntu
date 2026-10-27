@@ -328,8 +328,16 @@ function oskJoinInputPanel(actor) {
         const group = oskInputPanelGroup();
         if (!group)
             return false;
-        if (actor.get_parent() === group)
+        const old = actor.get_parent();
+        if (old === group)
             return true;
+        /* clutter_actor_add_child() starts with
+         *   g_return_if_fail (child->priv->parent == NULL);
+         * so an actor that still has a parent is NOT moved -- add_child just
+         * warns and returns.  2.32-test-13 did exactly that and stayed in
+         * Main.uiGroup forever.  Remove first. */
+        if (old)
+            old.remove_child(actor);
         group.add_child(actor);
         return true;
     } catch (e) {
@@ -411,10 +419,15 @@ function oskIsTextEntry(actor) {
     if (!actor)
         return false;
     try {
-        if (actor.clutter_text &&
-            typeof actor.clutter_text.get_text === 'function')
+        /* St.Label has a clutter_text and a get_text() as well -- the Wi-Fi
+         * dialog's own heading ("Authentication required") matched this and
+         * swallowed the characters.  Only a real entry or an editable
+         * Clutter.Text can take them. */
+        if (actor instanceof St.Entry)      // St.PasswordEntry is one too
             return true;
-        if (typeof actor.get_text === 'function' && actor.editable === true)
+        if (actor.clutter_text && actor.clutter_text.editable === true)
+            return true;
+        if (actor instanceof Clutter.Text && actor.editable === true)
             return true;
     } catch (e) {
     }
@@ -451,6 +464,19 @@ function oskFindTextEntry(actor, depth) {
  * null (the text focus lives in mutter's MetaWaylandTextInputFocus), so the
  * dialog's own actor tree is the only reliable way to find the destination. */
 function oskDialogTextTarget() {
+    /* While a shell dialog is up its entry owns the key focus: the focus is the
+     * entry's internal Clutter.Text (verified live on NetworkSecretDialog:
+     * focus=Clutter_Text inside an St_PasswordEntry), so that is the shortest
+     * and most reliable route. */
+    try {
+        const focus = global.stage.key_focus;
+        if (oskIsTextEntry(focus))
+            return focus;
+        if (focus && focus.get_parent() &&
+            oskIsTextEntry(focus.get_parent()))
+            return focus.get_parent();
+    } catch (e) {
+    }
     const group = Main.layoutManager.modalDialogGroup;
     if (!group)
         return null;
