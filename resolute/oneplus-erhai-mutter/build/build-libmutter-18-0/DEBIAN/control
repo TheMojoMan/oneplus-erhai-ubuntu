@@ -1,6 +1,6 @@
 Package: libmutter-18-0
 Source: mutter
-Version: 50.1-0ubuntu2.4+erhai1
+Version: 50.1-0ubuntu2.5+erhai1
 Architecture: arm64
 Maintainer: Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>
 Installed-Size: 4741
@@ -24,6 +24,6 @@ Description: window manager library from the Mutter window manager
  itself, and gnome-shell.
 Original-Maintainer: Debian GNOME Maintainers <pkg-gnome-maintainers@lists.alioth.debian.org>
  .
- Locally rebuilt package: Ubuntu's 50.1-0ubuntu2.4 with the oneplus-erhai patched
+ Locally rebuilt package: Ubuntu's 50.1-0ubuntu2.5 with the oneplus-erhai patched
  libmutter-18.so.0.0.0 (compositor touch-drag NULL-deref guard).  Depends, Breaks
  and Symbols are Ubuntu's, unchanged.

@@ -1311,7 +1311,7 @@ libmutter-clutter-18.so.0 libmutter-18-0 #MINVER#
  clutter_backend_get_cogl_context@Base 43.0
  clutter_backend_get_cursor@Base 50~
  clutter_backend_get_default_seat@Base 43.0
- clutter_backend_get_global_cursor_type@Base 50.1-0ubuntu2.4
+ clutter_backend_get_global_cursor_type@Base 50.1-0ubuntu2.5
  clutter_backend_get_input_method@Base 43.0
  clutter_backend_get_key_focus@Base 49.0
  clutter_backend_get_pointer_sprite@Base 49.0
