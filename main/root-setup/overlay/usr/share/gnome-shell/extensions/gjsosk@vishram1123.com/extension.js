@@ -34,6 +34,39 @@ const State = {
     CLOSING: 3,
 };
 
+/* [erhai] Shell 51 key injection.  gjs-osk injects hardware KEYCODES through
+ * notify_key() everywhere, but text actors INSIDE the shell (a shell dialog's
+ * entry: the Wi-Fi secret prompt, the GDM auth prompt) only take KEYVALS -- the
+ * same thing Shell 51's own keyboard sends (ui/keyboard.js keyvalPress).  The
+ * keyval comes from the label the key shows at that moment, so the Shift /
+ * CapsLock / Alt layers produce their real character. */
+const OSK_SPECIAL_KEYVALS = {
+    esc: 0xff1b, escape: 0xff1b, backspace: 0xff08, tab: 0xff09,
+    enter: 0xff0d, return: 0xff0d, space: 0x20, capslock: 0xffe5,
+    shift: 0xffe1, ctrl: 0xffe3, control: 0xffe3, alt: 0xffe9,
+    super: 0xffeb, menu: 0xff67, left: 0xff51, up: 0xff52,
+    right: 0xff53, down: 0xff54, delete: 0xffff, home: 0xff50,
+    end: 0xff57, pageup: 0xff55, pagedown: 0xff56, insert: 0xff63,
+    f1: 0xffbe, f2: 0xffbf, f3: 0xffc0, f4: 0xffc1, f5: 0xffc2,
+    f6: 0xffc3, f7: 0xffc4, f8: 0xffc5, f9: 0xffc6, f10: 0xffc7,
+    f11: 0xffc8, f12: 0xffc9,
+};
+
+/** Label shown on a key -> XKB keyval; 0 when the label is not usable. */
+function keyvalFromLabel(label) {
+    if (label == null)
+        return 0;
+    const cps = [...String(label)];
+    const keyval = cps.length === 1
+        ? cps[0].codePointAt(0)
+        : (OSK_SPECIAL_KEYVALS[String(label).toLowerCase()] ?? 0);
+    /* notify_keyval() takes a guint32 keysym, so refuse anything else -- an
+     * out-of-range value aborts the call and loses the keystroke. */
+    if (!Number.isInteger(keyval) || keyval <= 0 || keyval > 0x10ffff)
+        return 0;
+    return keyval;
+}
+
 class KeyboardMenuToggle extends QuickSettings.QuickMenuToggle {
     static {
         GObject.registerClass(this);
@@ -1865,31 +1898,44 @@ class Keyboard extends Dialog {
      * get_entries_for_keycode() either, so the keyval is derived from the key's
      * own label in the layout (a printable key is exactly its default-layer
      * character) plus a table for the named keys.  26.04 keeps keycodes. */
+    _buttonForCode(code) {
+        return (this.keys || []).find(k => k.char != undefined && k.char.code == code);
+    }
+
+    /* The label layer the keyboard is showing right now (see updateKeyLabels). */
+    _labelLayer() {
+        let layer = (this.alt ? 'alt' : '') + (this.shift ? 'shift' : '') +
+            (this.numsL ? 'num' : '') + (this.capsL ? 'caps' : '') +
+            (this.numsL || this.capsL ? 'lock' : '');
+        return layer == '' ? 'default' : layer;
+    }
+
     keyvalForCode(code) {
         if (this._keyvalCache === undefined)
-            this._keyvalCache = {};
+            this._keyvalCache = Object.create(null);
         if (this._keyvalCache[code] !== undefined)
             return this._keyvalCache[code];
-        const SPECIAL = {
-            esc: 0xff1b, escape: 0xff1b, backspace: 0xff08, tab: 0xff09,
-            enter: 0xff0d, return: 0xff0d, space: 0x20, capslock: 0xffe5,
-            shift: 0xffe1, ctrl: 0xffe3, control: 0xffe3, alt: 0xffe9,
-            super: 0xffeb, menu: 0xff67, left: 0xff51, up: 0xff52,
-            right: 0xff53, down: 0xff54, delete: 0xffff, home: 0xff50,
-            end: 0xff57, pageup: 0xff55, pagedown: 0xff56, insert: 0xff63,
-        };
-        let keyval = 0;
-        const btn = (this.keys || []).find(k => k.char != undefined && k.char.code == code);
+        const btn = this._buttonForCode(code);
         const label = btn && btn.char.layers ? btn.char.layers.default : undefined;
-        if (label != undefined) {
-            const cps = [...String(label)];
-            if (cps.length === 1)
-                keyval = cps[0].codePointAt(0);
-            else
-                keyval = SPECIAL[String(label).toLowerCase()] ?? 0;
-        }
+        const keyval = keyvalFromLabel(label);
         this._keyvalCache[code] = keyval;
         return keyval;
+    }
+
+    /* Keyval to inject for `code` into a text actor INSIDE the shell: the
+     * character the key shows at that moment, and NOTHING for a modifier key --
+     * its state is the keyboard's own (it selects the label layer), and a shell
+     * entry would just see a Shift_L keysym it cannot use. */
+    shellKeyvalForCode(code) {
+        const btn = this._buttonForCode(code);
+        if (btn && btn.char && btn.char.isMod)
+            return 0;
+        if (btn && btn.char && btn.char.layers) {
+            const keyval = keyvalFromLabel(btn.char.layers[this._labelLayer()]);
+            if (keyval)
+                return keyval;
+        }
+        return keyvalForCode(code);
     }
 
     /* True while the stage's key focus is a text actor INSIDE the shell (a
@@ -1899,25 +1945,40 @@ class Keyboard extends Dialog {
         return global.stage.key_focus instanceof Clutter.Text;
     }
 
-    /* One key event.  Application windows keep the KEYCODE path that has always
-     * worked (26.04 and 26.10 alike); text fields inside the shell get a KEYVAL
-     * -- that is what Shell 51's own keyboard sends, and keycodes do not reach
-     * those actors on 26.10.  Anything that goes wrong stays non-fatal: the
-     * keycode path is the fallback, and the failure is logged once. */
-    notifyKeyEvent(code, state, time) {
-        if (major >= 51 && this.shellTextFocused()) {
-            const keyval = this.keyvalForCode(code);
-            if (keyval) {
-                try {
-                    this.inputDevice.notify_keyval(time, keyval, state);
-                    return;
-                } catch (e) {
-                    if (!this._keyvalFailed) {
-                        this._keyvalFailed = true;
-                        logError(e, 'GJS-OSK: notify_keyval failed, keycodes stay in use');
-                    }
+    /* Bounded diagnostic for the Shell 51 shell-dialog typing path
+     * (2026-10-27): the first events are logged with their keyvals so a broken
+     * injection can be read from the journal instead of guessed at. */
+    _oskDbg(msg) {
+        if (this._oskDbgN === undefined)
+            this._oskDbgN = 0;
+        if (this._oskDbgN >= 12)
+            return;
+        this._oskDbgN++;
+        console.debug(`GJS-OSK dbg ${this._oskDbgN}: ${msg}`);
+    }
+
+    /* One key event.  Application windows (and anything before Shell 51) keep
+     * the KEYCODE path that has always worked; text fields inside the shell get
+     * a KEYVAL, which is what Shell 51's own keyboard sends and the only thing
+     * those actors accept.  `keyval` is passed in by sendKey() so press and
+     * release always agree, even if the layer changes in between. */
+    notifyKeyEvent(code, state, time, keyval) {
+        const textMode = major >= 51 &&
+            (keyval !== undefined || this.shellTextFocused());
+        if (textMode) {
+            if (keyval === undefined)
+                keyval = this.shellKeyvalForCode(code);
+            if (!keyval)
+                return;                 // modifier or unknown: nothing to inject
+            try {
+                this.inputDevice.notify_keyval(time, keyval, state);
+            } catch (e) {
+                if (!this._keyvalFailed) {
+                    this._keyvalFailed = true;
+                    logError(e, `GJS-OSK: notify_keyval(${keyval}) failed`);
                 }
             }
+            return;
         }
         this.inputDevice.notify_key(time, code, state);
     }
@@ -1929,8 +1990,22 @@ class Keyboard extends Dialog {
             }
             this.keyInProgress = true;
             let event_time = Clutter.get_current_event_time() * 1000;
+            /* shell text actor: resolve every keyval BEFORE the layer is
+             * touched again (decideMod resets the modifiers right after
+             * sendKey), so the release reuses exactly the pressed keyval. */
+            let keyvals = null;
+            if (major >= 51 && this.shellTextFocused()) {
+                keyvals = keys.map(k => this.shellKeyvalForCode(k));
+                const focus = global.stage.key_focus;
+                this._oskDbg(`keys=[${keys}] keyvals=[${keyvals}] ` +
+                    `layer=${this._labelLayer()} shift=${this.shift} ` +
+                    `caps=${this.capsL} ` +
+                    `focus=${focus ? focus.constructor.name : 'none'} ` +
+                    `grab=${global.stage.get_grab_actor() ? 'yes' : 'no'}`);
+            }
             for (var i = 0; i < keys.length; i++) {
-                this.notifyKeyEvent(keys[i], Clutter.KeyState.PRESSED, event_time);
+                this.notifyKeyEvent(keys[i], Clutter.KeyState.PRESSED, event_time,
+                    keyvals ? keyvals[i] : undefined);
             }
             if (this.keyTimeout !== null) {
                 clearTimeout(this.keyTimeout);
@@ -1942,8 +2017,10 @@ class Keyboard extends Dialog {
             }
             this.keyTimeoutFunc = () => {
                 const currKeys = keys
+                const currVals = keyvals;
                 for (var j = currKeys.length - 1; j >= 0; j--) {
-                    this.notifyKeyEvent(currKeys[j], Clutter.KeyState.RELEASED, event_time);
+                    this.notifyKeyEvent(currKeys[j], Clutter.KeyState.RELEASED, event_time,
+                        currVals ? currVals[j] : undefined);
                 }
                 this.keyInProgress = false;
             }
