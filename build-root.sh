@@ -1161,6 +1161,16 @@ else
 	echo "[build-root] $SERIES: stock desktop stack by design (no erhai mutter/GTK4/Mesa)"
 fi
 
+# The image belongs to the INVOKING user, not to root: build-installer-zip.sh
+# zeroes the free blocks of the RAW image in place before compressing it (that
+# keeps the zip under GitHub's 2 GiB asset limit), and that step needs write
+# access.  Root-owned images made the step fail with PermissionError and the
+# frame silently grew by 0.3-0.5 GB (owner hit it on 2026-10-27).
+if [ -n "${SUDO_UID:-}" ] && [ "${SUDO_UID:-0}" != 0 ]; then
+	chown "$SUDO_UID:${SUDO_GID:-$SUDO_UID}" "$IMG" 2>/dev/null ||
+		echo "[build-root] note: could not chown $IMG to the invoking user" >&2
+fi
+
 echo "done: $IMG"
 if [ "$PRESET_USER" = 1 ]; then
 	echo "  user $USERNAME / $USERPASS, root has an empty password"
