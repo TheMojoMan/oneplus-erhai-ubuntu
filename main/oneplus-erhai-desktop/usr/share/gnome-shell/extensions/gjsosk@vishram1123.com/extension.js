@@ -11,6 +11,7 @@ import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import * as QuickSettings from 'resource:///org/gnome/shell/ui/quickSettings.js';
 import * as KeyboardManager from 'resource:///org/gnome/shell/misc/keyboardManager.js';
+import * as ModalDialog from 'resource:///org/gnome/shell/ui/modalDialog.js';
 import * as KeyboardUI from 'resource:///org/gnome/shell/ui/keyboard.js';
 import * as InputSourceManager from 'resource:///org/gnome/shell/ui/status/keyboard.js';
 import * as Config from 'resource:///org/gnome/shell/misc/config.js'
@@ -35,11 +36,11 @@ const State = {
 };
 
 /* [erhai] Shell 51 key injection.  gjs-osk injects hardware KEYCODES through
- * notify_key() everywhere, but text actors INSIDE the shell (a shell dialog's
- * entry: the Wi-Fi secret prompt, the GDM auth prompt) only take KEYVALS -- the
- * same thing Shell 51's own keyboard sends (ui/keyboard.js keyvalPress).  The
- * keyval comes from the label the key shows at that moment, so the Shift /
- * CapsLock / Alt layers produce their real character. */
+ * notify_key() everywhere, on every shell version -- see the long note further
+ * down ("Why there is no notify_keyval() any more").  The keysyms below are
+ * still used to know WHICH characters a tap means: those go to
+ * Main.inputMethod.commit() when the key focus is a text actor inside the
+ * shell (the Wi-Fi secret prompt, the GDM auth prompt). */
 const OSK_SPECIAL_KEYVALS = {
     esc: 0xff1b, escape: 0xff1b, backspace: 0xff08, tab: 0xff09,
     enter: 0xff0d, return: 0xff0d, space: 0x20, capslock: 0xffe5,
@@ -619,6 +620,17 @@ export default class GjsOskExtension extends Extension {
         }
 
         let refresh = () => {
+            /* Logged: refresh() destroys the Keyboard (and its virtual input
+             * device) and builds a new one.  The crash sessions always lost
+             * the shell right around such a rebuild, so the caller matters. */
+            if (this._oskRefreshN === undefined)
+                this._oskRefreshN = 0;
+            if (this._oskRefreshN < 20) {
+                this._oskRefreshN++;
+                const where = (new Error().stack || '').split('\n')
+                    .slice(1, 3).map(l => l.trim()).join(' <- ');
+                log(`GJS-OSK life refresh ${this._oskRefreshN}: ${where}`);
+            }
             (async () => {
                 // [insert handwriting 2]
                 let rawCustomLayouts = this.settings.get_string("custom-layout") || "[]";
@@ -968,6 +980,104 @@ export default class GjsOskExtension extends Extension {
             this.darkSchemeSettings.connect("changed", (_, key) => { if (key == "color-scheme") settingsChanged() }),
             this.inputLanguageSettings.connect("current-source-changed", settingsChanged)
         ];
+
+        this._maybeShellEntryTest();
+    }
+
+    /* One-shot self test (2.32-test-10): when the marker file
+     *   ~/.cache/erhai-osk-selftest
+     * exists, open a shell ModalDialog with an St.Entry -- the exact shape of
+     * NetworkSecretDialog, the Wi-Fi password prompt -- and measure which
+     * injection path actually puts characters into it:
+     *
+     *   keycode      notify_key() on a virtual keyboard device  (what gjs-osk does)
+     *   im-commit    Main.inputMethod.commit()                 (GNOME OSK's IM path)
+     *   direct       entry.set_text()                          (last resort)
+     *
+     * Nothing is logged except text LENGTHS and actor class names.  The marker
+     * is removed, so this runs at most once per session. */
+    _maybeShellEntryTest() {
+        const marker = GLib.build_filenamev([GLib.get_user_cache_dir(),
+            'erhai-osk-selftest']);
+        if (!GLib.file_test(marker, GLib.FileTest.EXISTS))
+            return;
+        try {
+            GLib.unlink(marker);
+        } catch (e) {
+        }
+
+        let device = null;
+        let dialog = null;
+        let entry = null;
+        const say = msg => log(`GJS-OSK test: ${msg}`);
+        const len = () => entry ? entry.get_text().length : -1;
+        say('starting (shell-entry injection test)');
+
+        const steps = [
+            ['open', () => {
+                device = global.stage.context.get_backend().get_default_seat()
+                    .create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
+                entry = new St.Entry({text: '', can_focus: true});
+                dialog = new ModalDialog.ModalDialog({});
+                dialog.contentLayout.add_child(entry);
+                dialog.setInitialKeyFocus(entry);
+                dialog.open();
+            }],
+            ['state', () => {
+                const focus = global.stage.key_focus;
+                const grab = global.stage.get_grab_actor();
+                const im = Main.inputMethod.currentFocus;
+                say(`focus=${focus ? focus.constructor.name : 'none'} ` +
+                    `textLen=${oskTextLen(focus)} entryLen=${len()} ` +
+                    `grab=${grab ? grab.constructor.name : 'none'} ` +
+                    `imFocus=${im ? im.constructor.name : 'none'}`);
+            }],
+            ['keycode-a', () => {
+                const t = global.display.get_current_time_roundtrip() * 1000;
+                device.notify_key(t, 38, Clutter.KeyState.PRESSED);
+                device.notify_key(t, 38, Clutter.KeyState.RELEASED);
+            }],
+            ['after-keycode', () => say(`after keycode 'a': entryLen=${len()}`)],
+            ['im-commit', () => Main.inputMethod.commit('b')],
+            ['after-im', () => say(`after inputMethod.commit('b'): entryLen=${len()}`)],
+            ['direct', () => entry.set_text(entry.get_text() + 'c')],
+            ['after-direct', () => say(`after entry.set_text: entryLen=${len()}`)],
+            ['done', () => {
+                say(`final entryLen=${len()}`);
+                if (dialog) {
+                    dialog.close();
+                    dialog.destroy();
+                    dialog = null;
+                    entry = null;
+                }
+                if (device) {
+                    device.run_dispose();
+                    device = null;
+                }
+                say('done');
+            }],
+        ];
+
+        const next = () => {
+            const step = steps.shift();
+            if (!step)
+                return GLib.SOURCE_REMOVE;
+            const [label, fn] = step;
+            try {
+                fn();
+            } catch (e) {
+                say(`${label} threw: ${e.message}`);
+            }
+            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 400, () => {
+                next();
+                return GLib.SOURCE_REMOVE;
+            });
+            return GLib.SOURCE_REMOVE;
+        };
+        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1200, () => {
+            next();
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
     disable() {
