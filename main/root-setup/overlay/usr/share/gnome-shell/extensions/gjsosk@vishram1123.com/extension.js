@@ -301,6 +301,127 @@ function oskPlanString(plan) {
     return str;
 }
 
+/* Is `actor` a text entry we can type into (St.Entry, St.PasswordEntry, or a
+ * bare editable Clutter.Text)?  St.Label also has get_text(), hence the
+ * clutter_text / editable check. */
+function oskIsTextEntry(actor) {
+    if (!actor)
+        return false;
+    try {
+        if (actor.clutter_text &&
+            typeof actor.clutter_text.get_text === 'function')
+            return true;
+        if (typeof actor.get_text === 'function' && actor.editable === true)
+            return true;
+    } catch (e) {
+    }
+    return false;
+}
+
+function oskFindTextEntry(actor, depth) {
+    if (!actor || depth > 12)
+        return null;
+    try {
+        if (actor.visible !== false && oskIsTextEntry(actor))
+            return actor;
+    } catch (e) {
+    }
+    let kids = [];
+    try {
+        kids = actor.get_children ? actor.get_children() : [];
+    } catch (e) {
+        kids = [];
+    }
+    for (const kid of kids) {
+        const found = oskFindTextEntry(kid, depth + 1);
+        if (found)
+            return found;
+    }
+    return null;
+}
+
+/* The text entry of a VISIBLE modal dialog inside the shell -- the Wi-Fi
+ * secret prompt (NetworkSecretDialog: ModalDialog + St.PasswordEntry in
+ * Main.layoutManager.modalDialogGroup), GDM's auth prompt, any other shell
+ * dialog.  Shell 51 does NOT set global.stage.key_focus for those: with the
+ * Wi-Fi prompt demonstrably open, key_focus and get_grab_actor() both read
+ * null (the text focus lives in mutter's MetaWaylandTextInputFocus), so the
+ * dialog's own actor tree is the only reliable way to find the destination. */
+function oskDialogTextTarget() {
+    const group = Main.layoutManager.modalDialogGroup;
+    if (!group)
+        return null;
+    let kids = [];
+    try {
+        kids = group.get_children ? group.get_children() : [];
+    } catch (e) {
+        return null;
+    }
+    for (const child of kids) {
+        try {
+            if (!child.visible)
+                continue;
+        } catch (e) {
+            continue;
+        }
+        const found = oskFindTextEntry(child, 0);
+        if (found)
+            return found;
+    }
+    return null;
+}
+
+/* Last resort when neither key events nor the input method reach the entry:
+ * put the characters straight into it. */
+function oskInsertIntoText(actor, str) {
+    if (!actor || !str)
+        return false;
+    try {
+        if (actor.clutter_text &&
+            typeof actor.clutter_text.insert_text === 'function') {
+            actor.clutter_text.insert_text(str, -1);
+            return true;
+        }
+        if (typeof actor.insert_text === 'function') {
+            actor.insert_text(str, -1);
+            return true;
+        }
+        if (typeof actor.get_text === 'function' &&
+            typeof actor.set_text === 'function') {
+            actor.set_text(actor.get_text() + str);
+            return true;
+        }
+    } catch (e) {
+        logError(e, 'GJS-OSK: direct text insertion failed');
+    }
+    return false;
+}
+
+/* Delete one character from the end -- the dialog's Backspace.  Only used when
+ * a shell dialog entry is the target (a keycode there would delete twice if it
+ * did arrive). */
+function oskDeleteLastChar(actor) {
+    if (!actor || typeof actor.get_text !== 'function')
+        return false;
+    try {
+        const text = actor.get_text();
+        if (!text.length)
+            return false;
+        const ct = actor.clutter_text;
+        if (ct && typeof ct.delete_text === 'function') {
+            ct.delete_text(text.length - 1, 1);
+            return true;
+        }
+        if (typeof actor.set_text === 'function') {
+            actor.set_text([...text].slice(0, -1).join(''));
+            return true;
+        }
+    } catch (e) {
+        logError(e, 'GJS-OSK: direct text delete failed');
+    }
+    return false;
+}
+
 /* Text field INSIDE the shell (the Wi-Fi credential entry, GDM's auth
  * prompt): Shell 51's own keyboard does not send keysyms for a plain character
  * there -- ui/keyboard.js commit() ends in Main.inputMethod.commit(str).  That
@@ -308,21 +429,27 @@ function oskPlanString(plan) {
  * through it (and only it) while a shell text actor has the key focus.
  * Backspace/Enter/Tab/arrows keep their keycodes and still arrive as key
  * events. */
-function oskCommitText(kb, str, lenBefore) {
+function oskCommitText(kb, str, target) {
+    const lenBefore = oskTextLen(target);
     const cps = [...str].map(c => '0x' + c.codePointAt(0).toString(16)).join(' ');
     try {
         Main.inputMethod.commit(str);
     } catch (e) {
         logError(e, 'GJS-OSK: Main.inputMethod.commit failed');
-        return;
     }
-    oskDbg(kb, `inputMethod.commit([${cps}]) sent, text len ${lenBefore}`);
-    /* Measurement: the entry is normally updated synchronously, but give it a
-     * frame before believing nothing happened. */
+    oskDbg(kb, `inputMethod.commit([${cps}]) sent, len ${lenBefore}`);
+    /* Measure.  If the entry did not grow, the committed text went nowhere --
+     * then put it in directly, so the character always lands. */
     setTimeout(() => {
-        oskDbg(kb, `after inputMethod.commit: text len ${lenBefore} -> ` +
-            `${oskTextLen(global.stage.key_focus)}`);
-    }, 150);
+        const lenNow = oskTextLen(target);
+        oskDbg(kb, `after inputMethod.commit: len ${lenBefore} -> ${lenNow}`);
+        if (lenNow !== lenBefore)
+            return;
+        if (oskInsertIntoText(target, str))
+            oskDbg(kb, `direct insert done, len ${oskTextLen(target)}`);
+        else
+            oskDbg(kb, 'direct insert failed');
+    }, 250);
 }
 
 class KeyboardMenuToggle extends QuickSettings.QuickMenuToggle {
@@ -1027,10 +1154,13 @@ export default class GjsOskExtension extends Extension {
                 const focus = global.stage.key_focus;
                 const grab = global.stage.get_grab_actor();
                 const im = Main.inputMethod.currentFocus;
+                const tgt = oskDialogTextTarget();
                 say(`focus=${focus ? focus.constructor.name : 'none'} ` +
                     `textLen=${oskTextLen(focus)} entryLen=${len()} ` +
                     `grab=${grab ? grab.constructor.name : 'none'} ` +
-                    `imFocus=${im ? im.constructor.name : 'none'}`);
+                    `imFocus=${im ? im.constructor.name : 'none'} ` +
+                    `target=${tgt ? tgt.constructor.name : 'none'} ` +
+                    `targetLen=${oskTextLen(tgt)}`);
             }],
             ['keycode-a', () => {
                 const t = global.display.get_current_time_roundtrip() * 1000;
@@ -2336,44 +2466,57 @@ class Keyboard extends Dialog {
             const event_time = Clutter.get_current_event_time() * 1000;
             /* The keysyms of this tap are computed BEFORE the layer can change
              * again (decideMod resets the modifiers right after sendKey), but
-             * they are NOT injected any more -- only the keycodes are.  The
-             * keysyms just say which characters the tap means, and those go to
-             * Main.inputMethod.commit() when the key focus is a text actor
-             * inside the shell (see the notify_keyval note at the top). */
+             * they are NOT injected -- only keycodes are.  They say WHICH
+             * characters the tap means, and those go to the text entry of a
+             * visible shell dialog (see oskDialogTextTarget) through
+             * Main.inputMethod.commit() with a direct-insert fallback. */
             let plan = null;
+            let target = null;
             let imStr = '';
-            let imLen = null;
             if (major >= 51) {
                 plan = oskKeyPlan(this, keys);
-                const focus = global.stage.key_focus;
+                target = oskDialogTextTarget();
+                if (target && !oskPlanHasShortcutMod(plan))
+                    imStr = oskPlanString(plan);
                 const imFocus = Main.inputMethod.currentFocus;
                 const grab = global.stage.get_grab_actor();
-                imLen = oskTextLen(focus);
-                if (imLen !== null && !oskPlanHasShortcutMod(plan))
-                    imStr = oskPlanString(plan);
+                const focus = global.stage.key_focus;
                 const cps = [...imStr].map(c => '0x' + c.codePointAt(0).toString(16));
                 oskDbg(this, `major=${major} keys=[${keys}] ` +
                     `keyvals=[${plan.map(e => e.keyval)}] ` +
                     `layer=${oskLabelLayer(this)} shift=${this.shift} ` +
                     `caps=${this.capsL} alt=${this.alt} ` +
-                    `focus=${focus ? focus.constructor.name : 'none'} ` +
-                    `textLen=${imLen} ` +
+                    `target=${target ? target.constructor.name : 'none'} ` +
+                    `targetLen=${oskTextLen(target)} ` +
                     `commit=[${cps.join(' ')}] ` +
-                    `imFocus=${imFocus ? imFocus.constructor.name : 'none'} ` +
-                    `grab=${grab ? grab.constructor.name : 'none'}`);
+                    `focus=${focus ? focus.constructor.name : 'none'} ` +
+                    `grab=${grab ? grab.constructor.name : 'none'} ` +
+                    `imFocus=${imFocus ? imFocus.constructor.name : 'none'}`);
             }
-            const typedByIm = code => {
-                if (!imStr)
+            const handled = code => {
+                if (!target)
                     return false;
                 const e = plan.find(p => p.code === code);
-                return !!e && oskIsPrintableKeyval(e.keyval);
+                if (!e)
+                    return false;
+                return oskIsPrintableKeyval(e.keyval) || e.keyval === 0xff08;
             };
             for (var i = 0; i < keys.length; i++) {
-                if (!typedByIm(keys[i]))
+                if (!handled(keys[i]))
                     this.notifyKeyEvent(keys[i], Clutter.KeyState.PRESSED, event_time);
             }
             if (imStr)
-                oskCommitText(this, imStr, imLen);
+                oskCommitText(this, imStr, target);
+            if (target) {
+                /* Backspace: delete one character straight out of the entry --
+                 * a keycode here would delete a second time if it did arrive. */
+                for (var k = 0; k < keys.length; k++) {
+                    const e = plan.find(p => p.code === keys[k]);
+                    if (e && e.keyval === 0xff08)
+                        oskDbg(this, `backspace direct: ${oskDeleteLastChar(target)} ` +
+                            `len ${oskTextLen(target)}`);
+                }
+            }
             if (this.keyTimeout !== null) {
                 clearTimeout(this.keyTimeout);
                 if (typeof this.keyTimeoutFunc === 'function') {
@@ -2384,7 +2527,7 @@ class Keyboard extends Dialog {
             }
             this.keyTimeoutFunc = () => {
                 for (var j = keys.length - 1; j >= 0; j--) {
-                    if (!typedByIm(keys[j]))
+                    if (!handled(keys[j]))
                         this.notifyKeyEvent(keys[j], Clutter.KeyState.RELEASED,
                             event_time);
                 }
