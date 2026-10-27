@@ -1,4 +1,4 @@
-1673e73710a92cb6e6d3e543020765f5  etc/dconf/db/local.d/00-erhai
+0512d9b7381c2f5c3c3f4b5b1aea16a5  etc/dconf/db/local.d/00-erhai
 b38c0460f7b1b4e6e7f7a599229a4046  etc/dconf/profile/gdm
 15e272d1b7f84a0cfcc3e741c9b2e4b3  etc/default/erhai-charge
 e612b000a9d362391310470e5aed75e5  etc/erhai/gpu-pin.conf
@@ -55,10 +55,10 @@ b60c6831263f6164fa46fc842d14931a  usr/local/sbin/erhai-rtc-sync.py
 467dc749e7366cde97f6b036b7b9e304  usr/share/gdm/dconf/95-erhai-greeter
 b27b33c1472cb7f3cea8be939b80c477  usr/share/glib-2.0/schemas/99-erhai-no-gsd-ambient.gschema.override
 c7f7628ba2f8d955ef5bea823c288a4c  usr/share/gnome-shell/extensions/erhai-bypass@erhai.local/extension.js
-28b900a6282be01d5b36b772857fb010  usr/share/gnome-shell/extensions/erhai-bypass@erhai.local/metadata.json
-203f22a8b0e7aac1cfd0f0c89e4ac314  usr/share/gnome-shell/extensions/gjsosk@vishram1123.com/extension.js
+cd706f5293f1fedb3f721cb6979021c6  usr/share/gnome-shell/extensions/erhai-bypass@erhai.local/metadata.json
+51615c5a984f137e8799081bed701246  usr/share/gnome-shell/extensions/gjsosk@vishram1123.com/extension.js
 13c391d50ef43b7073c21ec191408602  usr/share/gnome-shell/extensions/gjsosk@vishram1123.com/keycodes.tar.xz
-5347677d6169f03626ebf013c2796c2e  usr/share/gnome-shell/extensions/gjsosk@vishram1123.com/metadata.json
+adb3765dab6002bbfe29ac1d9d8861f3  usr/share/gnome-shell/extensions/gjsosk@vishram1123.com/metadata.json
 68ba78700b2a7d887c6d43a18d4a0c84  usr/share/gnome-shell/extensions/gjsosk@vishram1123.com/physicalLayouts.json
 4b019d8e5bd16aa00cb69732e4108cc2  usr/share/gnome-shell/extensions/gjsosk@vishram1123.com/pogoGate.js
 bc4178adda00f5539e867d8e5ba132d3  usr/share/gnome-shell/extensions/gjsosk@vishram1123.com/prefs.js
@@ -107,6 +107,6 @@ a9f1dd524f5b40187a792a41ea976bdc  usr/share/libinput/erhai-pogo.quirks
 427c22bb38f891d2bbdd86d8daf3b590  usr/share/oneplus-erhai-desktop/ding-touch/app/desktopIconItem.js
 15158a8cb519eca7b03e55e6fe918193  usr/share/oneplus-erhai-desktop/ding-touch/app/desktopManager.js
 686da544e9dbde510067514aa9f806ec  usr/share/oneplus-erhai-desktop/README.md
-6ad4fd9c4e733845f1e0de41ceb9668f  usr/share/oneplus-erhai-desktop/ubuntu-dock-dash.js
+f2bc82d6b37a55a8b9800b1c8845dcc3  usr/share/oneplus-erhai-desktop/ubuntu-dock-dash.js
 dc2063252411085a9f66435d3879dd05  usr/share/sounds/erhai/panel-off.wav
 925a6c726b033f75077254f7ea6bf79f  usr/share/sounds/erhai/panel-on.wav

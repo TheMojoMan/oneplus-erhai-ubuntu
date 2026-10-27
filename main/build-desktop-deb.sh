@@ -18,7 +18,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 . "$HERE/../ppa-common.sh"
 SRC="$HERE/oneplus-erhai-desktop"
-SETUP="$HERE/root-setup-files"
+SETUP="$HERE/root-setup"
 PKG=$(awk '/^Package:/ {print $2}' "$SRC/DEBIAN/control")
 VER=$(awk '/^Version:/ {print $2}' "$SRC/DEBIAN/control")
 
@@ -131,7 +131,11 @@ echo "==> gjs-osk payload: $(find "$GJSOSK_SRC" -type f | wc -l) files," \
 # leave the dock without a dash.js.
 # Source of truth is the oneplus-erhai-dock project dir, copied here on every
 # build so the two can never diverge.
-DOCK_DASH_SRC="$HERE/oneplus-erhai-dock/usr/share/gnome-shell/extensions/ubuntu-dock@ubuntu.com/dash.js"
+# The dock project lives in resolute/ (it is an override of an Ubuntu extension,
+# so it is ABI-bound to the shell), but the patch itself is release-independent:
+# it uses St.BoxLayout:orientation, which exists on GNOME 46..51 (the old
+# vertical: property was REMOVED in 51 and is what broke the dock on 26.10).
+DOCK_DASH_SRC="$HERE/../resolute/oneplus-erhai-dock/usr/share/gnome-shell/extensions/ubuntu-dock@ubuntu.com/dash.js"
 DOCK_DASH_DST="$SRC/usr/share/oneplus-erhai-desktop/ubuntu-dock-dash.js"
 [ -f "$DOCK_DASH_SRC" ] || {
 	echo "missing $DOCK_DASH_SRC" >&2; exit 1; }
@@ -151,7 +155,7 @@ echo "==> dock touch-scroll payload: $(md5sum "$DOCK_DASH_DST" | cut -d' ' -f1),
 # the extension's own path would be a dpkg file conflict.
 # Source of truth is the oneplus-erhai-ding project dir, copied here on every
 # build so the two can never diverge.
-DING_SRC="$HERE/oneplus-erhai-ding/usr/share/gnome-shell/extensions/ding@rastersoft.com"
+DING_SRC="$HERE/../resolute/oneplus-erhai-ding/usr/share/gnome-shell/extensions/ding@rastersoft.com"
 DING_DST="$SRC/usr/share/oneplus-erhai-desktop/ding-touch"
 for f in app/desktopGrid.js app/desktopManager.js app/desktopIconItem.js; do
 	[ -f "$DING_SRC/$f" ] || { echo "missing $DING_SRC/$f" >&2; exit 1; }
@@ -165,9 +169,9 @@ echo "==> ding touch long-press payload: $(cd "$DING_DST" && md5sum app/*.js | a
 # Panel click sounds (deterministic, regenerated on every build — same pattern
 # as build-sensors-deb.sh compiling its gschemas into the staging tree).
 mkdir -p "$SRC/usr/share/sounds/erhai"
-"$HERE/gen-panel-click.py" "$SRC/usr/share/sounds/erhai/panel-off.wav" off \
+"$HERE/../gen-panel-click.py" "$SRC/usr/share/sounds/erhai/panel-off.wav" off \
 	>/dev/null
-"$HERE/gen-panel-click.py" "$SRC/usr/share/sounds/erhai/panel-on.wav" on \
+"$HERE/../gen-panel-click.py" "$SRC/usr/share/sounds/erhai/panel-on.wav" on \
 	>/dev/null
 for f in usr/share/sounds/erhai/panel-off.wav usr/share/sounds/erhai/panel-on.wav; do
 	[ -s "$SRC/$f" ] || { echo "missing $f in $SRC" >&2; exit 1; }

@@ -3,6 +3,6 @@ f003d75c7f82ff867bce5a71fd50cc61  etc/polkit-1/rules.d/50-erhai-thermal.rules
 ec06b183ee9d39da6099080d8337a637  etc/systemd/system/erhai-thermal@.service
 cafdcfbd66bfe06e7da03fb139dbdc62  usr/local/sbin/erhai-thermal.sh
 2d7b429dd234ccac151f4b457dab5aa3  usr/share/gnome-shell/extensions/erhai-thermal@erhai.local/extension.js
-00f42940b75da6cb6a05e32201b8b52d  usr/share/gnome-shell/extensions/erhai-thermal@erhai.local/metadata.json
+6bcd26e1ba3bf097cd7cc29a04f83bc1  usr/share/gnome-shell/extensions/erhai-thermal@erhai.local/metadata.json
 e4a74f91564672d1309f2785f2f20e90  usr/share/oneplus-erhai-thermal/defaults
 31b87188246f70fd67218f6dc3664b59  usr/share/oneplus-erhai-thermal/README.md

@@ -109,7 +109,7 @@ USERNAME="erhai"
 USERUID="1000"
 USERPASS="erhai"
 PRESET_USER="${PRESET_USER:-0}"
-HERE="$(cd "$(dirname "$0")/../.." && pwd)"   # repo root (this file lives in build-root/<series>/)
+HERE="$(cd "$(dirname "$0")" && pwd)"       # this repo root
 BASETGZ="${ERHAI_BASETGZ:-$DEF_BASE}"
 SETUP_MAIN="${ROOT_SETUP:-$HERE/main/root-setup}"
 SETUP_SERIES="$HERE/$SERIES/root-setup"
@@ -127,6 +127,12 @@ EXTRA_PACKAGES="${EXTRA_PACKAGES:-}"
 # stages).
 SKIP_BOOTSTRAP="${SKIP_BOOTSTRAP:-0}"
 
+# ERHAI_PPA_LOCAL=1: install the erhai packages from THIS WORKING TREE instead of
+# the published site (the image still ships the https sources).  The local PPA
+# tree is bind-mounted into the image as /mnt/local-ppa for the apt stages.
+PPA_LOCAL="${ERHAI_PPA_LOCAL:-0}"
+PPA_LOCAL_ROOT="${ERHAI_PPA_LOCAL_DIR:-$HERE/../themojoman.github.io/ppa/oneplus-erhai/ubuntu}"
+
 BASE_URL="https://cdimage.ubuntu.com/ubuntu-base/releases/$VERSION/release/ubuntu-base-$VERSION-base-arm64.tar.gz"
 # 26.04 is served out of beta/ until release day; fall back to it automatically.
 BASE_URL_BETA="https://cdimage.ubuntu.com/ubuntu-base/releases/$VERSION/beta/ubuntu-base-$VERSION-beta-base-arm64.tar.gz"
@@ -136,6 +142,11 @@ BASE_URL_BETA="https://cdimage.ubuntu.com/ubuntu-base/releases/$VERSION/beta/ubu
 
 cleanup() {
 	set +e
+	if [ -f "$ROOTDIR/etc/apt/sources.list.d/.oneplus-erhai.sources.shipped" ]; then
+		mv -f "$ROOTDIR/etc/apt/sources.list.d/.oneplus-erhai.sources.shipped" \
+			"$ROOTDIR/etc/apt/sources.list.d/oneplus-erhai.sources"
+	fi
+	umount "$ROOTDIR/mnt/local-ppa" 2>/dev/null
 	umount "$ROOTDIR/sys" "$ROOTDIR/proc" "$ROOTDIR/dev/pts" "$ROOTDIR/dev"
 	rm -f "$ROOTDIR/qemu-aarch64-static"
 	umount "$ROOTDIR"
@@ -253,10 +264,18 @@ else
 	# greeter and let it run gnome-initial-setup.
 	sed -i -e 's|^AutomaticLoginEnable=.*|AutomaticLoginEnable=False|' \
 	       -e '/^AutomaticLogin=/d' "$ROOTDIR/etc/gdm3/custom.conf"
-	# Nothing else may name a user at build time in this mode.
-	if grep -rl -e '@USERNAME@' -e '@USERUID@' "$ROOTDIR/etc" "$ROOTDIR/usr/local/sbin"; then
-		echo "the files above still hardcode the desktop user; they must resolve it" \
-		     "at runtime for PRESET_USER=0" >&2
+	# Nothing else may name a user at build time in this mode.  Only SUBSTITUTION
+	# placeholders count: upstream configs document the same syntax in comments
+	# (Ubuntu's /etc/rygel.conf literally mentions @USERNAME@ in its help text).
+	leftover=0
+	while IFS= read -r f; do
+		if grep -vE '^[[:space:]]*#' "$f" | grep -q -e '@USERNAME@' -e '@USERUID@'; then
+			echo "$f"; leftover=1
+		fi
+	done < <(grep -rl -e '@USERNAME@' -e '@USERUID@' "$ROOTDIR/etc" "$ROOTDIR/usr/local/sbin" 2>/dev/null)
+	if [ "$leftover" = 1 ]; then
+		echo "the file(s) above still hardcode the desktop user; they must resolve it" \
+			"at runtime for PRESET_USER=0" >&2
 		exit 1
 	fi
 fi
@@ -588,7 +607,33 @@ else
 		echo "FATAL: oneplus-erhai.sources lost the universal main suite" >&2
 		exit 1; }
 fi
+if [ "$PPA_LOCAL" = 1 ]; then
+	[ -d "$PPA_LOCAL_ROOT/main" ] || {
+		echo "FATAL: ERHAI_PPA_LOCAL=1 but $PPA_LOCAL_ROOT/main is missing" >&2; exit 1; }
+	install -d -m755 "$ROOTDIR/mnt/local-ppa"
+	mount --bind "$PPA_LOCAL_ROOT" "$ROOTDIR/mnt/local-ppa"
+	# keep the SHIPPED file (it names the published https suites) and install a
+	# temporary local one for the apt stages; cleanup()/the end of the build puts
+	# the shipped file back.
+	cp -a "$ROOTDIR/etc/apt/sources.list.d/oneplus-erhai.sources" \
+	      "$ROOTDIR/etc/apt/sources.list.d/.oneplus-erhai.sources.shipped"
+	{
+		printf 'Types: deb\nURIs: file:/mnt/local-ppa/main/\nSuites: ./\nSigned-By: /etc/apt/keyrings/themojoman.gpg\n\n'
+		if [ "$WITH_REPACKS" = 1 ] || [ "$SERIES" = stonking ]; then
+			printf 'Types: deb\nURIs: file:/mnt/local-ppa/%s/\nSuites: ./\nSigned-By: /etc/apt/keyrings/themojoman.gpg\n\n' "$SERIES"
+		fi
+	} > "$ROOTDIR/etc/apt/sources.list.d/oneplus-erhai.sources"
+	echo "[build-root] erhai packages come from the LOCAL tree: $PPA_LOCAL_ROOT"
+fi
+
 echo "apt suites for this image: erhai main + $SERIES, xtradeb $SERIES"
+
+# Package groups (expanded by the HOST while the stage heredoc is written).
+[ "$WITH_REPACKS" = 1 ] && PKGS_REPACK="libgbm1 mesa-libgallium libgl1-mesa-dri libglx-mesa0 libegl-mesa0 mesa-vulkan-drivers libmutter-18-0 gir1.2-mutter-18 libgtk-4-1" || PKGS_REPACK=""
+# the two divert overrides of Ubuntu binaries: erhai-named, and both exist for
+# resolute AND stonking (the 26.10 nautilus/ptyxis ports live in the stonking suite)
+PKGS_REPACK_EXTRA="oneplus-erhai-nautilus oneplus-erhai-ptyxis"
+
 
 # -------------------------------------------------------------- packages -----
 cat > "$ROOTDIR/tmp/erhai-stage-packages.sh" <<EOF
@@ -777,10 +822,6 @@ apt --fix-broken install -y
 # (no backticks inside the unquoted <<EOF heredocs: the OUTER shell expands
 #  them while feeding the chroot, executing host commands and splicing their
 #  output into the chroot script -- that once ran apt on the HOST)
-
-[ "$WITH_REPACKS" = 1 ] && PKGS_REPACK="libgbm1 mesa-libgallium libgl1-mesa-dri libglx-mesa0 libegl-mesa0 mesa-vulkan-drivers libmutter-18-0 gir1.2-mutter-18 libgtk-4-1" || PKGS_REPACK=""
-# the two divert overrides of Ubuntu binaries (erhai-named packages, resolute only)
-[ "$WITH_REPACKS" = 1 ] && PKGS_REPACK_EXTRA="oneplus-erhai-nautilus oneplus-erhai-ptyxis" || PKGS_REPACK_EXTRA=""
 
 apt install -y \
 	oneplus-erhai-linux-7.3 oneplus-erhai-firmware \
@@ -1088,6 +1129,7 @@ cp "$ROOTDIR"/boot/*.efi . 2>/dev/null || echo "no EFI files in the image (kerne
 # erhai fix is simply absent.  So look the versions up in the finished image and
 # REPORT it here -- never abort, the image is bootable, the patch is just gone.
 # Silence here (= no output) is the success case.
+if [ "$WITH_REPACKS" = 1 ]; then
 unpatched=0
 for pkg in libmutter-18-0 gir1.2-mutter-18 libgtk-4-1 \
 	libgbm1 mesa-libgallium libgl1-mesa-dri libglx-mesa0 libegl-mesa0 \
@@ -1119,6 +1161,9 @@ if [ "$unpatched" -gt 0 ]; then
 	echo "[build-root]   Mesa   : MESA_PREFIX=/usr ./update-mesa.sh && ./build-mesa-usr-debs.sh" >&2
 	echo "[build-root] ===============================================================" >&2
 	echo "[build-root] this image is missing the erhai build(s) listed above -- check before shipping" >&2
+fi
+else
+	echo "[build-root] $SERIES: stock desktop stack by design (no erhai mutter/GTK4/Mesa)"
 fi
 
 echo "done: $IMG"

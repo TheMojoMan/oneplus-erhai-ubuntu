@@ -3,11 +3,11 @@
 93f0ac4c82d584744e908a683be17a65  etc/systemd/system/iio-sensor-proxy.service.d/erhai.conf
 1c6a8574a82ff56000918d2aae9179a8  etc/systemd/user/erhai-alsd.service
 74a050a543ec9cc94b2907c7efec4815  etc/udev/rules.d/90-erhai-ssc-sensors.rules
-4945bf612936de8d86218d6e2b523303  usr/local/bin/hexagonrpcd-erhai
-9e008c6e1758a0fbef0eadc15cfc426e  usr/local/bin/monitor-sensor
-07c1513b89257f9d52dd58883953224d  usr/local/bin/ssccli
-7bd11e9f40f4438c3608034cdf0db9b8  usr/local/lib/aarch64-linux-gnu/libssc.so.2
-99ad18e2ad57dfca2f65d8b4d8dd2b72  usr/local/libexec/iio-sensor-proxy
+cc70c47fdc17b675eba9e518f9ea58a3  usr/local/bin/hexagonrpcd-erhai
+7adc8e0beaffda407ab73fa879cfca67  usr/local/bin/monitor-sensor
+bae961b475fef6c6b3dfd5bc406eb2f1  usr/local/bin/ssccli
+5835dc1557dccfd1a39b679be3c943d0  usr/local/lib/aarch64-linux-gnu/libssc.so.2
+df12725c78284cd1dcd2458d60eefabd  usr/local/libexec/iio-sensor-proxy
 e348cfcd3a7f91a7357c37b810927e0a  usr/local/sbin/erhai-alsd.py
 278d43ba3cef2d9529dc6e836d98821a  usr/local/sbin/erhai-tablet-mode.py
 48b617c2a5bc84c806a741d8929002d5  usr/local/sbin/__pycache__/erhai-alsd.cpython-314.pyc
@@ -16,7 +16,7 @@ e1ef56bc4d69091d1f3f4e1137a76834  usr/share/doc/oneplus-erhai-sensors/patches/he
 d4c5007d3a95ed6de1141024595e8d24  usr/share/doc/oneplus-erhai-sensors/patches/libssc-0.4.4-erhai-sample-rate.patch
 ac30e33d0edb76c97f5aa7833d42b43c  usr/share/doc/oneplus-erhai-sensors/README
 5b083616dd6d728fab619ec87443ff67  usr/share/gnome-shell/extensions/erhai-sensors@erhai.local/extension.js
-557b4bb8e54eac47a2c95b34a643ada0  usr/share/gnome-shell/extensions/erhai-sensors@erhai.local/metadata.json
+59083e12045dafde81da43aed7e546bf  usr/share/gnome-shell/extensions/erhai-sensors@erhai.local/metadata.json
 ca2b3fda83b4f7ff4e2dbe2e839eb084  usr/share/gnome-shell/extensions/erhai-sensors@erhai.local/schemas/gschemas.compiled
 ba3c2a157ef6924fb83a62697a3f91d8  usr/share/gnome-shell/extensions/erhai-sensors@erhai.local/schemas/org.erhai.sensors.gschema.xml
 311ba83657cc82e852cdf45b3b7a826c  var/lib/hexagonfs-erhai/acdb/nn_vad_models/fai__3.0.0_0.0__eai_4.2_enpuv5.pmd
