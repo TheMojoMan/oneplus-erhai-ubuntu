@@ -224,15 +224,24 @@ export default class GjsOskExtension extends Extension {
                     this._onFolioChanged(folio);
                 }
                 const wantsAutoOpen = !this.Keyboard.openedFromButton && this.lastInputMethod;
+                // TEXTS INSIDE THE SHELL ITSELF.  Main.inputMethod only knows
+                // about Wayland-surface text fields, so a shell dialog's entry
+                // (the Wi-Fi/network password prompt, GDM's auth prompt, ...)
+                // never opened the keyboard on 26.10: Shell 51 removed
+                // Main.keyboard.maybeHandleEvent, which was the old tap hook
+                // (owner report 2026-10-27).  ui/keyboard.js decides by the
+                // stage key focus instead -- do the same.
+                const shellText = global.stage.key_focus instanceof Clutter.Text;
                 if (wantsAutoOpen && folio)
                     this._folioGateNote('touch auto-open');
                 if (wantsAutoOpen && !folio) {
-                    if (Main.inputMethod.currentFocus != null && Main.inputMethod.currentFocus.is_focused() && !this.Keyboard.closedFromButton) {
+                    const imFocus = Main.inputMethod.currentFocus;
+                    if (((imFocus != null && imFocus.is_focused()) || shellText) && !this.Keyboard.closedFromButton) {
                         this._openKeyboard();
                     } else if (!this.Keyboard.closedFromButton && !this.Keyboard._dragging) {
                         this._closeKeyboard();
                         this.Keyboard.closedFromButton = false
-                    } else if (Main.inputMethod.currentFocus == null) {
+                    } else if (imFocus == null && !shellText) {
                         this.Keyboard.closedFromButton = false
                     }
                 }
@@ -867,21 +876,27 @@ class Keyboard extends Dialog {
         } else {
             this.bottomDragAction = null;
         }
+        // Shell <= 50 routes touch events through Main.keyboard.maybeHandleEvent;
+        // Shell 51's KeyboardManager has no such method (its Keyboard tracks
+        // global.stage's key focus), so the hook below is a no-op there and the
+        // interval above takes over.  Keep both: one shell, one path.
         this._oldMaybeHandleEvent = Main.keyboard.maybeHandleEvent
-        Main.keyboard.maybeHandleEvent = (e) => {
-            let lastInputMethod = [e.type() == 11, e.type() == 11, e.type() == 7 || e.type() == 11][this.settings.get_boolean("indicator-enabled") ? this.settings.get_int("enable-tap-gesture") : 0]
-            let ac = global.stage.get_event_actor(e)
-            if (this.contains(ac)) {
-                ac.event(e, true);
-                ac.event(e, false);
-                return true;
-            } else if (ac instanceof Clutter.Text && lastInputMethod && !this.opened) {
-                if (pogoKeyboardAttached())     // [erhai] folio gate
-                    this.extensionObject?._folioGateNote('tap auto-open');
-                else
-                    this.open();
+        if (this._oldMaybeHandleEvent !== undefined) {
+            Main.keyboard.maybeHandleEvent = (e) => {
+                let lastInputMethod = [e.type() == 11, e.type() == 11, e.type() == 7 || e.type() == 11][this.settings.get_boolean("indicator-enabled") ? this.settings.get_int("enable-tap-gesture") : 0]
+                let ac = global.stage.get_event_actor(e)
+                if (this.contains(ac)) {
+                    ac.event(e, true);
+                    ac.event(e, false);
+                    return true;
+                } else if (ac instanceof Clutter.Text && lastInputMethod && !this.opened) {
+                    if (pogoKeyboardAttached())     // [erhai] folio gate
+                        this.extensionObject?._folioGateNote('tap auto-open');
+                    else
+                        this.open();
+                }
+                return false
             }
-            return false
         }
     }
 
@@ -889,7 +904,8 @@ class Keyboard extends Dialog {
         if (major >= 48) {
             global.display.get_compositor().enable_unredirect()
         }
-        Main.keyboard.maybeHandleEvent = this._oldMaybeHandleEvent
+        if (this._oldMaybeHandleEvent !== undefined)
+            Main.keyboard.maybeHandleEvent = this._oldMaybeHandleEvent
         if (this.oldBottomDragAction !== null && this.oldBottomDragAction instanceof Clutter.Action && EdgeDragAction != null) {
             global.stage.remove_action_by_name('osk')
             global.stage.add_action_full('osk', Clutter.EventPhase.CAPTURE, this.oldBottomDragAction)
