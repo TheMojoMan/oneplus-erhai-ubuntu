@@ -122,7 +122,7 @@ adb sideload erhai-ubuntu_resolute_installer.zip
 ```
 or for Ubuntu 26.10:
 ```bash
-adb sideload erhai-ubuntu_stingray_installer.zip
+adb sideload erhai-ubuntu_stonking_installer.zip
 ```
 
 First time will throw an error -> **Cancel** → **Back** → **Advanced** → **ADB Sideload** → swipe, then again on your PC:
@@ -131,7 +131,7 @@ adb sideload erhai-ubuntu_resolute_installer.zip
 ```
 or
 ```bash
-adb sideload erhai-ubuntu_stingray_installer.zip
+adb sideload erhai-ubuntu_stonking_installer.zip
 ```
 
 Second time should be OK. Image is fully flashed at ~47% (don't ask me why not 100%).
