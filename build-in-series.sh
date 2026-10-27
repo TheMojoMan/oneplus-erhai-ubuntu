@@ -7,7 +7,7 @@
 # WHY: the erhai PPA is split into a UNIVERSAL suite (main) and one
 # PER-RELEASE suite per codename (ppa/oneplus-erhai/ubuntu/<series>/).  The
 # packages in a series suite repack or divert an UBUNTU artifact of the same
-# name (mutter, GTK4, Mesa, steam, ptyxis, nautilus -- see
+# name (mutter, GTK4, Mesa, ptyxis, nautilus -- see
 # ppa-series-packages.txt), so they must be built ON that release: the patched
 # library, the soname and the package version all come from it.  This pad runs
 # 26.04 (resolute) natively, so a 26.10 (stonking) build needs its own root.

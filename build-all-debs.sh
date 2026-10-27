@@ -8,7 +8,7 @@
 #   ./build-all-debs.sh            # everything
 #   ./build-all-debs.sh wifi audio # only the named builders
 #
-# Builders invoked (each publishes its own deb):
+# Builders invoked (each publishes its own deb unless noted):
 #   build-wifi-deb.sh        oneplus-erhai-wifi
 #   build-audio-deb.sh       oneplus-erhai-audio
 #   build-bluetooth-deb.sh   oneplus-erhai-bluetooth
@@ -29,6 +29,10 @@
 #   build-fastrpc-deb.sh     oneplus-erhai-fastrpc (FastRPC transport: libcdsprpc,
 #                            cdsprpcd, the fastrpc group, the DSP payload trees)
 #   build-llamacpp-deb.sh    oneplus-erhai-llamacpp (patched llama.cpp stack)
+#   build-pen-deb.sh         oneplus-erhai-pen (stylus/pen support; local build
+#                            unless PUBLISH=1)
+#   build-video-deb.sh       oneplus-erhai-video (VA-API driver, rebuilt from
+#                            the shipped source on every run)
 # The kernel deb is NOT COMPILED here -- for a full compile use ./build-kernel.sh.
 # steam is not in the list on purpose: its builder stages from a local Valve
 # installation (STEAM_SRC) and is run by hand.
@@ -53,12 +57,14 @@ declare -A BUILDERS=(
 	[npu]=main/build-npu-deb.sh
 	[fastrpc]=main/build-fastrpc-deb.sh
 	[llamacpp]=main/build-llamacpp-deb.sh
+	[pen]=main/build-pen-deb.sh
+	[video]=main/build-video-deb.sh
 	[waydroid]=main/build-waydroid-installer-deb.sh
 )
 
 # waydroid LAST: its builder needs the patcher project in ../tmp/waydroid-patcher
 # (source + the five stripped Mesa objects) and refuses to run without it.
-ORDER=(wifi audio bluetooth camera cam sensors desktop thermal torch otg firmware mesa linux npu fastrpc llamacpp waydroid)
+ORDER=(wifi audio bluetooth camera cam sensors desktop thermal torch otg firmware mesa linux npu fastrpc llamacpp pen video waydroid)
 
 if [ $# -gt 0 ]; then
 	for want in "$@"; do
