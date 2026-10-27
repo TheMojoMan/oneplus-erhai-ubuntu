@@ -145,6 +145,42 @@ function oskShellKeyvalForCode(kb, code) {
     return oskKeyvalForCode(kb, code);
 }
 
+/* Compositor unredirect toggling (the old trick that keeps the OSK above a
+ * fullscreen window) is Shell 48..50 only.
+ * On Shell 51 it is DROPPED: the session that first ran 2.32-test-06 died with
+ * a SIGSEGV on the KMS thread inside libmutter's meta-thread machinery (core:
+ * thread 1 = the impl thread's g_main_loop_run, fault 0x1E4EF8 in
+ * libmutter-51.so.0, i.e. inside meta-thread.c) seconds after open() had
+ * called disable_unredirect() for the Wi-Fi dialog; the shell's own OSK never
+ * touches unredirect at all, so there is nothing to keep here.  See
+ * memories/MEMORY-2026-10-27.md 15f.  Failures are swallowed: a missing
+ * compositor must not break opening the keyboard. */
+const OSK_UNREDIRECT = major >= 48 && major <= 50;
+
+/* null = unknown, otherwise the state last handed to the compositor.  Each
+ * call queues a KMS update, so the same state is never applied twice. */
+let oskUnredirectApplied = null;
+
+function oskSetUnredirect(unredirect) {
+    if (!OSK_UNREDIRECT)
+        return;
+    unredirect = !!unredirect;
+    if (oskUnredirectApplied === unredirect)
+        return;
+    oskUnredirectApplied = unredirect;
+    try {
+        const compositor = global.display.get_compositor();
+        if (!compositor)
+            return;
+        if (unredirect)
+            compositor.enable_unredirect();
+        else
+            compositor.disable_unredirect();
+    } catch (e) {
+        logError(e, 'GJS-OSK: unredirect toggling failed');
+    }
+}
+
 /* Modifier keysyms the shell keyboard presses around a key
  * (ui/keyboard.js _forwardModifiers).  Shift/CapsLock/NumLock are absent on
  * purpose: this keyboard bakes them into the label it sends, so pressing them
@@ -1093,9 +1129,7 @@ class Keyboard extends Dialog {
     }
 
     destroy() {
-        if (major >= 48) {
-            global.display.get_compositor().enable_unredirect()
-        }
+        oskSetUnredirect(true);
         if (this._oldMaybeHandleEvent !== undefined)
             Main.keyboard.maybeHandleEvent = this._oldMaybeHandleEvent
         if (this.oldBottomDragAction !== null && this.oldBottomDragAction instanceof Clutter.Action && EdgeDragAction != null) {
@@ -1251,9 +1285,7 @@ class Keyboard extends Dialog {
         if (this.updateCapsLock) this.updateCapsLock()
         if (this.updateNumLock) this.updateNumLock()
         if (noPrep == null || !noPrep) {
-            if (major >= 48) {
-                global.display.get_compositor().disable_unredirect()
-            }
+            oskSetUnredirect(false);
             this.prevKeyFocus = global.stage.key_focus
             /* [erhai] ONE virtual device for the whole lifetime, like the
              * shell's own KeyboardController: re-creating it on every open
@@ -1266,9 +1298,7 @@ class Keyboard extends Dialog {
             Main.uiGroup.set_child_above_sibling(this, null);
         }
         if (noPrep == null || noPrep) {
-            if (major >= 48) {
-                global.display.get_compositor().disable_unredirect()
-            }
+            oskSetUnredirect(false);
             let monitor = Main.layoutManager.monitors[currentMonitorId] ?? Main.layoutManager.primaryMonitor;
             let posX = [this.settings.get_int("snap-spacing-px"), ((monitor.width * .5) - ((this.width * .5))), monitor.width - this.width - this.settings.get_int("snap-spacing-px")][(this.settings.get_int("default-snap") % 3)];
             let posY = [this.settings.get_int("snap-spacing-px"), ((monitor.height * .5) - ((this.height * .5))), monitor.height - this.height - this.settings.get_int("snap-spacing-px")][Math.floor((this.settings.get_int("default-snap") / 3))];
