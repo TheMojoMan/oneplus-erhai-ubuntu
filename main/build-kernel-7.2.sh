@@ -21,7 +21,7 @@
 #      + a "+b<N>" Debian revision (auto-increments past what the PPA already
 #      has; override with DEB_REV=<n>), postinst/postrm are refreshed from the
 #      kernel tree, and the .deb is packed and MOVED to
-#      themojoman.github.io/ppa/oneplus-erhai/ubuntu/testing/ (the private
+#      themojoman.github.io/ppa/oneplus-erhai/ubuntu/main/ (the private
 #      suite; ../update-ppa.sh --cptesting moves it into main/ and republishes).
 #   5. A UKI is built with ukify (same recipe as the deb's postinst, but with
 #      root=PARTLABEL=linux -- the SHIPPED image's label) and moved to
@@ -253,7 +253,7 @@ echo "payload check OK: $KO_COUNT modules, single usr/lib/modules tree, boot/ co
 OUT_DEB="$DEB_DIR/${PKG_NAME}_${DEB_VERSION}_arm64.deb"
 dpkg-deb --build --root-owner-group "$SNAP" "$OUT_DEB"
 
-# Move (not copy) into the testing suite: no leftover copy anywhere, so there
+# Move (not copy) into the PPA suite: no leftover copy anywhere, so there
 # is exactly one canonical location per built kernel package.
 # NO_PPA=1 keeps in-development kernels local (release policy: the PPA gets a
 # kernel only when the owner asks for it).

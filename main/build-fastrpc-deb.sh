@@ -2,7 +2,7 @@
 # Build oneplus-erhai-fastrpc_<version>_arm64.deb from the
 # oneplus-erhai-fastrpc/ staging tree.
 #
-#   ./build-fastrpc-deb.sh                 # stage + build + publish to TESTING
+#   ./build-fastrpc-deb.sh                 # stage + build + publish to the PPA suite
 #   NO_PPA=1 ./build-fastrpc-deb.sh        # build locally, do not publish
 #   STAGE=<dir> RFSA_SRC=<dir> QCOM_SRC=<dir> ./build-fastrpc-deb.sh
 #

@@ -23,7 +23,7 @@
 # (dsp.img /cdsp + vendor /lib64/hw/audio/libQnnHtpV79Skel.so), so they are
 # Hexagon ELF => Architecture: arm64 (like the sensors package's DSP tree).
 #
-# Publish target is the private TESTING suite by default; NO_PPA=1 (or
+# Publish target is the private PPA suite by default; NO_PPA=1 (or
 # PPA_DEB_DIR=<dir>) keeps an in-development build local.
 set -euo pipefail
 

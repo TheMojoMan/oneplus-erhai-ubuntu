@@ -3,7 +3,7 @@
 # staging tree.
 #
 #   ./build-pen-deb.sh           -> local deb in oneplus-erhai-ubuntu/
-#   PUBLISH=1 ./build-pen-deb.sh -> also ppa_copy to the testing suite
+#   PUBLISH=1 ./build-pen-deb.sh -> also ppa_copy to the PPA suite
 #
 # Development policy: local builds only until the owner asks for a publish,
 # so ppa_copy is behind PUBLISH=1.
@@ -54,5 +54,5 @@ dpkg-deb --build --root-owner-group "$SRC" "$DEB"
 if [ "${PUBLISH:-0}" = "1" ]; then
 	ppa_copy "$DEB"
 else
-	echo "built ${DEB##*/} (local; PUBLISH=1 to push to the testing suite)"
+	echo "built ${DEB##*/} (local; PUBLISH=1 to push to the PPA suite)"
 fi

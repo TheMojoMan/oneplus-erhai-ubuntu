@@ -17,7 +17,7 @@
 # gir1.2-gtk-4.0 is deliberately left at <base>: the typelibs are Ubuntu's,
 # unchanged.
 #
-#   ./build-gtk4-deb.sh                     # build (+ publish to TESTING suite)
+#   ./build-gtk4-deb.sh                     # build (+ publish to PPA suite)
 #   NO_PPA=1 ./build-gtk4-deb.sh            # build locally only
 #   PPA_DEB_DIR="$PPA_MAIN_DEB_DIR" ./build-gtk4-deb.sh     # straight to MAIN
 #   ./build-gtk4-deb.sh --install           # build + dpkg -i all three

@@ -22,7 +22,7 @@
 #   3. applies build-kernel.sh's pre-pack guards: exactly ONE modules tree,
 #      .ko count > 0, modules.dep non-empty, boot/ payload complete,
 #   4. packs <Package>_<kernelrelease>+b<N>_arm64.deb and MOVES it into the
-#      private TESTING suite (ppa_mv -- the kernel convention); NO_PPA=1 or
+#      private PPA suite (ppa_mv -- the kernel convention); NO_PPA=1 or
 #      --no-ppa keeps it local,
 #   5. builds the UKI for the dualboot installer's ESP tree,
 #      ../dualboot/EFI/ubuntu/<clean-kver>-b<N>.efi, with the SHIPPED image's

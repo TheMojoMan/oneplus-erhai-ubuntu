@@ -1,5 +1,5 @@
 Package: oneplus-erhai-nautilus
-Version: 0.3-test-01
+Version: 0.4
 Section: gnome
 Priority: optional
 Architecture: arm64

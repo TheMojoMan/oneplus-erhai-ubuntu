@@ -4,7 +4,7 @@
 # /usr/bin/ptyxis.
 #
 #   ./build-ptyxis-deb.sh              -> local deb in oneplus-erhai-ubuntu/
-#   PUBLISH=1 ./build-ptyxis-deb.sh    -> also ppa_copy to the TESTING suite
+#   PUBLISH=1 ./build-ptyxis-deb.sh    -> also ppa_copy to the PPA suite
 #   PPA_DEB_DIR="$PPA_MAIN_DEB_DIR" PUBLISH=1 ./build-ptyxis-deb.sh
 #                                      -> straight to the public MAIN suite
 #   SKIP_BUILD=1 ./build-ptyxis-deb.sh -> reuse the existing build/ binary
@@ -68,5 +68,5 @@ echo "built ${DEB##*/}"
 if [ "${PUBLISH:-0}" = "1" ]; then
 	ppa_copy "$DEB"
 else
-	echo "(local; PUBLISH=1 to push to the testing suite, or set PPA_DEB_DIR to main)"
+	echo "(local; PUBLISH=1 to push to the PPA suite, or set PPA_DEB_DIR to main)"
 fi

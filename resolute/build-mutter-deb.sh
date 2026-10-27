@@ -9,7 +9,7 @@
 # all at <base>+erhai1 (default base 50.1-0ubuntu2.4).  See
 # oneplus-erhai-mutter/README.md, and nautilus-MEMORY-2026-10-15.md §5-§7.
 #
-#   ./build-mutter-deb.sh                       -> publish to the TESTING suite
+#   ./build-mutter-deb.sh                       -> publish to the PPA suite
 #   NO_PPA=1 ./build-mutter-deb.sh              -> build locally only
 #   PPA_DEB_DIR="$PPA_MAIN_DEB_DIR" ./build-mutter-deb.sh  -> to the public MAIN suite
 #   BASE=50.1-0ubuntu2.5 ./build-mutter-deb.sh  -> after a new Ubuntu mutter update
@@ -126,7 +126,7 @@ GIR_SRC_RO="$PROJ/sibling-bump/gir1.2-mutter-18_${BASE}_arm64.deb"
 if [ -f "$GIR_SRC_RO" ]; then install -m644 "$GIR_SRC_RO" "$PROJ/rollback/"; fi
 echo
 
-# 6. summary + publish (TESTING suite by default; PPA_DEB_DIR selects another one)
+# 6. summary + publish (PPA suite by default; PPA_DEB_DIR selects another one)
 mapfile -t BUILT < "$PATHS"
 echo "== built ${#BUILT[@]} package(s) =="
 for p in "${BUILT[@]}"; do printf '  %s\n' "$(basename "$p")"; done

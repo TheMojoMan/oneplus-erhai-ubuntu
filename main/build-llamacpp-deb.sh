@@ -2,7 +2,7 @@
 # Build oneplus-erhai-llamacpp_<version>_arm64.deb from the
 # oneplus-erhai-llamacpp/ staging tree.
 #
-#   ./build-llamacpp-deb.sh                 # stage + build + publish to TESTING
+#   ./build-llamacpp-deb.sh                 # stage + build + publish to the PPA suite
 #   NO_PPA=1 ./build-llamacpp-deb.sh        # build locally, do not publish
 #   STRIP=0 ./build-llamacpp-deb.sh         # keep the symbols
 #   LLAMA_BIN=<dir> VENDOR_DIR=<dir> LLAMA_SRC=<tree> ./build-llamacpp-deb.sh

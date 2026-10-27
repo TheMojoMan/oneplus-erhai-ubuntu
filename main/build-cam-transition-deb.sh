@@ -1,7 +1,7 @@
 #!/bin/bash
 # Build the EMPTY transitional oneplus-erhai-cam_<version>_all.deb.
 #
-#   ./build-cam-transition-deb.sh            # build + publish to TESTING
+#   ./build-cam-transition-deb.sh            # build + publish to the PPA suite
 #   NO_PPA=1 ./build-cam-transition-deb.sh    # build locally only
 #
 # The ErhaiCam app was renamed oneplus-erhai-cam (<= 1.2) ->

@@ -1,9 +1,9 @@
 #!/bin/bash
-# Build ALL erhai .debs and publish every one of them to the apt repo's
-# testing suite folder:
-#   themojoman.github.io/ppa/oneplus-erhai/ubuntu/testing/
-# (private, opt-in suite -- promote to the public main/ with
-#  ../update-ppa.sh --cptesting once the debs proved themselves)
+# Build ALL erhai .debs; each builder publishes into the suite folder it lives
+# in (one folder per suite: main/ = universal, resolute/ and stonking/ = those
+# Ubuntu releases):
+#   themojoman.github.io/ppa/oneplus-erhai/ubuntu/<suite>/
+# Run a builder with NO_PPA=1 to keep the deb in its <series>/debs instead.
 #
 #   ./build-all-debs.sh            # everything
 #   ./build-all-debs.sh wifi audio # only the named builders
@@ -31,8 +31,7 @@
 #   build-llamacpp-deb.sh    oneplus-erhai-llamacpp (patched llama.cpp stack)
 # The kernel deb is NOT COMPILED here -- for a full compile use ./build-kernel.sh.
 #
-# After this run ../update-ppa.sh --cptesting to move tested debs from
-# testing/ to main/ and republish (it rescans and pushes by itself).
+# The kernel deb is NOT compiled here -- for a full compile use ./build-kernel.sh.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"

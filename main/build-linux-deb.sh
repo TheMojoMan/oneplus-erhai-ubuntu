@@ -11,7 +11,7 @@
 # postinst, postrm) changed and no recompile is wanted.
 #
 # Output: debs/oneplus-erhai-linux-<maj.min>_<release>_arm64.deb, published
-# to themojoman.github.io/ppa/oneplus-erhai/ubuntu/testing/ (see ppa-common.sh).
+# to themojoman.github.io/ppa/oneplus-erhai/ubuntu/main/ (see ppa-common.sh).
 # NOTE: `dpkg -i` reruns the BAKED-IN postinst -- rebuild this deb after
 # editing postinst behaviour that must run at install time.
 set -euo pipefail
