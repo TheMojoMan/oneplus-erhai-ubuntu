@@ -1301,6 +1301,21 @@ static void wb_detach(App *app);
 
 /* ------------------------------- autofocus ------------------------------- */
 
+/* The AF sweep needs (kSettleFrames + kScoreFrames) frames per focus step with
+ * 9 steps: at the mode table's 6404-line frame that is ~1.2 s at 30 fps, but a
+ * low-light frame of 25616 lines makes each step 4x longer (AF felt "much
+ * slower").  So the sweep runs at the BASE frame length (exposure stays at the
+ * ceiling, i.e. as bright as a short frame can be) and the AE ladder gets the
+ * long frame back afterwards.  ERHAI_CAM_AF_FULLRATE=1 restores the old
+ * behaviour for A/B testing. */
+static bool af_wants_short_frames(const App *app)
+{
+	static int fullrate = -1;
+	if (fullrate < 0)
+		fullrate = std::getenv("ERHAI_CAM_AF_FULLRATE") ? 1 : 0;
+	return !fullrate && app->af.enabled && app->af.mode == AfMode::Sweep;
+}
+
 static int af_position(const App *app)
 {
 	return app->lens ? app->lens->position() : 0;
@@ -1327,6 +1342,19 @@ static void start_sweep(App *app, const std::vector<int> &positions,
 	af.best_min = std::numeric_limits<double>::infinity();
 	af.fine = fine;
 	lens_set(app, positions.front());
+	if (app->sensor_ok && af_wants_short_frames(app) &&
+	    app->sensor->frame_lines() > app->sensor->vts_default()) {
+		const int vts = app->sensor->vts_default();
+
+		if (app->sensor->set_frame_lines(vts) &&
+		    app->sensor->set_exposure_lines(app->sensor->max_lines())) {
+			app->ae.exposure = app->sensor->max_lines();
+			app->ae.settle = kAeSettle;
+			std::cerr << "erhai-cam: autofocus: base frame " << vts
+				  << " lines for the sweep, exposure "
+				  << app->ae.exposure << "\n";
+		}
+	}
 	if (!app->headless)
 		set_status(app, "Autofocus scanning\u2026");
 }
@@ -1733,7 +1761,8 @@ static void ae_step(App *app, GstSample *sample)
 	 * The highlight guard above (kRawExposureEpsilon) already stops brightening
 	 * when a longer exposure would blow the highlights. */
 	if (step > 0.0 && ae.exposure >= ae_max &&
-	    app->sensor->frame_lines() < app->sensor->vts_max()) {
+	    app->sensor->frame_lines() < app->sensor->vts_max() &&
+	    !af_wants_short_frames(app)) {
 		const int vts = std::min(app->sensor->frame_lines() * 2,
 					 app->sensor->vts_max());
 
