@@ -198,30 +198,29 @@ function oskIsLatchedMod(kb, code) {
     return !!(btn && btn.char && btn.char.isMod);
 }
 
-/* notify_keyval() wrapper, the same call Shell 51's keyboard makes in
- * keyvalPress()/keyvalRelease().  Only a real keysym may reach it -- a Promise
- * (async-wrapped helper) or NaN throws "value is out of range for uint32" and
- * loses the keystroke -- and the first failure is logged instead of aborting
- * the rest of the key press. */
-function oskInjectKeyval(kb, keyval, state, time) {
-    if (!Number.isInteger(keyval) || keyval <= 0 || keyval > OSK_MAX_KEYVAL) {
-        if (!kb._keyvalInvalid) {
-            kb._keyvalInvalid = true;
-            log(`GJS-OSK: refusing keyval ${keyval} (${typeof keyval})`);
-        }
-        return false;
-    }
-    try {
-        kb.inputDevice.notify_keyval(time, keyval, state);
-        return true;
-    } catch (e) {
-        if (!kb._keyvalFailed) {
-            kb._keyvalFailed = true;
-            logError(e, `GJS-OSK: notify_keyval(${keyval}) failed, ` +
-                'keycodes stay in use');
-        }
-        return false;
-    }
+/* Why there is no notify_keyval() any more (2.32-test-09).
+ *
+ * Shell 51's own keyboard injects keysyms (ui/keyboard.js keyvalPress), and
+ * 2.32-test-06..08 copied that.  Every shell crash since lands in exactly that
+ * call -- symbolised from mutter's debuginfo:
+ *
+ *   #5 update_button_count_in_impl (button=20, state=1)
+ *        at src/backends/native/meta-virtual-input-device-native.c:116
+ *   #6 notify_keyval_in_impl (line ~605) <- input_thread
+ *
+ * i.e. gjs-osk's own notify_keyval() doing ++impl_state->button_count[20] on a
+ * device whose ImplState had already been freed (the shell logs "Received
+ * multiple virtual 0x14 key releases (ignoring)" for 't' right before that).
+ * Keycode injection (notify_key, the Shell <= 50 path) never crashed -- 2.32-
+ * test-05 typed into ptyxis with it -- so keysyms are not worth a shell crash:
+ * they are computed now only to know WHICH characters a tap means.
+ *
+ * True for a keysym that types a character (printable ASCII or a Unicode
+ * keysym); those are handed to the input method when the key focus is a text
+ * actor inside the shell, and skipped on the keycode path. */
+function oskIsPrintableKeyval(keyval) {
+    return (keyval >= 0x20 && keyval <= 0x7e && keyval !== 0x7f) ||
+        (keyval >= 0x01000000 && keyval <= OSK_MAX_KEYVAL);
 }
 
 /* Press plan for one key tap, in press order (the release is the reverse).
@@ -257,6 +256,18 @@ function oskDbg(kb, msg) {
     log(`GJS-OSK dbg ${kb._oskDbgN}: ${msg}`);
 }
 
+/* Lifecycle log (open/close/destroy/touch on the keyboard): a separate budget
+ * from oskDbg, so a crash session still shows what the extension did last
+ * instead of only the first 30 keystrokes. */
+function oskLife(kb, msg) {
+    if (kb._oskLifeN === undefined)
+        kb._oskLifeN = 0;
+    if (kb._oskLifeN >= 40)
+        return;
+    kb._oskLifeN++;
+    log(`GJS-OSK life ${kb._oskLifeN}: ${msg}`);
+}
+
 /* Text length of an actor, or null when it is not a text actor.  Only the
  * LENGTH is ever logged: the focused entry may be a password field. */
 function oskTextLen(actor) {
@@ -289,29 +300,14 @@ function oskPlanString(plan) {
     return str;
 }
 
-/* Fallback for a text field INSIDE the shell (the Wi-Fi credential entry,
- * GDM's auth prompt): Shell 51's own keyboard does not send keysyms for a
- * plain character when an input method has the focus -- ui/keyboard.js
- * commit() calls Main.inputMethod.commit(str) instead, and that is the only
- * path that puts text into such an entry.  Called only after the keysym path
- * demonstrably did not change the entry's text, so a field that does accept
- * keysyms can never get the character twice. */
-function oskCommitIfUnchanged(kb, focus, lenBefore, str) {
-    if (!str)
-        return;
-    if (global.stage.key_focus !== focus) {
-        oskDbg(kb, 'im fallback skipped: key focus moved away');
-        return;
-    }
-    const lenNow = oskTextLen(focus);
-    if (lenNow === null) {
-        oskDbg(kb, 'im fallback skipped: focus is not a text actor');
-        return;
-    }
-    if (lenNow !== lenBefore) {
-        oskDbg(kb, `keysym path worked: text len ${lenBefore} -> ${lenNow}`);
-        return;
-    }
+/* Text field INSIDE the shell (the Wi-Fi credential entry, GDM's auth
+ * prompt): Shell 51's own keyboard does not send keysyms for a plain character
+ * there -- ui/keyboard.js commit() ends in Main.inputMethod.commit(str).  That
+ * is the one path that puts text into such an entry, so printable keys go
+ * through it (and only it) while a shell text actor has the key focus.
+ * Backspace/Enter/Tab/arrows keep their keycodes and still arrive as key
+ * events. */
+function oskCommitText(kb, str, lenBefore) {
     const cps = [...str].map(c => '0x' + c.codePointAt(0).toString(16)).join(' ');
     try {
         Main.inputMethod.commit(str);
@@ -319,9 +315,13 @@ function oskCommitIfUnchanged(kb, focus, lenBefore, str) {
         logError(e, 'GJS-OSK: Main.inputMethod.commit failed');
         return;
     }
-    oskDbg(kb, `keysyms were ignored by the shell entry (len stayed ` +
-        `${lenBefore}); inputMethod.commit([${cps}]) -> len ` +
-        `${oskTextLen(focus)}`);
+    oskDbg(kb, `inputMethod.commit([${cps}]) sent, text len ${lenBefore}`);
+    /* Measurement: the entry is normally updated synchronously, but give it a
+     * frame before believing nothing happened. */
+    setTimeout(() => {
+        oskDbg(kb, `after inputMethod.commit: text len ${lenBefore} -> ` +
+            `${oskTextLen(global.stage.key_focus)}`);
+    }, 150);
 }
 
 class KeyboardMenuToggle extends QuickSettings.QuickMenuToggle {
@@ -396,6 +396,8 @@ function normalizeCustomLayouts(rawValue) {
 
 export default class GjsOskExtension extends Extension {
     _openKeyboard(instant) {
+        if (this.Keyboard)
+            oskLife(this.Keyboard, `extension _openKeyboard(instant=${instant}) state=${this.Keyboard.state}`);
         if (this.Keyboard.state == State.CLOSED) {
             this.Keyboard.open(null, !instant ? null : true);
             this._setKeyboardVisible(true);
@@ -403,6 +405,8 @@ export default class GjsOskExtension extends Extension {
     }
 
     _closeKeyboard(instant) {
+        if (this.Keyboard)
+            oskLife(this.Keyboard, `extension _closeKeyboard(instant=${instant}) state=${this.Keyboard.state}`);
         if (this.Keyboard.state == State.OPENED) {
             this.Keyboard.close(!instant ? null : true);
             this._setKeyboardVisible(false);
@@ -577,6 +581,16 @@ export default class GjsOskExtension extends Extension {
         this.isGnomeKeyboardEnabled = this.gnomeKeyboardSettings.get_boolean('screen-keyboard-enabled');
         this.gnomeKeyboardSettings.set_boolean('screen-keyboard-enabled', false)
         this.isGnomeKeyboardEnabledHandler = this.gnomeKeyboardSettings.connect('changed', () => {
+            /* Logged: this handler destroys the shell's own OSK (and its
+             * virtual input device) every time something re-enables it -- e.g.
+             * while a shell dialog asks for a keyboard -- which is a suspect
+             * for the crashes seen right after the Wi-Fi prompt appeared. */
+            this._oskGnomeToggleN = (this._oskGnomeToggleN || 0) + 1;
+            if (this._oskGnomeToggleN <= 20) {
+                log(`GJS-OSK: screen-keyboard-enabled changed to ` +
+                    `${this.gnomeKeyboardSettings.get_boolean('screen-keyboard-enabled')}` +
+                    `, forcing it off (${this._oskGnomeToggleN})`);
+            }
             this.gnomeKeyboardSettings.set_boolean('screen-keyboard-enabled', false)
         });
         this.settings.scheme = ""
@@ -1034,6 +1048,21 @@ class Keyboard extends Dialog {
          * entry is a Clutter.Text that types only while IT has the focus, and
          * the shell's own OSK keys are can_focus=false for the same reason. */
         this.can_focus = false;
+        /* [erhai] Evidence that touches reach the keyboard at all.  While a
+         * modal dialog is up (the Wi-Fi credential prompt) the shell holds a
+         * stage grab, and if that grab swallows the touch everything looks
+         * exactly like "the OSK does nothing".  One log line per touch. */
+        this.connect('captured-event', (actor, event) => {
+            const type = event.type();
+            if (type === Clutter.EventType.TOUCH_BEGIN ||
+                type === Clutter.EventType.BUTTON_PRESS) {
+                const [x, y] = event.get_coords();
+                oskLife(this, `pointer down on OSK at ` +
+                    `${Math.round(x)},${Math.round(y)} grab=` +
+                    `${global.stage.get_grab_actor() ? 'yes' : 'none'}`);
+            }
+            return Clutter.EVENT_PROPAGATE;
+        });
         this.box = new St.Widget({
             reactive: true,
             can_focus: false,
@@ -1228,6 +1257,7 @@ class Keyboard extends Dialog {
             this.keyTimeout = null;
             this.keyTimeoutFunc = null;
         }
+        oskLife(this, 'destroy()');
         /* [erhai] release anything the device still holds down right away
          * instead of waiting for the next GC cycle (the shell's own
          * KeyboardController does the same in destroy()). */
@@ -1354,6 +1384,7 @@ class Keyboard extends Dialog {
     }
 
     open(noPrep = null, instant = null) {
+        oskLife(this, `open(noPrep=${noPrep}, instant=${instant}) state=${this.state}`);
         if (this.updateCapsLock) this.updateCapsLock()
         if (this.updateNumLock) this.updateNumLock()
         if (noPrep == null || !noPrep) {
@@ -1412,6 +1443,7 @@ class Keyboard extends Dialog {
     }
 
     close(instant = null) {
+        oskLife(this, `close(instant=${instant}) state=${this.state}`);
         this.prevKeyFocus = null;
         let monitor = Main.layoutManager.monitors[currentMonitorId] ?? Main.layoutManager.primaryMonitor;
         let posX = [this.settings.get_int("snap-spacing-px"), ((monitor.width * .5) - ((this.width * .5))), monitor.width - this.width - this.settings.get_int("snap-spacing-px")][(this.settings.get_int("default-snap") % 3)];
@@ -2174,72 +2206,64 @@ class Keyboard extends Dialog {
      * Helpers are MODULE-level because every Keyboard method is async-
      * wrapped by withErrorHandler (see the note at keyvalFromLabel). */
 
-    /* One key event as a keysym; false when it could not be sent. */
-    notifyKeyEvent(code, state, time, keyval) {
-        if (major >= 51) {
-            /* A latched modifier is only a state this keyboard keeps (it
-             * selects the label layer and is folded into the next key by
-             * sendKey's plan): injecting it here would leave it pressed. */
-            if (oskIsLatchedMod(this, code))
-                return;
-            if (keyval === undefined)
-                keyval = oskShellKeyvalForCode(this, code);
-            if (oskInjectKeyval(this, keyval, state, time))
-                return;
+    /* One key event as a keyCODE, on every shell version: the path that has
+     * always worked for application windows and the one that cannot reach
+     * mutter's broken virtual-keyval bookkeeping (see the notify_keyval note at
+     * the top of this file). */
+    notifyKeyEvent(code, state, time) {
+        if (!this.inputDevice) {
+            oskDbg(this, `key event ${code}/${state} dropped: no input device`);
+            return;
         }
-        /* Shell <= 50, no keysym for this key, or notify_keyval() failed: the
-         * keycode path that has always worked for application windows. */
         this.inputDevice.notify_key(time, code, state);
     }
 
     sendKey(keys) {
         try {
-            if (this.keyInProgress) {
+            if (this.keyInProgress)
                 return;
-            }
             this.keyInProgress = true;
-            let event_time = Clutter.get_current_event_time() * 1000;
-            /* Resolve every keysym BEFORE the layer is touched again
-             * (decideMod resets the modifiers right after sendKey), so press
-             * and release always agree.  Shortcut modifiers (Ctrl/Alt/Super)
-             * are injected as their own keysyms around the key, like the
-             * shell keyboard's _forwardModifiers(); Shift/CapsLock/NumLock
-             * are NOT injected -- they are baked into the label we already
-             * send (the layer), so pressing them would double-apply. */
-            let keyvals = null;
-            let imCheck = null;
+            const event_time = Clutter.get_current_event_time() * 1000;
+            /* The keysyms of this tap are computed BEFORE the layer can change
+             * again (decideMod resets the modifiers right after sendKey), but
+             * they are NOT injected any more -- only the keycodes are.  The
+             * keysyms just say which characters the tap means, and those go to
+             * Main.inputMethod.commit() when the key focus is a text actor
+             * inside the shell (see the notify_keyval note at the top). */
+            let plan = null;
+            let imStr = '';
+            let imLen = null;
             if (major >= 51) {
-                keyvals = oskKeyPlan(this, keys);
+                plan = oskKeyPlan(this, keys);
                 const focus = global.stage.key_focus;
                 const imFocus = Main.inputMethod.currentFocus;
                 const grab = global.stage.get_grab_actor();
-                const lenBefore = oskTextLen(focus);
-                const commitStr = oskPlanHasShortcutMod(keyvals)
-                    ? '' : oskPlanString(keyvals);
+                imLen = oskTextLen(focus);
+                if (imLen !== null && !oskPlanHasShortcutMod(plan))
+                    imStr = oskPlanString(plan);
+                const cps = [...imStr].map(c => '0x' + c.codePointAt(0).toString(16));
                 oskDbg(this, `major=${major} keys=[${keys}] ` +
-                    `keyvals=[${keyvals.map(e => e.keyval)}] ` +
+                    `keyvals=[${plan.map(e => e.keyval)}] ` +
                     `layer=${oskLabelLayer(this)} shift=${this.shift} ` +
                     `caps=${this.capsL} alt=${this.alt} ` +
                     `focus=${focus ? focus.constructor.name : 'none'} ` +
-                    `textLen=${lenBefore} ` +
+                    `textLen=${imLen} ` +
+                    `commit=[${cps.join(' ')}] ` +
                     `imFocus=${imFocus ? imFocus.constructor.name : 'none'} ` +
                     `grab=${grab ? grab.constructor.name : 'none'}`);
-                for (const e of keyvals) {
-                    if (!oskInjectKeyval(this, e.keyval, Clutter.KeyState.PRESSED,
-                        event_time))
-                        this.inputDevice.notify_key(event_time, e.code,
-                            Clutter.KeyState.PRESSED);
-                }
-                /* text field inside the shell: remember what to hand to the
-                 * input method if the keysyms do not land (see
-                 * oskCommitIfUnchanged). */
-                if (lenBefore !== null)
-                    imCheck = {focus, lenBefore, str: commitStr};
-            } else {
-                for (var i = 0; i < keys.length; i++) {
-                    this.notifyKeyEvent(keys[i], Clutter.KeyState.PRESSED, event_time);
-                }
             }
+            const typedByIm = code => {
+                if (!imStr)
+                    return false;
+                const e = plan.find(p => p.code === code);
+                return !!e && oskIsPrintableKeyval(e.keyval);
+            };
+            for (var i = 0; i < keys.length; i++) {
+                if (!typedByIm(keys[i]))
+                    this.notifyKeyEvent(keys[i], Clutter.KeyState.PRESSED, event_time);
+            }
+            if (imStr)
+                oskCommitText(this, imStr, imLen);
             if (this.keyTimeout !== null) {
                 clearTimeout(this.keyTimeout);
                 if (typeof this.keyTimeoutFunc === 'function') {
@@ -2249,27 +2273,14 @@ class Keyboard extends Dialog {
                 this.keyTimeoutFunc = null;
             }
             this.keyTimeoutFunc = () => {
-                if (keyvals) {
-                    for (var j = keyvals.length - 1; j >= 0; j--) {
-                        const e = keyvals[j];
-                        if (!oskInjectKeyval(this, e.keyval,
-                            Clutter.KeyState.RELEASED, event_time))
-                            this.inputDevice.notify_key(event_time, e.code,
-                                Clutter.KeyState.RELEASED);
-                    }
-                } else {
-                    for (var j = keys.length - 1; j >= 0; j--) {
+                for (var j = keys.length - 1; j >= 0; j--) {
+                    if (!typedByIm(keys[j]))
                         this.notifyKeyEvent(keys[j], Clutter.KeyState.RELEASED,
                             event_time);
-                    }
                 }
                 this.keyInProgress = false;
             }
             this.keyTimeout = setTimeout(this.keyTimeoutFunc, 5);
-            if (imCheck) {
-                setTimeout(() => oskCommitIfUnchanged(this, imCheck.focus,
-                    imCheck.lenBefore, imCheck.str), 150);
-            }
         } catch (err) {
             this.keyInProgress = false;
             throw new Error("GJS-OSK: An unknown error occured. Please report this bug to the Issues page (https://github.com/Vishram1123/gjs-osk/issues):\n\n" + err + "\n\nKeys Pressed: " + keys);
