@@ -218,6 +218,10 @@ export default class GjsOskExtension extends Extension {
                 this.Keyboard.set_child_at_index(this.Keyboard.box, this.Keyboard.get_n_children() - 1);
                 // [erhai] folio gate: watch the pogo keyboard attach state here
                 // (the interval already runs) and act on the edges only.
+                if (!this.Keyboard.capsLockConnect && typeof this.Keyboard.updateCapsLock === 'function')
+                    this.Keyboard.updateCapsLock();
+                if (!this.Keyboard.numLockConnect && typeof this.Keyboard.updateNumLock === 'function')
+                    this.Keyboard.updateNumLock();
                 const folio = pogoKeyboardAttached();
                 if (folio !== this._folioAttached) {
                     this._folioAttached = folio;
@@ -1405,15 +1409,25 @@ class Keyboard extends Dialog {
                 keyBtn.char = i
                 if (i.code == 58) {
                     this.keymap = global.stage.context.get_backend().get_default_seat().get_keymap()
-                    this.capsLockConnect = this.keymap.connect("state-changed", (a, e) => {
-                        this.setCapsLock(keyBtn, this.keymap.get_caps_lock_state())
-                    })
+                    try {
+                        this.capsLockConnect = this.keymap.connect("state-changed", (a, e) => {
+                            this.setCapsLock(keyBtn, this.keymap.get_caps_lock_state())
+                        })
+                    } catch (e) {
+                        // Clutter 51 dropped the signal: the 300 ms interval polls instead
+                        this.capsLockConnect = null;
+                        this._folioGateNote?.("capslock state polled") // [erhai]
+                    }
                     this.updateCapsLock = () => this.setCapsLock(keyBtn, this.keymap.get_caps_lock_state())
                 } else if (i.code == 69) {
                     this.keymap = global.stage.context.get_backend().get_default_seat().get_keymap()
-                    this.numLockConnect = this.keymap.connect("state-changed", (a, e) => {
-                        this.setNumLock(keyBtn, this.keymap.get_num_lock_state())
-                    })
+                    try {
+                        this.numLockConnect = this.keymap.connect("state-changed", (a, e) => {
+                            this.setNumLock(keyBtn, this.keymap.get_num_lock_state())
+                        })
+                    } catch (e) {
+                        this.numLockConnect = null;
+                    }
                     this.updateNumLock = () => this.setNumLock(keyBtn, this.keymap.get_num_lock_state())
                 } else if (i.code == 42 || i.code == 54) {
                     this.shiftButtons.push(keyBtn)
@@ -1841,6 +1855,55 @@ class Keyboard extends Dialog {
             }
         })
     }
+    /* KEYCODE -> KEYVAL.
+     * Shell 51's own keyboard injects KEYVALS (ui/keyboard.js:
+     *   _virtualDevice.notify_keyval(t * 1000, keyval, state)), while gjs-osk
+     * has always injected HARDWARE KEYCODES through notify_key().  On 26.10 that
+     * no longer reaches a text field (owner report 2026-10-27: the Wi-Fi
+     * password entry stays empty, CapsLock does nothing), while the identical
+     * build types fine on 26.04.  Mutters' Clutter 51 no longer exposes
+     * get_entries_for_keycode() either, so the keyval is derived from the key's
+     * own label in the layout (a printable key is exactly its default-layer
+     * character) plus a table for the named keys.  26.04 keeps keycodes. */
+    keyvalForCode(code) {
+        if (this._keyvalCache === undefined)
+            this._keyvalCache = {};
+        if (this._keyvalCache[code] !== undefined)
+            return this._keyvalCache[code];
+        const SPECIAL = {
+            esc: 0xff1b, escape: 0xff1b, backspace: 0xff08, tab: 0xff09,
+            enter: 0xff0d, return: 0xff0d, space: 0x20, capslock: 0xffe5,
+            shift: 0xffe1, ctrl: 0xffe3, control: 0xffe3, alt: 0xffe9,
+            super: 0xffeb, menu: 0xff67, left: 0xff51, up: 0xff52,
+            right: 0xff53, down: 0xff54, delete: 0xffff, home: 0xff50,
+            end: 0xff57, pageup: 0xff55, pagedown: 0xff56, insert: 0xff63,
+        };
+        let keyval = 0;
+        const btn = (this.keys || []).find(k => k.char != undefined && k.char.code == code);
+        const label = btn && btn.char.layers ? btn.char.layers.default : undefined;
+        if (label != undefined) {
+            const cps = [...String(label)];
+            if (cps.length === 1)
+                keyval = cps[0].codePointAt(0);
+            else
+                keyval = SPECIAL[String(label).toLowerCase()] ?? 0;
+        }
+        this._keyvalCache[code] = keyval;
+        return keyval;
+    }
+
+    /* One key event: keyval on Shell 51 (with keycode fallback), keycode before. */
+    notifyKeyEvent(code, state, time) {
+        if (major >= 51) {
+            const keyval = this.keyvalForCode(code);
+            if (keyval) {
+                this.inputDevice.notify_keyval(time, keyval, state);
+                return;
+            }
+        }
+        this.inputDevice.notify_key(time, code, state);
+    }
+
     sendKey(keys) {
         try {
             if (this.keyInProgress) {
@@ -1849,7 +1912,7 @@ class Keyboard extends Dialog {
             this.keyInProgress = true;
             let event_time = Clutter.get_current_event_time() * 1000;
             for (var i = 0; i < keys.length; i++) {
-                this.inputDevice.notify_key(event_time, keys[i], Clutter.KeyState.PRESSED);
+                this.notifyKeyEvent(keys[i], Clutter.KeyState.PRESSED, event_time);
             }
             if (this.keyTimeout !== null) {
                 clearTimeout(this.keyTimeout);
@@ -1862,7 +1925,7 @@ class Keyboard extends Dialog {
             this.keyTimeoutFunc = () => {
                 const currKeys = keys
                 for (var j = currKeys.length - 1; j >= 0; j--) {
-                    this.inputDevice.notify_key(event_time, currKeys[j], Clutter.KeyState.RELEASED);
+                    this.notifyKeyEvent(currKeys[j], Clutter.KeyState.RELEASED, event_time);
                 }
                 this.keyInProgress = false;
             }
@@ -1914,6 +1977,10 @@ class Keyboard extends Dialog {
     }
 
     setCapsLock(button, state) {
+        // polling (Shell 51 has no Keymap state-changed signal) must not relabel
+        // every key 3x per second: only a real change does anything
+        if (state === this.capsL)
+            return;
         if (state) {
             button.add_style_class_name("selected");
             this.capsL = true;
@@ -1925,6 +1992,8 @@ class Keyboard extends Dialog {
     }
 
     setNumLock(button, state) {
+        if (state === this.numsL)
+            return;
         if (state) {
             button.add_style_class_name("selected");
             this.numsL = true;
@@ -1976,14 +2045,16 @@ class Keyboard extends Dialog {
             if (!(button.char.code == 42) && !(button.char.code == 54))
                 button.remove_style_class_name("selected");
             this.modBtns.splice(this.modBtns.indexOf(button), this.modBtns.indexOf(button) + 1);
-            this.inputDevice.notify_key(Clutter.get_current_event_time(), button.char.code, Clutter.KeyState.RELEASED);
+            this.notifyKeyEvent(button.char.code, Clutter.KeyState.RELEASED,
+                                Clutter.get_current_event_time() * (major >= 51 ? 1000 : 1));
             this.sendKey([button.char.code])
         } else {
             if (!(button.char.code == 42) && !(button.char.code == 54))
                 button.add_style_class_name("selected");
             this.mod.push(button.char.code);
             this.modBtns.push(button);
-            this.inputDevice.notify_key(Clutter.get_current_event_time(), button.char.code, Clutter.KeyState.PRESSED);
+            this.notifyKeyEvent(button.char.code, Clutter.KeyState.PRESSED,
+                                Clutter.get_current_event_time() * (major >= 51 ? 1000 : 1));
         }
     }
 
