@@ -8,6 +8,14 @@ debs/*.deb
 build-root.log
 __pycache__/
 
+# no UKI/.efi belongs in THIS repo: the kernel builder writes them to
+# ../dualboot/EFI/ubuntu/ (build-kernel.sh UKI_OUT) and the rootfs carries its
+# own copy in rootfs-<series>.img.  build-root.sh still drops "$ROOTDIR"/boot/*.efi
+# into its cwd as a convenience copy; keeping it out of git stops a 46 MB binary
+# from riding along (2026-10-27: 7.3.0-rc5-b36.efi was committed that way and the
+# MAX_COMMIT_MB guard could not catch it -- the identical blob was already known).
+/*.efi
+
 # ------------------------------------------------------- retired / stale trees --
 # the 7.2 kernel line is dead; the current 7.3 line stages its own payload
 # snapshot in oneplus-erhai-linux-7.3/.  BOTH 7.2 payload snapshots go: the
