@@ -53,7 +53,8 @@
 #                                             gdm stays at the greeter and runs
 #                                             gnome-initial-setup on first boot
 #         sudo PRESET_USER=1 ./build-root.sh   image with a ready-made user
-# Result: rootfs.img, ready to dd to the "linux" partition (PARTLABEL=linux).
+# Result: ../rootfs-<series>.img (rootfs-resolute.img / rootfs-stonking.img),
+#         ready to dd to the "linux" partition (PARTLABEL=linux).
 #
 # PRESET_USER=0 (default)
 #   Creates no account. GDM starts gnome-initial-setup, which asks for name,
@@ -77,7 +78,7 @@ esac
 
 case "$SERIES" in
 	resolute) VERSION="${ERHAI_VERSION:-26.04}"; DEF_BASE=../ubuntu-base.tar.gz
-	          DEF_IMG=../rootfs.img;         DEF_ROOTDIR=../rootdir ;;
+	          DEF_IMG=../rootfs-resolute.img; DEF_ROOTDIR=../rootdir ;;
 	stonking) VERSION="${ERHAI_VERSION:-26.10}"; DEF_BASE=../ubuntu-base-26.10.tar.gz
 	          DEF_IMG=../rootfs-stonking.img; DEF_ROOTDIR=../rootdir-stonking ;;
 esac
