@@ -84,7 +84,10 @@ constexpr char kLensName[] = "cn3927 focus";
 constexpr int kFocusMin = 0;
 constexpr int kFocusMax = 1023;
 constexpr int kSettleFrames = 1;
-constexpr int kScoreFrames = 2;
+constexpr int kScoreFrames = 1;   /* one analysed frame per focus position:
+                                   * the sweep is frames-bound, and a median of
+                                   * several samples cost 2x the sweep time for
+                                   * no measurable lock quality (2026-10-27) */
 constexpr int kMonitorStride = 6;
 constexpr int kMonitorFrames = 3;
 constexpr int kLowChecks = 4;
@@ -1065,6 +1068,7 @@ struct Af {
 	double point_x = 0.0;
 	double point_y = 0.0;
 	bool one_shot = false;
+	int frames = 0;		/* analysed frames since the sweep started */
 };
 
 /* Auto exposure: a log-domain proportional controller on the sensor's
@@ -1337,6 +1341,7 @@ static void start_sweep(App *app, const std::vector<int> &positions,
 	af.idx = 0;
 	af.settle = 0;
 	af.scores.clear();
+	af.frames = 0;
 	af.best_pos = positions.front();
 	af.best_score = -1.0;
 	af.best_min = std::numeric_limits<double>::infinity();
@@ -1389,8 +1394,11 @@ static void af_finish_sweep(App *app)
 			return;
 		}
 
+		/* Three positions instead of seven: the coarse pass already found the
+		 * peak within kFocusStep, so +-64 in one step is as good and costs
+		 * 4 frames instead of 28. */
 		std::set<int> fine_set;
-		for (int offset = -96; offset <= 96; offset += 32)
+		for (int offset = -64; offset <= 64; offset += 64)
 			fine_set.insert(std::clamp(af.best_pos + offset,
 						   kFocusMin, kFocusMax));
 		start_sweep(app,
@@ -1412,6 +1420,8 @@ static void af_finish_sweep(App *app)
 	if (!app->headless)
 		set_status(app, "AF locked at focus=" +
 				     std::to_string(af.best_pos));
+	std::cerr << "erhai-cam: AF lock after " << af.frames
+		  << " analysed frames (focus " << af.best_pos << ")\n";
 }
 
 static double af_frame_score(App *app, const GstVideoFrame &frame)
@@ -1613,6 +1623,7 @@ static void af_step(App *app, GstSample *sample)
 		if (af.settle < kSettleFrames) {
 			af.settle++;
 		} else {
+			af.frames++;
 			af.scores.push_back(af_frame_score(app, frame));
 			if (af.scores.size() >= kScoreFrames) {
 				std::vector<double> sorted = af.scores;
