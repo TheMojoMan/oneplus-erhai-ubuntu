@@ -769,8 +769,9 @@ apt --fix-broken install -y
 # Mesa: the SIX Ubuntu-named /usr replacement debs are what ship (published to
 # the PPA main suite 2026-09-28): libgbm1, mesa-libgallium, libgl1-mesa-dri,
 # libglx-mesa0, libegl-mesa0, mesa-vulkan-drivers.  The legacy /opt carrier
-# oneplus-erhai-mesa is in NO suite any more (switch-mesa-usr.sh --finalize also
-# stripped the overlay's /opt opt-in on 2026-09-23) -- listing it here aborts the
+# oneplus-erhai-mesa is in NO suite any more (the retired switch-mesa-usr.sh
+# --finalize also stripped the overlay's /opt opt-in on 2026-09-23; the script
+# itself was deleted 2026-10-27) -- listing it here aborts the
 # image build with an unresolvable package.  Refresh the set with
 # 'MESA_PREFIX=/usr ./update-mesa.sh' -> './build-mesa-usr-debs.sh' -> copy the
 # six debs into ppa/oneplus-erhai/ubuntu/main/ + '../update-ppa.sh'.

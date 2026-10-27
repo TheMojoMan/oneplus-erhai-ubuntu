@@ -1,8 +1,13 @@
 #!/bin/bash
 # Build the kernel .deb from the PRE-STAGED payload snapshot in
-# oneplus-erhai-linux/ -- WITHOUT compiling anything.
+# oneplus-erhai-linux-7.3/ -- WITHOUT compiling anything.
 #
-#   ./build-linux-deb.sh
+#   ./build-linux-deb.sh                 # packs the 7.3 snapshot
+#   SRC=main/oneplus-erhai-linux-7.3 ./build-linux-deb.sh
+#
+# The UNSUFFIXED oneplus-erhai-linux/ tree is the retired 7.2 snapshot (it must
+# stay: the 7.2 deb is still installed on old images) and is gitignored -- never
+# point this script at it, a fresh clone only has the per-line snapshots.
 #
 # The snapshot tree must already contain the staged kernel image and modules
 # (DEBIAN/ + boot/vmlinuz-<ver> + boot/dtb-<ver> + usr/lib/modules/<ver>/).
@@ -18,7 +23,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 . "$HERE/../ppa-common.sh"
-SRC="$HERE/oneplus-erhai-linux"
+SRC="${SRC:-$HERE/oneplus-erhai-linux-7.3}"
 PKG=$(awk '/^Package:/ {print $2}' "$SRC/DEBIAN/control")
 VER=$(awk '/^Version:/ {print $2}' "$SRC/DEBIAN/control")
 ARCH=$(awk '/^Architecture:/ {print $2}' "$SRC/DEBIAN/control")

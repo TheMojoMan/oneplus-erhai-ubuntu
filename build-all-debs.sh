@@ -23,15 +23,15 @@
 #   build-firmware-deb.sh    oneplus-erhai-firmware
 #   build-mesa-deb.sh        oneplus-erhai-mesa (from oneplus-erhai-mesa/;
 #                            refresh the payload with ./update-mesa.sh first)
-#   build-linux-deb.sh       oneplus-erhai-linux (packs the pre-staged kernel
+#   build-linux-deb.sh       oneplus-erhai-linux (repacks the committed 7.3
 #                            payload snapshot -- NO kernel compile)
 #   build-npu-deb.sh         oneplus-erhai-npu (NPU/HTP workload layer)
 #   build-fastrpc-deb.sh     oneplus-erhai-fastrpc (FastRPC transport: libcdsprpc,
 #                            cdsprpcd, the fastrpc group, the DSP payload trees)
 #   build-llamacpp-deb.sh    oneplus-erhai-llamacpp (patched llama.cpp stack)
 # The kernel deb is NOT COMPILED here -- for a full compile use ./build-kernel.sh.
-#
-# The kernel deb is NOT compiled here -- for a full compile use ./build-kernel.sh.
+# steam is not in the list on purpose: its builder stages from a local Valve
+# installation (STEAM_SRC) and is run by hand.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"

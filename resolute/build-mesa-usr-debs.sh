@@ -23,10 +23,12 @@
 #   libegl-mesa0        libEGL_mesa.so.0*, share/glvnd/egl_vendor.d/50_mesa.json
 #   mesa-vulkan-drivers libvulkan_{freedreno,lvp}.so, share/vulkan/icd.d/*.json
 #
-# Build output lands in debs/ (see ppa-common.sh DEB_DIR): switch-mesa-usr.sh
-# --install consumes it directly, and a TESTED generation is published by COPYING
+# Build output lands in debs/ (see ppa-common.sh DEB_DIR); install the six debs
+# together with `sudo dpkg -i <debs>/*.deb` (the retired switch-mesa-usr.sh is
+# gone -- a single deb alone leaves the Mesa stack half-replaced).  A TESTED
+# generation is published by COPYING
 # the six built debs
-# into themojoman.github.io/ppa/oneplus-erhai/ubuntu/main/ + ../update-ppa.sh
+# into themojoman.github.io/ppa/oneplus-erhai/ubuntu/resolute/ + ../update-ppa.sh
 # (done 2026-09-28 with 26.3.0~devel.git230441 -- the six Ubuntu-named debs are
 # what the images install; build-root.sh lists exactly those names).  Never
 # rebuild to publish: copy the built artifact, or the PPA and the dev tree drift
@@ -295,11 +297,11 @@ for b in "${DEBS[@]}"; do
 	echo
 done
 
-echo "==> next (on the device, as root -- CWD-independent, no args needed):"
-echo "    sudo bash $HERE/switch-mesa-usr.sh --install"
-echo "    (the script picks up the six debs from $OUT automatically)"
+echo "==> next (on the device, as root):"
+echo "    sudo dpkg -i $OUT/*.deb"
+echo "    (all six in ONE deb run -- a single deb alone leaves the Mesa stack half-replaced)"
 echo "==> publish (ONLY after the generation boot-tested; copy, never rebuild):"
-echo "    export PPA_DEB_DIR=$ROOT/themojoman.github.io/ppa/oneplus-erhai/ubuntu/main"
+echo "    export PPA_DEB_DIR=$ROOT/themojoman.github.io/ppa/oneplus-erhai/ubuntu/resolute"
 echo "    . $HERE/ppa-common.sh; ppa_copy $OUT/*.deb && (cd $ROOT && ./update-ppa.sh)"
 echo "    (NOTE: 'PPA_DEB_DIR=... . ./ppa-common.sh' does NOT survive the source -- bash"
 echo "     reverts the prefix when the '.' command finishes, so a LATER ppa_copy/ppa_mv"

@@ -20,8 +20,9 @@ __pycache__/
 # the 7.2 kernel line is dead; the current 7.3 line stages its own payload
 # snapshot in oneplus-erhai-linux-7.3/.  BOTH 7.2 payload snapshots go: the
 # per-line one AND the canonical oneplus-erhai-linux/ (whose DEBIAN/control is
-# `Package: oneplus-erhai-linux-7.2`; only the retired build-linux-deb.sh reads
-# it -- build-kernel.sh picks the snapshot whose control names ITS package).
+# `Package: oneplus-erhai-linux-7.2`; nothing reads it any more -- build-linux-deb.sh
+# now packs the committed 7.3 snapshot, and build-kernel.sh picks the snapshot
+# whose control names ITS package).
 # NOT root-anchored: the trees moved into the per-suite folders
 # (main/oneplus-erhai-linux*/), and a leading "/" made every rule below
 # silently expire -- git add -A then committed 231 MB of build output.
@@ -44,7 +45,8 @@ oneplus-erhai-firmware-1.0/
 # postinst/postrm: build-kernel.sh takes them from the KERNEL TREE
 # (KERNEL_TREE=../oneplus-erhai-linux), so the copies here were stale duplicates.
 # switch-mesa-usr.sh: the /usr mesa replacement is delivered as the six
-# Ubuntu-named debs, so the in-place switch tool is retired.
+# Ubuntu-named debs, so the in-place switch tool was deleted 2026-10-27 (the
+# rule stays so a stray copy from an old checkout cannot be re-added).
 /postinst
 /postrm
 /switch-mesa-usr.sh
