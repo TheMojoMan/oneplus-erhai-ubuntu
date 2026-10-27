@@ -586,27 +586,21 @@ install -m644 "$(setup_file apt/oneplus-erhai.sources)" "$ROOTDIR/etc/apt/source
 # ppa/oneplus-erhai/ubuntu/<series>/ -- the template carries @ERHAI_SERIES@.
 sed -i "s|^Suites:.*|Suites: $SERIES|" \
 	"$ROOTDIR/etc/apt/sources.list.d/xtradeb-apps.sources"
-if [ "$WITH_REPACKS" = 1 ]; then
-	sed -i "s|@ERHAI_SERIES@|$SERIES|g" \
-		"$ROOTDIR/etc/apt/sources.list.d/oneplus-erhai.sources"
-	grep -q "@ERHAI_SERIES@" "$ROOTDIR/etc/apt/sources.list.d/oneplus-erhai.sources" && {
-		echo "FATAL: oneplus-erhai.sources still carries @ERHAI_SERIES@ (series=$SERIES)" >&2
+# Every image ships the UNIVERSAL suite and ITS OWN release suite -- exactly the
+# two folders that exist for it:  resolute -> main + resolute,
+# stonking -> main + stonking (owner decision 2026-10-27; the stonking suite is
+# where the 26.10 ports of nautilus/ptyxis and the later mutter/GTK4/Mesa ports
+# will live, so the flashed system must be able to see them).
+sed -i "s|@ERHAI_SERIES@|$SERIES|g" \
+	"$ROOTDIR/etc/apt/sources.list.d/oneplus-erhai.sources"
+grep -q "@ERHAI_SERIES@" "$ROOTDIR/etc/apt/sources.list.d/oneplus-erhai.sources" && {
+	echo "FATAL: oneplus-erhai.sources still carries @ERHAI_SERIES@ (series=$SERIES)" >&2
+	exit 1; }
+for want in main "$SERIES"; do
+	grep -q "ubuntu/$want/" "$ROOTDIR/etc/apt/sources.list.d/oneplus-erhai.sources" || {
+		echo "FATAL: oneplus-erhai.sources does not list the $want suite" >&2
 		exit 1; }
-	grep -q "ubuntu/$SERIES/" "$ROOTDIR/etc/apt/sources.list.d/oneplus-erhai.sources" || {
-		echo "FATAL: oneplus-erhai.sources does not list the $SERIES suite" >&2
-		exit 1; }
-else
-	# stock desktop stack: drop the per-release suite stanza (its markers are in
-	# the template) -- nothing in this image comes from .../ubuntu/stonking/.
-	sed -i '/^# >>> series-suite$/,/^# <<< series-suite$/d' \
-		"$ROOTDIR/etc/apt/sources.list.d/oneplus-erhai.sources"
-	grep -q "@ERHAI_SERIES@" "$ROOTDIR/etc/apt/sources.list.d/oneplus-erhai.sources" && {
-		echo "FATAL: oneplus-erhai.sources still carries @ERHAI_SERIES@" >&2
-		exit 1; }
-	grep -q "ubuntu/main/" "$ROOTDIR/etc/apt/sources.list.d/oneplus-erhai.sources" || {
-		echo "FATAL: oneplus-erhai.sources lost the universal main suite" >&2
-		exit 1; }
-fi
+done
 if [ "$PPA_LOCAL" = 1 ]; then
 	[ -d "$PPA_LOCAL_ROOT/main" ] || {
 		echo "FATAL: ERHAI_PPA_LOCAL=1 but $PPA_LOCAL_ROOT/main is missing" >&2; exit 1; }
