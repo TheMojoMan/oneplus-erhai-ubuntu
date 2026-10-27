@@ -56,7 +56,7 @@ b60c6831263f6164fa46fc842d14931a  usr/local/sbin/erhai-rtc-sync.py
 b27b33c1472cb7f3cea8be939b80c477  usr/share/glib-2.0/schemas/99-erhai-no-gsd-ambient.gschema.override
 c7f7628ba2f8d955ef5bea823c288a4c  usr/share/gnome-shell/extensions/erhai-bypass@erhai.local/extension.js
 cd706f5293f1fedb3f721cb6979021c6  usr/share/gnome-shell/extensions/erhai-bypass@erhai.local/metadata.json
-3a6b590229450f7f5399cd86614efdd4  usr/share/gnome-shell/extensions/gjsosk@vishram1123.com/extension.js
+8a8bca96bb96bd7f802f44bf0cfbd236  usr/share/gnome-shell/extensions/gjsosk@vishram1123.com/extension.js
 13c391d50ef43b7073c21ec191408602  usr/share/gnome-shell/extensions/gjsosk@vishram1123.com/keycodes.tar.xz
 adb3765dab6002bbfe29ac1d9d8861f3  usr/share/gnome-shell/extensions/gjsosk@vishram1123.com/metadata.json
 68ba78700b2a7d887c6d43a18d4a0c84  usr/share/gnome-shell/extensions/gjsosk@vishram1123.com/physicalLayouts.json

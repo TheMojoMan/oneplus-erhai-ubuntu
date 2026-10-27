@@ -45,26 +45,124 @@ const OSK_SPECIAL_KEYVALS = {
     enter: 0xff0d, return: 0xff0d, space: 0x20, capslock: 0xffe5,
     shift: 0xffe1, ctrl: 0xffe3, control: 0xffe3, alt: 0xffe9,
     super: 0xffeb, menu: 0xff67, left: 0xff51, up: 0xff52,
-    right: 0xff53, down: 0xff54, delete: 0xffff, home: 0xff50,
-    end: 0xff57, pageup: 0xff55, pagedown: 0xff56, insert: 0xff63,
+    right: 0xff53, down: 0xff54, delete: 0xffff, del: 0xffff,
+    home: 0xff50, end: 0xff57, pageup: 0xff55, pagedown: 0xff56,
+    pgup: 0xff55, pgdn: 0xff56, insert: 0xff63, ins: 0xff63,
+    print: 0xff61, sysrq: 0xff15, pause: 0xff13, numlock: 0xff7f,
     f1: 0xffbe, f2: 0xffbf, f3: 0xffc0, f4: 0xffc1, f5: 0xffc2,
     f6: 0xffc3, f7: 0xffc4, f8: 0xffc5, f9: 0xffc6, f10: 0xffc7,
     f11: 0xffc8, f12: 0xffc9,
 };
 
 /** Label shown on a key -> XKB keyval; 0 when the label is not usable. */
+/* Highest keyval we will hand to notify_keyval(): the Unicode keysym range
+ * ends at 0x0110ffff (unicode_to_keysym() returns 0x01000000 + codepoint for
+ * characters without a legacy keysym). */
+const OSK_MAX_KEYVAL = 0x0110ffff;
+
 function keyvalFromLabel(label) {
     if (label == null)
         return 0;
     const cps = [...String(label)];
-    const keyval = cps.length === 1
-        ? cps[0].codePointAt(0)
-        : (OSK_SPECIAL_KEYVALS[String(label).toLowerCase()] ?? 0);
+    let keyval;
+    if (cps.length === 1) {
+        /* Shell 51's own keyboard uses the same call for a character
+         * (ui/keyboard.js _getKeyvalsFromString): it maps a codepoint to its
+         * real keysym, which matters for every non-Latin-1 character. */
+        keyval = cps[0].codePointAt(0);
+        if (typeof Clutter !== 'undefined' && Clutter.unicode_to_keysym)
+            keyval = Clutter.unicode_to_keysym(keyval);
+    } else {
+        keyval = OSK_SPECIAL_KEYVALS[String(label).toLowerCase()] ?? 0;
+    }
     /* notify_keyval() takes a guint32 keysym, so refuse anything else -- an
      * out-of-range value aborts the call and loses the keystroke. */
-    if (!Number.isInteger(keyval) || keyval <= 0 || keyval > 0x10ffff)
+    if (!Number.isInteger(keyval) || keyval <= 0 || keyval > OSK_MAX_KEYVAL)
         return 0;
     return keyval;
+}
+
+/* [erhai] These five helpers MUST be module-level functions, never Keyboard
+ * methods: initializeKeyboard() replaces every Keyboard method with an `async`
+ * wrapper (withErrorHandler), so `this.keyvalForCode(x)` returns a PROMISE and
+ * not a number.  That is exactly what broke 2.32-test-02..04 on 26.10 -- a
+ * Promise reached notify_keyval() ("value is out of range for uint32" /
+ * "[object Promise]"), and `this.shellTextFocused()` was always truthy, so
+ * every app also took the shell-dialog path.  Keep them pure and synchronous. */
+function oskButtonForCode(kb, code) {
+    return (kb.keys || []).find(k => k.char != undefined && k.char.code == code);
+}
+
+/* The label layer the keyboard is showing right now (same string
+ * updateKeyLabels() builds, i.e. a key of the layout's `layers` object). */
+function oskLabelLayer(kb) {
+    const layer = (kb.alt ? 'alt' : '') + (kb.shift ? 'shift' : '') +
+        (kb.numsL ? 'num' : '') + (kb.capsL ? 'caps' : '') +
+        (kb.numsL || kb.capsL ? 'lock' : '');
+    return layer == '' ? 'default' : layer;
+}
+
+/* Label of a key in one layer.  Icon keys ("show-icons") have their labels
+ * moved to "_<layer>" and the visible layer set to null, so look there too. */
+function oskLabelForLayer(char, layer) {
+    const layers = char.layers || {};
+    let label = layers[layer];
+    if (label == null)
+        label = layers['_' + layer];
+    if (label == null)
+        label = layers.default;
+    if (label == null)
+        label = layers._default;
+    return label;
+}
+
+/* Keyval of a key in its default layer (cached; the label never changes). */
+function oskKeyvalForCode(kb, code) {
+    if (kb._keyvalCache === undefined)
+        kb._keyvalCache = Object.create(null);
+    if (kb._keyvalCache[code] !== undefined)
+        return kb._keyvalCache[code];
+    const btn = oskButtonForCode(kb, code);
+    const label = btn && btn.char ? oskLabelForLayer(btn.char, 'default') : undefined;
+    const keyval = keyvalFromLabel(label);
+    kb._keyvalCache[code] = keyval;
+    return keyval;
+}
+
+/* Keyval to inject for `code` into a text actor INSIDE the shell: the
+ * character the key shows at that moment, and NOTHING for a modifier key --
+ * its state is the keyboard's own (it selects the label layer), and a shell
+ * entry would just see a Shift_L keysym it cannot use. */
+function oskShellKeyvalForCode(kb, code) {
+    const btn = oskButtonForCode(kb, code);
+    if (btn && btn.char && btn.char.isMod)
+        return 0;
+    if (btn && btn.char && btn.char.layers) {
+        const keyval = keyvalFromLabel(oskLabelForLayer(btn.char, oskLabelLayer(kb)));
+        if (keyval)
+            return keyval;
+    }
+    return oskKeyvalForCode(kb, code);
+}
+
+/* True while the stage's key focus is a text actor INSIDE the shell (a shell
+ * dialog's entry).  Application windows focus a Meta.Window instead, which is
+ * why they are not covered by this test -- the same rule Shell 51's own
+ * keyboard uses (ui/keyboard.js _onKeyFocusChanged). */
+function oskShellTextFocused() {
+    return global.stage.key_focus instanceof Clutter.Text;
+}
+
+/* Bounded diagnostic for the Shell 51 shell-dialog typing path: the first
+ * events are logged with their keyvals so a broken injection can be read from
+ * the journal instead of guessed at. */
+function oskDbg(kb, msg) {
+    if (kb._oskDbgN === undefined)
+        kb._oskDbgN = 0;
+    if (kb._oskDbgN >= 12)
+        return;
+    kb._oskDbgN++;
+    console.debug(`GJS-OSK dbg ${kb._oskDbgN}: ${msg}`);
 }
 
 class KeyboardMenuToggle extends QuickSettings.QuickMenuToggle {
@@ -1897,65 +1995,9 @@ class Keyboard extends Dialog {
      * build types fine on 26.04.  Mutters' Clutter 51 no longer exposes
      * get_entries_for_keycode() either, so the keyval is derived from the key's
      * own label in the layout (a printable key is exactly its default-layer
-     * character) plus a table for the named keys.  26.04 keeps keycodes. */
-    _buttonForCode(code) {
-        return (this.keys || []).find(k => k.char != undefined && k.char.code == code);
-    }
-
-    /* The label layer the keyboard is showing right now (see updateKeyLabels). */
-    _labelLayer() {
-        let layer = (this.alt ? 'alt' : '') + (this.shift ? 'shift' : '') +
-            (this.numsL ? 'num' : '') + (this.capsL ? 'caps' : '') +
-            (this.numsL || this.capsL ? 'lock' : '');
-        return layer == '' ? 'default' : layer;
-    }
-
-    keyvalForCode(code) {
-        if (this._keyvalCache === undefined)
-            this._keyvalCache = Object.create(null);
-        if (this._keyvalCache[code] !== undefined)
-            return this._keyvalCache[code];
-        const btn = this._buttonForCode(code);
-        const label = btn && btn.char.layers ? btn.char.layers.default : undefined;
-        const keyval = keyvalFromLabel(label);
-        this._keyvalCache[code] = keyval;
-        return keyval;
-    }
-
-    /* Keyval to inject for `code` into a text actor INSIDE the shell: the
-     * character the key shows at that moment, and NOTHING for a modifier key --
-     * its state is the keyboard's own (it selects the label layer), and a shell
-     * entry would just see a Shift_L keysym it cannot use. */
-    shellKeyvalForCode(code) {
-        const btn = this._buttonForCode(code);
-        if (btn && btn.char && btn.char.isMod)
-            return 0;
-        if (btn && btn.char && btn.char.layers) {
-            const keyval = keyvalFromLabel(btn.char.layers[this._labelLayer()]);
-            if (keyval)
-                return keyval;
-        }
-        return keyvalForCode(code);
-    }
-
-    /* True while the stage's key focus is a text actor INSIDE the shell (a
-     * shell dialog's entry).  Application windows focus a Meta.Window instead,
-     * which is why they are not covered by this test. */
-    shellTextFocused() {
-        return global.stage.key_focus instanceof Clutter.Text;
-    }
-
-    /* Bounded diagnostic for the Shell 51 shell-dialog typing path
-     * (2026-10-27): the first events are logged with their keyvals so a broken
-     * injection can be read from the journal instead of guessed at. */
-    _oskDbg(msg) {
-        if (this._oskDbgN === undefined)
-            this._oskDbgN = 0;
-        if (this._oskDbgN >= 12)
-            return;
-        this._oskDbgN++;
-        console.debug(`GJS-OSK dbg ${this._oskDbgN}: ${msg}`);
-    }
+     * character) plus a table for the named keys.  26.04 keeps keycodes.
+     * The helpers live at module level (oskKeyvalForCode & friends) because
+     * every Keyboard method is async-wrapped -- see the note up there. */
 
     /* One key event.  Application windows (and anything before Shell 51) keep
      * the KEYCODE path that has always worked; text fields inside the shell get
@@ -1964,12 +2006,23 @@ class Keyboard extends Dialog {
      * release always agree, even if the layer changes in between. */
     notifyKeyEvent(code, state, time, keyval) {
         const textMode = major >= 51 &&
-            (keyval !== undefined || this.shellTextFocused());
+            (keyval !== undefined || oskShellTextFocused());
         if (textMode) {
             if (keyval === undefined)
-                keyval = this.shellKeyvalForCode(code);
+                keyval = oskShellKeyvalForCode(this, code);
             if (!keyval)
                 return;                 // modifier or unknown: nothing to inject
+            /* Never hand anything but a real keysym to notify_keyval(): a
+             * Promise (async-wrapped helper) or NaN throws out of range and
+             * loses the keystroke. */
+            if (!Number.isInteger(keyval) || keyval <= 0 || keyval > OSK_MAX_KEYVAL) {
+                if (!this._keyvalInvalid) {
+                    this._keyvalInvalid = true;
+                    console.warn(`GJS-OSK: refusing keyval ${keyval} ` +
+                        `(${typeof keyval})`);
+                }
+                return;
+            }
             try {
                 this.inputDevice.notify_keyval(time, keyval, state);
             } catch (e) {
@@ -1994,11 +2047,12 @@ class Keyboard extends Dialog {
              * touched again (decideMod resets the modifiers right after
              * sendKey), so the release reuses exactly the pressed keyval. */
             let keyvals = null;
-            if (major >= 51 && this.shellTextFocused()) {
-                keyvals = keys.map(k => this.shellKeyvalForCode(k));
+            const shellText = major >= 51 && oskShellTextFocused();
+            if (shellText) {
+                keyvals = keys.map(k => oskShellKeyvalForCode(this, k));
                 const focus = global.stage.key_focus;
-                this._oskDbg(`keys=[${keys}] keyvals=[${keyvals}] ` +
-                    `layer=${this._labelLayer()} shift=${this.shift} ` +
+                oskDbg(this, `keys=[${keys}] keyvals=[${keyvals}] ` +
+                    `layer=${oskLabelLayer(this)} shift=${this.shift} ` +
                     `caps=${this.capsL} ` +
                     `focus=${focus ? focus.constructor.name : 'none'} ` +
                     `grab=${global.stage.get_grab_actor() ? 'yes' : 'no'}`);
