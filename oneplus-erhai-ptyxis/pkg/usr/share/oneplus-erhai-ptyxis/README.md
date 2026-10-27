@@ -159,10 +159,9 @@ state (insensitive while there is nothing pastable).
 
 ## Status
 
-In development on the owner's pad (built + installed locally as **0.3**;
-**0.2 is the published revision** in the PPA main suite — it predates the
-marking-dismissal fix below — and 0.1 stays there as a downgrade target).
-Verified so far: the
+In development on the owner's pad (built + installed locally; **0.3 is the
+PUBLISHED revision** in the PPA main suite, with 0.2 and 0.1 below it as
+downgrade targets).  Verified so far: the
 patch applies cleanly to a pristine Ubuntu source tree and reproduces the
 working tree byte-for-byte; the release build is warning-free (the only warning
 in the log is upstream's own unused `self` in
@@ -188,7 +187,11 @@ row=… first=29 view_row=… offset=29`).  The input-dismissal rule is verified
 against VTE's own source (`Terminal::commit` is emitted from `feed_child()`, so
 one hook covers typing, the on-screen keyboard, the paste action and
 middle-click paste; `vte_terminal_paste_clipboard()` emits BEFORE the paste is
-fed).  The gestures themselves need a hand test on the pad.
+fed) **and unit-verified off-device by `commit-signal-test.c`** (PASS:
+`feed_child -> commit` yes, `paste -> commit` yes, and at the moment the signal
+fires for a paste the child has NOT received the text yet — so the marking is
+already cleared when the pasted bytes are echoed).  The gestures themselves need
+a hand test on the pad.
 
 ### Known limitations
 
@@ -223,11 +226,12 @@ single-instance, so **close all Ptyxis windows once** after installing.
 
 Published in the public **main** suite (`ppa/oneplus-erhai/ubuntu/main/`):
 
-* **0.3** (local, NOT published yet) — the marking-dismissal fix (a marking is
-  dismissed by the next input you send) and the removal of the temporary tap
-  diagnostic.  Same build path; publish with
-  `SKIP_BUILD=1 PUBLISH=1 PPA_DEB_DIR=<…>/ubuntu/main ./build-ptyxis-deb.sh`
-  when the owner asks.
+* **0.3** (current) — the marking-dismissal fix (a marking is dismissed by the
+  next input you send) and the removal of the temporary tap diagnostic: size
+  253 388 B, sha256
+  `0a295c3366a8728b14041147a4af7ce3bde54cd3bec9091d0d1310992bdd5476`; published
+  by COPYING the built deb into `ubuntu/main/` + `update-ppa.sh` (GitHub commit
+  `d0a0bb6`, push `5c00cca..d0a0bb6`).
 * **0.2** — size 253 382 B, sha256
   `626bcab32b897afdbac8724345bc4e48ddc49ad798b9a9799d6cb1ac1b3806c3`; published
   with `SKIP_BUILD=1 PUBLISH=1 PPA_DEB_DIR=<…>/ubuntu/main
