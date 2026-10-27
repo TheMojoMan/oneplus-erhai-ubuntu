@@ -16,14 +16,13 @@
 # then call:
 #   ppa_copy path/to/pkg_version_arch.deb [more.deb ...]
 #
-# Fresh builds land in the TESTING suite first:
-#   <workspace>/themojoman.github.io/ppa/oneplus-erhai/ubuntu/testing/*.deb
-# The testing suite is NOT in the public package sources -- only the owner's
-# own device opts into it. After a build proved itself it is promoted to the
-# public main suite with:
-#   ../update-ppa.sh --cptesting   (moves testing/*.deb -> main/*.deb)
-# followed by ../update-ppa.sh (without the flag) to regenerate Packages/
-# Release signatures and push to GitHub.
+# A build leaves its .deb in <repo>/<suite>/debs (gitignored).  Publishing is a
+# separate, deliberate step:
+#   ../update-ppa.sh --mv     moves every <suite>/debs/*.deb into the PPA suite
+#                             of the same name (main|resolute|stonking)
+#   ../update-ppa.sh          regenerates Packages/Release signatures + pushes
+# There is NO 'testing' suite any more (removed 2026-10-27): a package that is
+# not ready stays in <suite>/debs, which the PPA never sees.
 #
 # Override the publish target with PPA_DEB_DIR (e.g. to publish straight to
 # the public suite: PPA_DEB_DIR="$PPA_MAIN_DEB_DIR" ./build-wifi-deb.sh).
@@ -38,7 +37,6 @@ _ppa_repo_root() {
 	fi
 }
 PPA_MAIN_DEB_DIR="${PPA_MAIN_DEB_DIR:-$(_ppa_repo_root)/ppa/oneplus-erhai/ubuntu/main}"
-PPA_TESTING_DEB_DIR="${PPA_TESTING_DEB_DIR:-$(_ppa_repo_root)/ppa/oneplus-erhai/ubuntu/testing}"
 
 # ----------------------------------------------------------- release series --
 # main carries only packages that are INDEPENDENT of the Ubuntu release (erhai's
@@ -108,10 +106,11 @@ ppa_is_series_pkg() {
 	grep -qxF -- "$1" "$PPA_SERIES_LIST"
 }
 
-# Builders publish to testing by default; ../update-ppa.sh --cptesting promotes
-# tested debs to main (universal packages) or to the release suite (the ones
-# listed in ppa-series-packages.txt).
-PPA_DEB_DIR="${PPA_DEB_DIR:-$PPA_TESTING_DEB_DIR}"
+# ppa_copy/ppa_mv write into the builder's OWN suite (the folder it lives in):
+# main/ builders -> .../ubuntu/main, resolute/ -> .../resolute, stonking/ ->
+# .../stonking.  There is no private staging suite any more; a .deb that is not
+# ready simply stays in <suite>/debs until `update-ppa.sh --mv` is run.
+PPA_DEB_DIR="${PPA_DEB_DIR:-$PPA_SERIES_DEB_DIR}"
 
 # --------------------------------------------------------------- build output --
 # Every builder packs the .deb it just produced into ONE place inside this repo
