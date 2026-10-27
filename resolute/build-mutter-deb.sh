@@ -6,7 +6,7 @@
 #   gir1.2-mutter-18        Ubuntu's deb, Version + exact pin re-versioned
 #   libmutter-18-0-dbgsym   Ubuntu's dbgsym, Version + exact pin re-versioned
 #
-# all at <base>+erhai1 (default base 50.1-0ubuntu2.4).  See
+# all at <base>+erhai1 (default base 50.1-0ubuntu2.5).  See
 # oneplus-erhai-mutter/README.md, and nautilus-MEMORY-2026-10-15.md §5-§7.
 #
 #   ./build-mutter-deb.sh                       -> publish to the PPA suite
@@ -22,7 +22,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 . "$HERE/../ppa-common.sh"
 PROJ="$HERE/oneplus-erhai-mutter"
-BASE=${BASE:-50.1-0ubuntu2.4}
+BASE=${BASE:-50.1-0ubuntu2.5}
 SUFFIX=${ERHAI_SUFFIX:-+erhai1}
 VERSION="$BASE$SUFFIX"
 PORTS_MIRROR=${PORTS_MIRROR:-http://ports.ubuntu.com/ubuntu-ports}
