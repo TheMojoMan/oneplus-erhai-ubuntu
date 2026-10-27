@@ -1,5 +1,5 @@
 Package: oneplus-erhai-desktop
-Version: 2.34
+Version: 2.35
 Section: utils
 Priority: optional
 Architecture: all
@@ -429,7 +429,7 @@ Description: Desktop glue for the OnePlus Pad 3 (erhai)
  MAC addresses and Wi-Fi SSIDs, /home/<user> and the workspace path), and
  update-ppa.sh --mvtomain guards every .deb it promotes to the public suite.
  Both fail closed; ERHAI_GUARD_ALLOW=1 is the consciously unsafe bypass.
- Since 2.34 the ON-SCREEN KEYBOARD TYPES INTO SHELL-51 DIALOGS, AND CLOSING IT
+ Since 2.35 the ON-SCREEN KEYBOARD TYPES INTO SHELL-51 DIALOGS, AND REBUILDING IT
  CANNOT KILL THE SHELL ANY MORE.  On Ubuntu 26.10 (GNOME Shell 51) the Wi-Fi
  password prompt is a shell modal dialog: its entry is a text actor inside the
  shell, and gjs-osk's virtual-keyboard keycodes never reached it (26.04 typed
@@ -437,13 +437,17 @@ Description: Desktop glue for the OnePlus Pad 3 (erhai)
  through the same input-method commit the shell's own OSK uses
  (Main.inputMethod.commit), with the direct entry insert as fallback, and the
  keyboard joins the shell's input-panel group so the dialog keeps it above
- itself.  2.33 also crashed: closing the OSK wrote gjs-osk's own
- keyboard-visible flag, the generic settings "changed" handler answered that
- bookkeeping write with a full refresh() (destroy the keyboard, build a new
- one), and destroying the actor tree while the network dialog was being torn
- down killed GNOME Shell with SIGSEGV in libmutter (2026-10-27 18:46:42, after
- the secret was accepted), which left disable-user-extensions=true behind and
- every extension disabled.  2.34 makes the two state keys (keyboard-visible,
- opened) never rebuild the keyboard and defers any real rebuild to an idle, so
- a destroy can no longer run inside a settings emission or a dialog teardown.
- Nothing new is needed on 26.04: keycodes stay the rule there.
+ itself.  The 2.33/2.34 crash was the virtual keyboard device's lifetime:
+ gjs-osk created one device per Keyboard and run_dispose()d it in
+ Keyboard.destroy(), while refresh() destroyed and recreated the Keyboard on
+ any settings, color-scheme, input-source or monitor change.  Removing that
+ device from the seat while the compositor's impl thread still had a task for
+ it killed GNOME Shell with SIGSEGV in libmutter (2026-10-27 18:46:42, 19:19:12
+ and 19:35:27), which left disable-user-extensions=true behind and every
+ extension disabled.  2.34's idle-deferred rebuild did not help because the
+ destroy still ran at the wrong moment.  2.35 keeps ONE session-wide virtual
+ keyboard device (created at enable, disposed only at disable), makes
+ Keyboard.destroy() release held keys instead of the device, and defers any
+ real rebuild while the OSK is open until 1.5 s after it closes; the two state
+ keys (keyboard-visible, opened) never rebuild the keyboard.  Nothing new is
+ needed on 26.04: keycodes stay the rule there.

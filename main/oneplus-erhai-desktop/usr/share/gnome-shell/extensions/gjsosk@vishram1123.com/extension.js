@@ -668,6 +668,23 @@ export default class GjsOskExtension extends Extension {
             this.Keyboard.close(!instant ? null : true);
             this._setKeyboardVisible(false);
         }
+        /* [erhai 2.35] a rebuild requested while the OSK was open runs only
+         * now, and only after the dialog that closed it is really gone: one
+         * second later, in the main loop, with the keyboard closed. */
+        if (this._refreshWhenClosed && this._refreshTimeout == null) {
+            this._refreshTimeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1500, () => {
+                this._refreshTimeout = null;
+                if (this.Keyboard && this.Keyboard.opened) {
+                    this._refreshWhenClosed = true;
+                    return GLib.SOURCE_REMOVE;
+                }
+                this._refreshWhenClosed = false;
+                log('GJS-OSK: running the deferred refresh');
+                if (typeof this.refresh === 'function')
+                    this.refresh();
+                return GLib.SOURCE_REMOVE;
+            });
+        }
     }
 
     // [erhai] Every write of the sticky `keyboard-visible` flag that THIS
@@ -675,6 +692,32 @@ export default class GjsOskExtension extends Extension {
     // handler can tell our own bookkeeping (the result of an open/close we just
     // did) from an outside write -- only the latter may be gated as an
     // auto-show request.
+    /* [erhai 2.35] The virtual keyboard device belongs to the EXTENSION, not
+     * to a Keyboard instance -- exactly like Shell 51's own KeyboardController
+     * (ui/keyboard.js creates it in its constructor and run_dispose()s it only
+     * in its own destroy()).  gjs-osk used to create one per Keyboard and
+     * run_dispose() it in Keyboard.destroy(), while refresh() destroys and
+     * recreates the Keyboard on every settings/input-source change.  So every
+     * refresh removed a virtual device from the seat on the impl thread; when
+     * that happened as the Wi-Fi password dialog closed ("Connect"), mutter
+     * crashed the whole shell (SIGSEGV on the impl thread in libmutter-51,
+     * 2026-10-27 19:19:12 and 18:46:42) and the re-login came back in safe
+     * mode with every extension disabled. */
+    _ensureInputDevice() {
+        if (this._oskInputDevice)
+            return this._oskInputDevice;
+        try {
+            const seat = global.stage.context.get_backend().get_default_seat();
+            this._oskInputDevice =
+                seat.create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
+            log('GJS-OSK: created the session-wide virtual keyboard device');
+        } catch (e) {
+            logError(e);
+            this._oskInputDevice = null;
+        }
+        return this._oskInputDevice;
+    }
+
     _setKeyboardVisible(value) {
         if (this.openBit == null)
             return;
@@ -934,6 +977,20 @@ export default class GjsOskExtension extends Extension {
                     .slice(1, 3).map(l => l.trim()).join(' <- ');
                 log(`GJS-OSK life refresh ${this._oskRefreshN}: ${where}`);
             }
+            /* [erhai 2.35] Never rebuild under the user's fingers.  A rebuild
+             * destroys the Keyboard actor tree, and doing that while the OSK is
+             * up on a shell modal dialog (the Wi-Fi password prompt: a settings
+             * or input-source change fires exactly when it opens AND when
+             * "Connect" closes it) is what took the shell down on 2026-10-27.
+             * The rebuild is deferred until the keyboard has closed. */
+            if (this.Keyboard && this.Keyboard.opened) {
+                this._oskRefreshDeferred = (this._oskRefreshDeferred || 0) + 1;
+                if (this._oskRefreshDeferred <= 20)
+                    log(`GJS-OSK: refresh deferred, keyboard open ` +
+                        `(${this._oskRefreshDeferred})`);
+                this._refreshWhenClosed = true;
+                return;
+            }
             (async () => {
                 // [insert handwriting 2]
                 let rawCustomLayouts = this.settings.get_string("custom-layout") || "[]";
@@ -1133,6 +1190,7 @@ export default class GjsOskExtension extends Extension {
                         });
                     }
                     const SafeKeyboard = withErrorHandler(Keyboard, this.fail);
+                    this._ensureInputDevice();
                     this.Keyboard = new SafeKeyboard(this.settings, this);
                     this.Keyboard.refresh = refresh;
                     if (prevOpenState) {
@@ -1237,6 +1295,21 @@ export default class GjsOskExtension extends Extension {
         let settingsChanged = (_settings, key) => {
             if (key !== undefined && STATE_KEYS.includes(key))
                 return;
+            /* [erhai 2.35] Which signal asks for a rebuild?  A key of our own
+             * schema, a color-scheme change, or an input-source change (that
+             * one fires when the Wi-Fi password dialog takes the focus AND
+             * when "Connect" closes it -- the two refreshes seen right before
+             * the crash).  Bounded, never logs a value. */
+            if (key !== undefined) {
+                this._oskKeyN = (this._oskKeyN || 0) + 1;
+                if (this._oskKeyN <= 30)
+                    log(`GJS-OSK: settings key '${key}' changed`);
+            } else {
+                this._oskSigN = (this._oskSigN || 0) + 1;
+                if (this._oskSigN <= 30)
+                    log(`GJS-OSK: rebuild signal ${this._oskSigN} ` +
+                        `(color-scheme or input-source)`);
+            }
             if (this.darkSchemeSettings.get_string("color-scheme") == "prefer-dark")
                 this.settings.scheme = "-dark"
             else
@@ -1478,6 +1551,19 @@ export default class GjsOskExtension extends Extension {
         }
         if (this.Keyboard != null)
             this.Keyboard.destroy();
+        /* [erhai 2.35] the extension owns the one virtual keyboard device */
+        if (this._refreshTimeout != null) {
+            GLib.source_remove(this._refreshTimeout);
+            this._refreshTimeout = null;
+        }
+        this._refreshWhenClosed = false;
+        if (this._oskInputDevice) {
+            try {
+                this._oskInputDevice.run_dispose();
+            } catch (e) {
+            }
+            this._oskInputDevice = null;
+        }
         this.settings.disconnect(this.settingsHandlers[0]);
         this.darkSchemeSettings.disconnect(this.settingsHandlers[1])
         this.inputLanguageSettings.disconnect(this.settingsHandlers[2])
@@ -1529,7 +1615,9 @@ class Keyboard extends Dialog {
 
     _init(settings, extensionObject) {
         this.settingsOpenFunction = extensionObject.openPrefs
-        this.inputDevice = global.stage.context.get_backend().get_default_seat().create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
+        /* [erhai 2.35] one session-wide device owned by the extension -- see
+         * _ensureInputDevice(); destroying a Keyboard must not touch it. */
+        this.inputDevice = extensionObject._ensureInputDevice();
         this.settings = settings;
         // [erhai] the extension's `indicator` child settings: holds the sticky
         // `keyboard-visible` state the CLOSE key must clear (closeFromKey()).
@@ -1766,16 +1854,15 @@ class Keyboard extends Dialog {
             this.keyTimeoutFunc = null;
         }
         oskLife(this, 'destroy()');
-        /* [erhai] release anything the device still holds down right away
-         * instead of waiting for the next GC cycle (the shell's own
-         * KeyboardController does the same in destroy()). */
-        if (this.inputDevice) {
-            try {
-                this.inputDevice.run_dispose();
-            } catch (e) {
-            }
-            this.inputDevice = null;
-        }
+        /* [erhai 2.35] Do NOT run_dispose() the virtual device here.  It is
+         * the extension's one session-wide device (see _ensureInputDevice):
+         * disposing it removes it from the seat on the impl thread, and doing
+         * that while a refresh tears the Keyboard down inside the Wi-Fi
+         * password dialog's teardown crashed the shell (libmutter-51, SIGSEGV
+         * on the impl thread, 2026-10-27).  Only the keys this keyboard still
+         * holds down are released, then the device is kept for the next one. */
+        this.releaseHeldKeys();
+        this.inputDevice = null;
         if (this.capsLockConnect && GObject.signal_handler_is_connected(this.keymap, this.capsLockConnect))
             this.keymap.disconnect(this.capsLockConnect);
         if (this.numLockConnect && GObject.signal_handler_is_connected(this.keymap, this.numLockConnect))
@@ -1905,12 +1992,12 @@ class Keyboard extends Dialog {
         if (noPrep == null || !noPrep) {
             oskSetUnredirect(false);
             this.prevKeyFocus = global.stage.key_focus
-            /* [erhai] ONE virtual device for the whole lifetime, like the
-             * shell's own KeyboardController: re-creating it on every open
-             * leaked devices and could hand the key events to a stale one. */
-            if (this.inputDevice === undefined || this.inputDevice === null) {
-                this.inputDevice = global.stage.context.get_backend().get_default_seat().create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
-            }
+            /* [erhai] ONE virtual device for the whole extension lifetime, like
+             * the shell's own KeyboardController: re-creating it on every open
+             * leaked devices and could hand the key events to a stale one.
+             * [erhai 2.35] it is owned by the extension, never by this actor. */
+            if (this.inputDevice === undefined || this.inputDevice === null)
+                this.inputDevice = this.extensionObject._ensureInputDevice();
             this.state = State.OPENING
             this.show();
             oskRaise(this);
@@ -2692,6 +2779,28 @@ class Keyboard extends Dialog {
         );
         return hsp > 127.5
     }
+    /* [erhai 2.35] Send a key RELEASE for every key this keyboard still thinks
+     * is down.  destroy() used to get that for free from run_dispose() of the
+     * device; the device now outlives the keyboard, so the releases have to be
+     * explicit -- otherwise mutter's per-key press counter keeps a key marked
+     * as held and drops the next press ("Received multiple virtual 0x2a key
+     * presses (ignoring)").  A release for a key that is not down is dropped by
+     * mutter, so this is safe to call unconditionally. */
+    releaseHeldKeys() {
+        if (!this.inputDevice || !Array.isArray(this.keys))
+            return;
+        const time = Clutter.get_current_event_time() * 1000;
+        for (const item of this.keys) {
+            if (!item.key_pressed || !item.char || typeof item.char.code !== 'number')
+                continue;
+            item.key_pressed = false;
+            try {
+                this.inputDevice.notify_key(time, item.char.code, Clutter.KeyState.RELEASED);
+            } catch (e) {
+            }
+        }
+    }
+
     releaseAllKeys() {
         this.keys.forEach(item => {
             item.key_pressed = false;
