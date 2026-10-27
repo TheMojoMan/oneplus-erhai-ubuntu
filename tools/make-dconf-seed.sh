@@ -68,10 +68,13 @@ DROP_SECTIONS = [
 DROP_KEYS = re.compile(r"(password|passwd|secret|token|api[-_]?key|username|user-name|"
                        r"email|account|last-login|hostname)", re.I)
 # NOTE: the host name is NOT used as a pattern -- this project's machine is
-# called "erhai" and every extension uuid contains it.  Paths, the user name and
-# MAC-like addresses are what identify a person here.
+# called "erhai" and every extension uuid contains it.  The user name is only a
+# hit as a STANDALONE word: it also appears inside legitimate identifiers such as
+# the app id 'com.github.themojoman.ErhaiCam.desktop' (whose loss silently
+# emptied the dash favourites on 2026-10-27).
 BAD_VALUE = [re.compile(p, re.I) for p in
-             (r"/home/", r"/media/", r"/mnt/", re.escape(user),
+             (r"/home/", r"/media/", r"/mnt/",
+              r"(?<![\w.-])%s(?![\w.-])" % re.escape(user),
               r"\b([0-9a-f]{2}:){5}[0-9a-f]{2}\b")]
 cur = None
 kept = dropped_sec = dropped_key = 0
@@ -108,8 +111,8 @@ HOME="$WORK/dst" dbus-run-session -- dconf load / < "$WORK/clean.txt"
 # full pattern set (host name as a whole word: "erhai" is a substring of every
 # erhai extension uuid, so a plain substring test would always fire); the binary
 # database only for the path/user patterns, which can never be legitimate.
-if grep -qE "/home/|/media/|/mnt/|$(id -un)|([0-9a-f]{2}:){5}[0-9a-f]{2}" "$WORK/clean.txt" ||
-   grep -aqE "/home/|/media/|$(id -un)" "$WORK/dst/.config/dconf/user"; then
+if grep -qE "/home/|/media/|/mnt/|(^|[^A-Za-z0-9._-])$(id -un)([^A-Za-z0-9._-]|$)|([0-9a-f]{2}:){5}[0-9a-f]{2}" "$WORK/clean.txt" ||
+   grep -aqE "/home/|/media/" "$WORK/dst/.config/dconf/user"; then
 	echo "REFUSING: personal data survived the filter" >&2
 	grep -nE "/home/|/media/|/mnt/|$(id -un)" "$WORK/clean.txt" | head -5 >&2
 	exit 1
