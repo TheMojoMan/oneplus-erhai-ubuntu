@@ -1220,13 +1220,38 @@ export default class GjsOskExtension extends Extension {
                 this._openKeyboard(true);
             }
         }
-        let settingsChanged = () => {
+        /* [erhai] STATE writes never rebuild the keyboard, and a rebuild is
+         * never done inside the settings emission.  The generic "changed"
+         * handler used to run the full refresh() -- which DESTROYS the old
+         * Keyboard and builds a new one -- for every key of our own schema,
+         * including the `keyboard-visible` bookkeeping that _setKeyboardVisible()
+         * writes whenever the keyboard opens or closes.  Closing the OSK as the
+         * Wi-Fi password dialog finished (secret accepted -> Connect) therefore
+         * destroyed the whole St actor tree from inside a dialog teardown and
+         * took GNOME Shell down with SIGSEGV in libmutter (2026-10-27
+         * 18:46:42, JS stack: settingsChanged -> refresh -> initializeKeyboard
+         * -> Keyboard.destroy -> super.destroy); after the restart all
+         * extensions were disabled.  Both halves are fixed here: the two state
+         * keys are ignored, and any real rebuild is deferred to an idle. */
+        const STATE_KEYS = ['keyboard-visible', 'opened'];
+        let settingsChanged = (_settings, key) => {
+            if (key !== undefined && STATE_KEYS.includes(key))
+                return;
             if (this.darkSchemeSettings.get_string("color-scheme") == "prefer-dark")
                 this.settings.scheme = "-dark"
             else
                 this.settings.scheme = ""
-            refresh()
-            this._toggle._refresh();
+            if (this._refreshPending) {
+                this._toggle._refresh();
+            } else {
+                this._refreshPending = true;
+                GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+                    this._refreshPending = false;
+                    refresh();
+                    return GLib.SOURCE_REMOVE;
+                });
+                this._toggle._refresh();
+            }
             if (this.settings.get_boolean("indicator-enabled")) {
                 if (this._indicator != null) {
                     this._indicator.destroy();
