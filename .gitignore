@@ -14,21 +14,24 @@ __pycache__/
 # per-line one AND the canonical oneplus-erhai-linux/ (whose DEBIAN/control is
 # `Package: oneplus-erhai-linux-7.2`; only the retired build-linux-deb.sh reads
 # it -- build-kernel.sh picks the snapshot whose control names ITS package).
-/oneplus-erhai-linux-7.2/
-/oneplus-erhai-linux/
+# NOT root-anchored: the trees moved into the per-suite folders
+# (main/oneplus-erhai-linux*/), and a leading "/" made every rule below
+# silently expire -- git add -A then committed 231 MB of build output.
+oneplus-erhai-linux-7.2/
+oneplus-erhai-linux/
 
 # the 7.3 kernel payload snapshot IS committed (folder structure, DEBIAN/ and
 # boot/) -- except the compiled module tree, which only the .deb needs
-/oneplus-erhai-linux-7.3/usr/lib/modules/
+**/oneplus-erhai-linux-7.3/usr/lib/modules/
 
 # bulky / dead build INPUTS that nobody needs from git (local copies stay for
 # the builders; a fresh clone re-fetches/regenerates them where it can):
 #   oneplus-erhai-firmware-1.0/  old firmware staging copy, referenced by nothing
 #   oneplus-erhai-mesa/opt/      the retired /opt mesa carrier payload
 #   oneplus-erhai-gtk4/build/    gtk4 build scratch (dbgsym .debug, 27 MiB)
-/oneplus-erhai-firmware-1.0/
-/oneplus-erhai-mesa/opt/
-/oneplus-erhai-gtk4/build/
+oneplus-erhai-firmware-1.0/
+**/oneplus-erhai-mesa/opt/
+**/oneplus-erhai-gtk4/build/
 
 # postinst/postrm: build-kernel.sh takes them from the KERNEL TREE
 # (KERNEL_TREE=../oneplus-erhai-linux), so the copies here were stale duplicates.
@@ -43,10 +46,10 @@ __pycache__/
 # project (../tmp/waydroid-patcher): the patcher file itself and the five
 # stripped Mesa objects (~33 MiB).  The .deb is the delivery vehicle, so neither
 # belongs in git -- a fresh clone rebuilds them with the builder.
-/oneplus-erhai-waydroid-installer/usr/lib/waydroid/tools/erhai_vendor_patch.py
-/oneplus-erhai-waydroid-installer/usr/share/erhai-waydroid-mesa/payload/
-/oneplus-erhai-waydroid-installer/usr/local/bin/erhai-waydroid-vendor-patch
-/oneplus-erhai-waydroid-installer/DEBIAN/md5sums
+**/oneplus-erhai-waydroid-installer/usr/lib/waydroid/tools/erhai_vendor_patch.py
+**/oneplus-erhai-waydroid-installer/usr/share/erhai-waydroid-mesa/payload/
+**/oneplus-erhai-waydroid-installer/usr/local/bin/erhai-waydroid-vendor-patch
+**/oneplus-erhai-waydroid-installer/DEBIAN/md5sums
 
 # agent-local rules (contains credentials, never commit)
 .clinerules
