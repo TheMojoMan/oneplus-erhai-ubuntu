@@ -1892,13 +1892,31 @@ class Keyboard extends Dialog {
         return keyval;
     }
 
-    /* One key event: keyval on Shell 51 (with keycode fallback), keycode before. */
+    /* True while the stage's key focus is a text actor INSIDE the shell (a
+     * shell dialog's entry).  Application windows focus a Meta.Window instead,
+     * which is why they are not covered by this test. */
+    shellTextFocused() {
+        return global.stage.key_focus instanceof Clutter.Text;
+    }
+
+    /* One key event.  Application windows keep the KEYCODE path that has always
+     * worked (26.04 and 26.10 alike); text fields inside the shell get a KEYVAL
+     * -- that is what Shell 51's own keyboard sends, and keycodes do not reach
+     * those actors on 26.10.  Anything that goes wrong stays non-fatal: the
+     * keycode path is the fallback, and the failure is logged once. */
     notifyKeyEvent(code, state, time) {
-        if (major >= 51) {
+        if (major >= 51 && this.shellTextFocused()) {
             const keyval = this.keyvalForCode(code);
             if (keyval) {
-                this.inputDevice.notify_keyval(time, keyval, state);
-                return;
+                try {
+                    this.inputDevice.notify_keyval(time, keyval, state);
+                    return;
+                } catch (e) {
+                    if (!this._keyvalFailed) {
+                        this._keyvalFailed = true;
+                        logError(e, 'GJS-OSK: notify_keyval failed, keycodes stay in use');
+                    }
+                }
             }
         }
         this.inputDevice.notify_key(time, code, state);
