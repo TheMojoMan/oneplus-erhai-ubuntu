@@ -3,11 +3,11 @@
  * ErhaiCam — standalone GTK4 camera app for the OnePlus Pad 3 (erhai).
  *
  * Per-frame image analysis — the autofocus sharpness metric and the
- * auto-exposure luminance statistics — runs on the Hexagon NPU: an ONNX
- * graph executed by ONNX Runtime's QNN execution provider on the HTP, driven
- * through the erhai-npu-analyze.py helper (see the PER-FRAME ANALYSIS MODEL
- * comment).  A CPU implementation of the same metric is the automatic
- * fallback, so AF/AE keep working with no NPU present.
+ * auto-exposure luminance statistics — runs in-process on the CPU: a fixed
+ * 320x240 grey frame stride-sampled out of the preview, then a Tenengrad
+ * gradient energy and three luminance sums (see the PER-FRAME ANALYSIS MODEL
+ * comment).  Cheap enough to run in the streaming thread, and it needs
+ * nothing but numpy-free maths — no NPU, no onnxruntime, no helper process.
  *
  * Autofocus is a contrast (Tenengrad) sweep driving the kernel cn3927 lens
  * subdev directly (V4L2_CID_FOCUS_ABSOLUTE) — algorithm ported from
@@ -46,13 +46,10 @@
 #include <linux/videodev2.h>
 
 #include <cairo.h>
-#include <csignal>
 #include <fcntl.h>
 #include <linux/i2c-dev.h>
 #include <linux/i2c.h>
-#include <poll.h>
 #include <sys/ioctl.h>
-#include <sys/wait.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -146,9 +143,10 @@ constexpr int kExposureDefault = kRearSensor.default_lines;
 constexpr double kRawExposureEpsilon = 0.02;  /* highlight window before the
 					       * controller refuses to brighten */
 
-/* ---- NPU / auto-exposure loop ------------------------------------------- */
-/* The analyzer input is a FIXED 320x240 grey frame (the ONNX graph has static
- * shapes for the HTP): the AF region and the whole frame are stride-sampled
+/* ---- frame analysis / auto-exposure loop -------------------------------- */
+/* The analysis input is a FIXED 320x240 grey frame (a fixed size keeps the
+ * metric independent of the stream resolution): the AF region and the whole
+ * frame are stride-sampled
  * into it.  The AF region of a 3200x2400 preview is 1920x1440, i.e. sampled
  * 1/6 — the same scale class real AF systems use. */
 constexpr int kStatsW = 320;
@@ -687,31 +685,25 @@ private:
 	int vts_ = kRearSensor.vts_default;   /* current frame length */
 };
 
-/* ------------------------ frame analysis (the NPU) ----------------------- */
+/* ---------------------- frame analysis (in process) ---------------------- */
 
-/* PER-FRAME ANALYSIS MODEL (2026-09-26)
+/* PER-FRAME ANALYSIS MODEL
  *
- * ErhaiCam's autofocus and auto-exposure loops are driven by image statistics
- * computed on the Hexagon NPU: an ONNX graph (Sobel/Tenengrad energy + mean
- * luminance + two 10 %-wide clipping windows, see src/gen-cam-stats-onnx.py)
- * executed by ONNX Runtime's QNN execution provider on the HTP.  The helper
- * process (src/erhai-npu-analyze.py, installed at
- * /usr/local/lib/oneplus-erhai-erhaicam/) owns that session and answers one
- * request per analysed frame over a pipe:
- *   app -> helper   "ANALYZE 320 240 76800\n" + 76800 grey bytes
- *   helper -> app   "STAT <sharp> <luma> <hi> <lo>\n"
- * The search/tracking policy (sweep, monitor, controller) stays in the app —
- * only the pixel crunching is offloaded.
+ * ErhaiCam's autofocus and auto-exposure loops run on four image statistics:
+ * the Tenengrad focus metric (the gradient energy a defocused lens loses), the
+ * mean luminance and two 10 %-wide clipping windows (highlight and shadow).
+ * They are computed here, in the streaming thread, straight from the sampled
+ * grey frame — the search/tracking policy (sweep, monitor, controller) was
+ * never anywhere else.
  *
- * Three implementations of ONE metric — the graph, the numpy reference in the
- * helper and tenengrad()/stats_cpu() here — so when the NPU is unavailable
- * (no CDSP, no onnxruntime, no fastrpc group, helper died) the app falls back
- * to the CPU and behaves IDENTICALLY apart from speed.  Which backend is live
- * is logged at startup and surfaced in the status line. */
+ * 2026-10-27: this replaced an ONNX graph that ran the same maths on the
+ * Hexagon NPU through a helper process and ONNX Runtime's QNN execution
+ * provider.  Measured on the real model, the NPU path cost 0.72 ms per frame
+ * against 0.17-0.55 ms for the CPU, so the offload made AF/AE slower, and the
+ * 256 MB onnxruntime/QNN stack (numpy only, no deb shipped it) is gone with
+ * it.  Nothing here depends on CDSP, fastrpc or any extra runtime. */
 
 struct FrameStats {
-	bool ok = false;
-	bool from_npu = false;
 	double sharp = 0.0;   /* mean |grad|^2, VALID Sobel, [0,1] grey */
 	double luma = 0.0;    /* mean grey */
 	double hi = 0.0;      /* mean clip(x, 0.9, 1.0)  -> highlight window */
@@ -724,7 +716,7 @@ static inline double stats_hi_signal(double hi)
 }
 
 /* Stride-sample a BGRA region into the fixed kStatsW x kStatsH 8-bit grey
- * buffer the analyzer expects.  Decimation (not averaging) keeps the high
+ * buffer that is analysed.  Decimation (not averaging) keeps the high
  * frequencies the focus metric lives on. */
 static void sample_gray(const GstVideoFrame &frame, int x0, int x1, int y0,
 			int y1, uint8_t *out)
@@ -757,8 +749,8 @@ static void sample_gray(const GstVideoFrame &frame, int x0, int x1, int y0,
 	}
 }
 
-/* Tenengrad over the sampled buffer — reference implementation of the graph's
- * `sharp` output (same kernels, same VALID interior). */
+/* Tenengrad over the sampled buffer: mean |grad|^2 of a VALID Sobel, in
+ * [0,1] grey. */
 static double tenengrad(const uint8_t *gray)
 {
 	const double k = 1.0 / 255.0;
@@ -784,7 +776,7 @@ static double tenengrad(const uint8_t *gray)
 	return sum / double((kStatsW - 2) * (kStatsH - 2));
 }
 
-/* CPU fallback: the same four numbers without the NPU. */
+/* The four numbers the AF and AE loops run on. */
 static void stats_cpu(const uint8_t *gray, FrameStats *out)
 {
 	const double k = 1.0 / 255.0;
@@ -803,242 +795,8 @@ static void stats_cpu(const uint8_t *gray, FrameStats *out)
 	out->luma = luma / n;
 	out->hi = hi / n;
 	out->lo = lo / n;
-	out->from_npu = false;
-	out->ok = true;
 }
 
-
-/* ---------------------- analyzer process (HTP client) -------------------- */
-
-/* Owns the helper process and the pipe protocol.  start() spawns it and
- * returns immediately; poll_ready() (main-loop tick) picks up the READY line
- * so the GUI never waits on the NPU; analyze() runs from the streaming thread
- * and falls back to the CPU while the helper is starting or after it died. */
-class Analyzer {
-public:
-	enum State { Starting = 0, Ready = 1, Dead = -1 };
-
-	static std::string helper_path()
-	{
-		if (const char *env = std::getenv("ERHAI_CAM_NPU_HELPER"))
-			if (*env)
-				return env;
-
-		const std::filesystem::path installed =
-			"/usr/local/lib/oneplus-erhai-erhaicam/erhai-npu-analyze.py";
-		if (std::filesystem::exists(installed))
-			return installed.string();
-
-		/* dev tree: walk up from the binary looking for the source tree. */
-		std::error_code ec;
-		const std::filesystem::path exe =
-			std::filesystem::read_symlink("/proc/self/exe", ec);
-		if (!ec) {
-			for (std::filesystem::path dir = exe.parent_path();
-			     dir != dir.root_path(); dir = dir.parent_path()) {
-				const std::filesystem::path a = dir /
-					"usr/local/lib/oneplus-erhai-erhaicam/erhai-npu-analyze.py";
-				const std::filesystem::path b = dir /
-					"src/erhai-npu-analyze.py";
-
-				if (std::filesystem::exists(a))
-					return a.string();
-				if (std::filesystem::exists(b))
-					return b.string();
-			}
-		}
-		return {};
-	}
-
-	~Analyzer() { stop(); }
-
-	void start()
-	{
-		if (pid_)
-			return;
-		if (const char *off = std::getenv("ERHAI_CAM_NPU");
-		    off && std::string(off) == "0") {
-			state_ = Dead;
-			detail_ = "disabled by ERHAI_CAM_NPU=0";
-			return;
-		}
-		const std::string helper = helper_path();
-		if (helper.empty()) {
-			state_ = Dead;
-			detail_ = "helper not found";
-			return;
-		}
-		char *argv[] = { const_cast<char *>("python3"),
-				 const_cast<char *>(helper.c_str()), nullptr };
-		GError *gerr = nullptr;
-		gint in = -1, out = -1;
-
-		if (!g_spawn_async_with_pipes(
-			    nullptr, argv, nullptr,
-			    static_cast<GSpawnFlags>(G_SPAWN_SEARCH_PATH |
-						     G_SPAWN_DO_NOT_REAP_CHILD),
-			    nullptr, nullptr, &pid_, &in, &out, nullptr, &gerr)) {
-			state_ = Dead;
-			detail_ = gerr ? gerr->message : "spawn failed";
-			g_clear_error(&gerr);
-			pid_ = 0;
-			return;
-		}
-		in_ = in;
-		out_ = out;
-		state_ = Starting;
-		detail_ = "starting";
-	}
-
-	void stop()
-	{
-		std::lock_guard lock(lock_);
-
-		if (pid_) {
-			if (in_ >= 0)
-				(void)!write(in_, "QUIT\n", 5);
-			kill(pid_, SIGTERM);
-			g_spawn_close_pid(pid_);
-			pid_ = 0;
-		}
-		if (in_ >= 0) {
-			close(in_);
-			in_ = -1;
-		}
-		if (out_ >= 0) {
-			close(out_);
-			out_ = -1;
-		}
-		if (state_ == Ready || state_ == Starting)
-			state_ = Dead;
-	}
-
-	State state() const { return state_; }
-	const std::string &backend() const { return backend_; }
-	const std::string &detail() const { return detail_; }
-	unsigned long frames() const { return frames_; }
-
-	/* Main-loop tick while starting: returns true on a state change. */
-	bool poll_ready()
-	{
-		if (state_ != Starting || out_ < 0)
-			return false;
-
-		std::lock_guard lock(lock_);
-		struct pollfd pfd = { out_, POLLIN, 0 };
-
-		if (poll(&pfd, 1, 0) <= 0)
-			return false;
-		std::string line;
-		if (!read_line(&line, 1000)) {
-			state_ = Dead;
-			detail_ = "helper exited";
-			return true;
-		}
-		if (line.rfind("READY ", 0) != 0)
-			return false;
-		backend_ = line.substr(6);
-		if (backend_ == "none" || backend_.empty()) {
-			state_ = Dead;
-			detail_ = "helper has no analyzer backend";
-		} else {
-			state_ = Ready;
-			detail_ = backend_;
-		}
-		return true;
-	}
-
-	bool analyze(const uint8_t *gray, FrameStats *out)
-	{
-		std::lock_guard lock(lock_);
-
-		if (state_ != Ready)
-			return false;
-
-		char head[64];
-		const int n = std::snprintf(head, sizeof(head), "ANALYZE %d %d %d\n",
-					    kStatsW, kStatsH, kStatsW * kStatsH);
-
-		if (!write_all(head, size_t(n)) ||
-		    !write_all(gray, size_t(kStatsW) * kStatsH)) {
-			fail("write to the analyzer failed");
-			return false;
-		}
-		std::string line;
-		if (!read_line(&line, 3000)) {
-			fail("no reply from the analyzer");
-			return false;
-		}
-		if (std::sscanf(line.c_str(), "STAT %lf %lf %lf %lf", &out->sharp,
-				&out->luma, &out->hi, &out->lo) != 4) {
-			fail(("analyzer error: " + line).c_str());
-			return false;
-		}
-		out->from_npu = true;
-		out->ok = true;
-		frames_++;
-		return true;
-	}
-
-private:
-	void fail(const char *why)
-	{
-		std::cerr << "erhai-cam: NPU analyzer stopped (" << why
-			  << "); using the CPU metric\n";
-		state_ = Dead;
-		detail_ = why;
-	}
-
-	bool write_all(const void *data, size_t len)
-	{
-		const uint8_t *p = static_cast<const uint8_t *>(data);
-
-		while (len) {
-			const ssize_t n = write(in_, p, len);
-
-			if (n <= 0)
-				return false;
-			p += n;
-			len -= size_t(n);
-		}
-		return true;
-	}
-
-	bool read_line(std::string *line, int timeout_ms)
-	{
-		for (;;) {
-			const size_t nl = rbuf_.find('\n');
-
-			if (nl != std::string::npos) {
-				*line = rbuf_.substr(0, nl);
-				rbuf_.erase(0, nl + 1);
-				return true;
-			}
-			struct pollfd pfd = { out_, POLLIN, 0 };
-
-			if (poll(&pfd, 1, timeout_ms) <= 0)
-				return false;
-			char tmp[256];
-			const ssize_t n = read(out_, tmp, sizeof(tmp));
-
-			if (n <= 0)
-				return false;
-			rbuf_.append(tmp, size_t(n));
-			if (rbuf_.size() > 4096)
-				return false;
-		}
-	}
-
-	GPid pid_ = 0;
-	int in_ = -1;
-	int out_ = -1;
-	State state_ = Starting;
-	std::string backend_ = "starting";
-	std::string detail_ = "starting";
-	std::string rbuf_;
-	unsigned long frames_ = 0;
-	std::mutex lock_;
-};
 
 /* --------------------------- application state --------------------------- */
 
@@ -1074,7 +832,7 @@ struct Af {
 /* Auto exposure: a log-domain proportional controller on the sensor's
  * integration time (there is no gain register we can drive — the app owns
  * exposure only).  Every kAeStride analysed frames the whole preview frame is
- * measured on the NPU and the exposure is nudged by up to kAeMaxStep in log2
+ * measured and the exposure is nudged by up to kAeMaxStep in log2
  * space; a highlight window over kRawExposureEpsilon vetoes brightening, and
  * the loop never leaves the streaming sensor's own AE ceiling (4800 of 6396
  * lines on the rear, 3120 of 3120 on the front) so the raw cannot saturate
@@ -1223,13 +981,10 @@ struct App {
 	Lens *lens = nullptr;
 	bool lens_ok = false;
 	Af af;
-	/* exposure + the NPU frame analyzer */
+	/* exposure + the frame analyser's grey buffer */
 	Sensor *sensor = nullptr;
 	bool sensor_ok = false;
 	Ae ae;
-	Analyzer analyzer;
-	guint analyzer_poll = 0;
-	bool analyzer_error_shown = false;
 	std::array<uint8_t, size_t(kStatsW) * kStatsH> stats_buf{};
 	/* headless */
 	bool headless = false;
@@ -1452,9 +1207,6 @@ static double af_frame_score(App *app, const GstVideoFrame &frame)
 	FrameStats stats;
 
 	sample_gray(frame, x0, x1, y0, y1, buf);
-	if (app->analyzer.analyze(buf, &stats))
-		return stats.sharp;
-
 	stats_cpu(buf, &stats);
 	return stats.sharp;
 }
@@ -1692,7 +1444,7 @@ static bool apply_exposure(App *app, int lines)
 	return app->sensor->set_exposure_lines(lines);
 }
 
-/* One auto-exposure control step, driven by the NPU's luminance statistics:
+/* One auto-exposure control step, driven by the frame's luminance statistics:
  * a log-domain proportional controller on the sensor's integration time.
  * There is no gain register we can drive (the sc1320cs analogue-gain control
  * is as no-op as the exposure one), so brightness is integration time only;
@@ -1731,15 +1483,7 @@ static void ae_step(App *app, GstSample *sample)
 	sample_gray(frame, 0, GST_VIDEO_INFO_WIDTH(&frame.info), 0,
 		    GST_VIDEO_INFO_HEIGHT(&frame.info), buf);
 	gst_video_frame_unmap(&frame);
-	if (!app->analyzer.analyze(buf, &stats)) {
-		if (app->analyzer.state() == Analyzer::Dead && !app->headless &&
-		    !app->analyzer_error_shown) {
-			app->analyzer_error_shown = true;
-			set_status(app, "NPU analyzer unavailable — "
-					"focus/exposure metrics on the CPU");
-		}
-		stats_cpu(buf, &stats);
-	}
+	stats_cpu(buf, &stats);
 
 	ae.measured = true;
 	ae.last_luma = stats.luma;
@@ -1833,8 +1577,7 @@ static void ae_step(App *app, GstSample *sample)
 		std::cout << "erhai-cam: ae luma=" << stats.luma
 			  << " hi=" << ae.last_hi << " lo=" << stats.lo
 			  << " err=" << err << " exp=" << ae.exposure
-			  << (ae.at_limit ? " (limit)" : "")
-			  << (stats.from_npu ? " npu" : " cpu") << "\n";
+			  << (ae.at_limit ? " (limit)" : "") << "\n";
 	}
 }
 
@@ -4747,7 +4490,7 @@ static void activate(GtkApplication *gapp, gpointer ud)
 	gtk_widget_add_css_class(app->btn_ae, "togbtn");
 	gtk_widget_add_css_class(app->btn_ae, "on");
 	gtk_widget_set_tooltip_text(app->btn_ae,
-				    "Automatic exposure (NPU). Turn it off "
+				    "Automatic exposure. Turn it off "
 				    "for the manual exposure slider.");
 	g_signal_connect(app->btn_ae, "clicked", G_CALLBACK(on_ae_clicked), app);
 
@@ -4828,7 +4571,7 @@ static void activate(GtkApplication *gapp, gpointer ud)
 	gtk_widget_add_css_class(app->btn_af, "togbtn");
 	gtk_widget_add_css_class(app->btn_af, "on");
 	gtk_widget_set_tooltip_text(app->btn_af,
-				    "Continuous autofocus (NPU). Turn it off "
+				    "Continuous autofocus. Turn it off "
 				    "for the manual focus slider.");
 	g_signal_connect(app->btn_af, "clicked", G_CALLBACK(on_af_clicked),
 			 app);
@@ -5021,8 +4764,6 @@ int main(int argc, char **argv)
 	 * running (2026-09-07: repeated "no change" confusion). */
 	std::cerr << "erhai-cam: BUILD " << __DATE__ " " << __TIME__
 		  << " tag=shutter-ui-14-lowlight\n";
-	/* A dead analyzer helper must not kill the app with SIGPIPE. */
-	signal(SIGPIPE, SIG_IGN);
 	std::string camera_override;
 	std::string res_override;
 	bool use_gui = true;
@@ -5178,24 +4919,6 @@ int main(int argc, char **argv)
 	 * front sc820cs as well; a switch re-attaches, see app_switch_camera). */
 	sensor_attach(app);
 
-	/* The NPU analyzer (Hexagon HTP) for autofocus + auto exposure. */
-	app->analyzer.start();
-	app->analyzer_poll = g_timeout_add(100, [](gpointer d) -> gboolean {
-		auto *a = static_cast<App *>(d);
-
-		if (a->analyzer.poll_ready()) {
-			std::cout << "analyzer: " << a->analyzer.backend() << " ("
-				  << a->analyzer.detail() << ")\n";
-			if (a->analyzer.state() == Analyzer::Dead) {
-				std::cerr << "erhai-cam: " << a->analyzer.detail()
-					  << "; focus/exposure run on the CPU\n";
-				a->analyzer_poll = 0;
-				return G_SOURCE_REMOVE;
-			}
-		}
-		return G_SOURCE_CONTINUE;
-	}, app);
-
 	app->loop = g_main_loop_new(nullptr, false);
 
 	if (use_gui) {
@@ -5215,7 +4938,6 @@ int main(int argc, char **argv)
 		g_main_loop_run(app->loop);
 	}
 
-	app->analyzer.stop();
 	if (app->recording)
 		app_record_stop(app);
 	/* A recording still in flight (the window was closed / --record without a

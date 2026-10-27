@@ -1,5 +1,5 @@
 Package: oneplus-erhai-erhaicam
-Version: 2.10-test-01
+Version: 2.10-test-02
 Section: graphics
 Priority: optional
 Architecture: arm64
@@ -8,13 +8,12 @@ Provides: oneplus-erhai-cam
 Replaces: oneplus-erhai-cam (<< 1.3)
 Breaks: oneplus-erhai-cam (<< 1.3)
 Depends: libgtk-4-1, libgdk-pixbuf-2.0-0, gstreamer1.0-libcamera, gstreamer1.0-gtk4, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad, gstreamer1.0-pipewire
-Recommends: iio-sensor-proxy, python3-numpy
+Recommends: iio-sensor-proxy
 Description: ErhaiCam — standalone camera app for the OnePlus Pad 3 (erhai)
- GTK4/GStreamer camera app with NPU-driven autofocus and auto-exposure.  The
- per-frame image analysis (Tenengrad focus metric + luminance statistics) runs
- on the Hexagon NPU (HTP) as an ONNX graph executed by ONNX Runtime's QNN
- execution provider (erhai-npu-analyze.py), with a CPU implementation of the
- same metric as the automatic fallback.  The AF sweep drives the kernel
+ GTK4/GStreamer camera app with autofocus and auto-exposure.  The per-frame
+ image analysis (Tenengrad focus metric + luminance statistics) runs inside the
+ app on a 320x240 grey frame sampled out of the preview — no NPU, no python
+ helper, no onnxruntime.  The AF sweep drives the kernel
  cn3927 lens subdev (V4L2_CID_FOCUS_ABSOLUTE, tap-to-focus, refocus on
  sharpness drop); AE is a log-domain controller on the SC1320CS integration
  time written straight to the sensor register 0x3e00 (BOTH cameras since 2.8 —
@@ -23,6 +22,17 @@ Description: ErhaiCam — standalone camera app for the OnePlus Pad 3 (erhai)
  below the button for manual focus (VCM, 0..1023) or exposure (sensor lines,
  1..6396 rear / 1..3120 front) — the faders stretch with the window and stop
  50 px above its bottom edge.
+ .
+ THE ANALYZER NEEDS NO NPU.  Until now the four AF/AE statistics were produced
+ by an ONNX graph on the Hexagon NPU through ONNX Runtime's QNN execution
+ provider and a python helper (erhai-npu-analyze.py), with a CPU
+ implementation as the fallback.  Measured on the real model that path cost
+ 0.72 ms per 320x240 frame against 0.17-0.55 ms for the CPU, and the runtime
+ (~256 MB) came from the user's ~/.local, so a fresh account silently lost it.
+ The maths now lives in the app: same metric, same numbers, always available,
+ and the python helper, the .onnx model and the onnxruntime dependency are
+ gone.  A 320x240-sample pass per analysed frame is also why the AF/AE loops
+ got no cheaper with a "smaller image" — the frame COUNT was the cost.
  .
  2.9 MAKES LOW LIGHT USABLE — a frame-length (VTS) ladder in the AE.  A
  sensor's integration time can never exceed its FRAME LENGTH, and the mode table
