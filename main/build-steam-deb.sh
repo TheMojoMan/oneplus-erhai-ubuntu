@@ -5,9 +5,9 @@
 # start, where the client then downloads the rest of itself.
 #
 #   ./build-steam-deb.sh                 -> local deb in oneplus-erhai-ubuntu/
-#   PUBLISH=1 ./build-steam-deb.sh       -> also ppa_copy to the TESTING suite
-#   PPA_DEB_DIR="$PPA_MAIN_DEB_DIR" PUBLISH=1 ./build-steam-deb.sh
-#                                        -> straight to the public MAIN suite
+#   PUBLISH=1 ./build-steam-deb.sh       -> also ppa_copy to the public MAIN
+#                                           suite (universal: no Ubuntu ABI, so
+#                                           every release can see it)
 #   SKIP_STAGE=1 ./build-steam-deb.sh    -> repack the already staged payload
 #
 #   STEAM_SRC=<dir>      source installation (default /media/data/PC-Games/Steam)
@@ -279,6 +279,6 @@ fi
 if [ "${PUBLISH:-0}" = 1 ]; then
 	ppa_copy "$DEB"
 else
-	echo "(local; PUBLISH=1 to push to the testing suite, or set PPA_DEB_DIR to main)"
+	echo "(local; PUBLISH=1 puts it into the main suite, update-ppa.sh --mv does it too)"
 fi
 

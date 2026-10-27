@@ -89,8 +89,8 @@ esac
 # The erhai apt repo splits into the UNIVERSAL suite (main: kernel, firmware,
 # scripts, the compiled helpers) and one PER-RELEASE suite per Ubuntu codename
 # (ppa/oneplus-erhai/ubuntu/<series>/), which carries the packages that repack
-# or divert an Ubuntu artifact of the same name (mutter, GTK4, Mesa, steam,
-# ptyxis, nautilus) -- see oneplus-erhai-ubuntu/ppa-series-packages.txt.
+# or divert an Ubuntu artifact of the same name (mutter, GTK4, Mesa, ptyxis,
+# nautilus) -- see oneplus-erhai-ubuntu/ppa-series-packages.txt.
 # The image gets whichever suite matches its own base release; the xtradeb
 # PPA's "Suites:" line tracks the same codename.
 case "$VERSION" in
@@ -582,7 +582,7 @@ install -m644 "$(setup_file apt/oneplus-erhai.sources)" "$ROOTDIR/etc/apt/source
 
 # Both third-party definitions name an Ubuntu codename; it MUST be the one this
 # image is built on.  xtradeb publishes per-series PPAs and the erhai repo keeps
-# its Ubuntu-ABI-bound packages (mutter/GTK4/Mesa/steam/ptyxis/nautilus) in
+# its Ubuntu-ABI-bound packages (mutter/GTK4/Mesa/nautilus/ptyxis) in
 # ppa/oneplus-erhai/ubuntu/<series>/ -- the template carries @ERHAI_SERIES@.
 sed -i "s|^Suites:.*|Suites: $SERIES|" \
 	"$ROOTDIR/etc/apt/sources.list.d/xtradeb-apps.sources"
@@ -744,7 +744,7 @@ apt --fix-broken install -y
 #
 # ONLY packages already promoted to the PUBLIC main suite may be listed here:
 # the image's /etc/apt/sources.list.d/oneplus-erhai.sources ships main alone
-# (the TESTING suite is the owner's private opt-in), so a deb still sitting in
+# (the PPA suite is the owner's private opt-in), so a deb still sitting in
 # testing fails this apt run. Publish with ./build-*-deb.sh and promote with
 # ../update-ppa.sh --mvtomain before an image build.
 #

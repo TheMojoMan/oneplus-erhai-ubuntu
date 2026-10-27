@@ -42,8 +42,8 @@ PPA_MAIN_DEB_DIR="${PPA_MAIN_DEB_DIR:-$(_ppa_repo_root)/ppa/oneplus-erhai/ubuntu
 # main carries only packages that are INDEPENDENT of the Ubuntu release (erhai's
 # own kernel, firmware, scripts, the compiled helpers).  Packages that repackage
 # or divert an Ubuntu artifact of the same name (the mutter/GTK4/Mesa repacks,
-# steam, the ptyxis/nautilus divert overrides) are bound to one release's ABI
-# and live in a PER-RELEASE suite:  ppa/oneplus-erhai/ubuntu/<series>/
+# the ptyxis/nautilus divert overrides) are bound to one release's ABI and live
+# in a PER-RELEASE suite:  ppa/oneplus-erhai/ubuntu/<series>/
 # (<series> = the Ubuntu codename: resolute = 26.04, stonking = 26.10).
 # The package list is one file, shared with ../update-ppa.sh:
 #     ppa-series-packages.txt

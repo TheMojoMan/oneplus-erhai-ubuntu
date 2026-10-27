@@ -11,7 +11,6 @@
 #   * mutter repack      -- patched libmutter-<N>.so, soname is in the package name
 #   * GTK4 repack        -- patched libgtk-4.so.1.<abi>, ABI dir is in the filename
 #   * Mesa /usr repack   -- Ubuntu's own package names, built against the release
-#   * steam              -- Ubuntu-adjacent `steam` name, conflicts with universe's
 #   * ptyxis, nautilus   -- dpkg-divert overrides of Ubuntu's own binaries
 # Everything else (kernel, firmware, audio, wifi, sensors, camera, ...) is
 # release-independent and stays in main.
@@ -27,6 +26,5 @@ libgl1-mesa-dri
 libglx-mesa0
 libegl-mesa0
 mesa-vulkan-drivers
-steam
 oneplus-erhai-ptyxis
 oneplus-erhai-nautilus
