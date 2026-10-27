@@ -14,6 +14,7 @@ Before this project, I earned my spurs on the **Xiaomi Pad 5** — that is where
 * **Laurie Lin** for TWRP, see https://xdaforums.com/t/recovery-unofficial-android-16-twrp-3-7-1-for-oneplus-pad-2-pro-pad-3.4781650/
 * **yzddmr6** <https://github.com/yzddmr6> — for the microphone patches (standing on Srinivas Kandagatla's upstream AudioReach drivers and topology template and Dawid Wrobel's DECn enum fix (applied by Mark Brown)).
 * **Nico Angelo Dela Cruz** <https://github.com/nadelacruz-00> — for his suspend (s2idle) patches and geat 'Magnetize' Gnome extension.
+* **zennez** <https://github.com/zennnez> — for black screen fix on IN variant and building 'AERA Recovery' for erhai, see https://aera-recovery.com/ and https://github.com/zennnez/android_device_oplus_erhai-AERA
 * **Marcos Horno Garcia** — a very special thanks for beta testing!
 * **OnePlus** for this powerful tablet and for open sourcing a good bunch of the Android drivers for it
 * Last but not least: the **Linux kernel, Ubuntu, Gnome** and **Mu-Silicium** teams and everybody else who contributed to the linux project!

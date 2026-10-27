@@ -2,7 +2,7 @@
 
 ![Ubuntu on the OnePlus Pad 3](docs/ubuntu_erhai.png)
 
-A full **Ubuntu GNOME desktop** on your OnePlus Pad 3 — dual-booted with Android. With GPU-accelerated graphics on the 3392x2400 px display or an external monitor over USB-C, pogo keyboard, Wi-Fi & Bluetooth, fast charging and up-to-date Linux 7.3 kernel.
+A full **Ubuntu GNOME desktop** on your OnePlus Pad 3 — dual-booted with Android. With GPU-accelerated graphics on the 3392x2400 px display or an external monitor over USB-C or HDMI, pogo keyboard, Wi-Fi & Bluetooth, fast charging and up-to-date Linux 7.3 kernel.
 
 Do professional work with LibreOffice, Gimp, Blender, VSCode, ... and thousands of other beloved Linux apps. Want to play PC games? Use hangover or steam that use FexEmu/Proton/Wine under the hood.
 

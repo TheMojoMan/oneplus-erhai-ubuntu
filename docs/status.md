@@ -68,6 +68,7 @@
 * **NPU** works - use **`npu-llm`** to run local LLMs: `npu-llm pull
   unsloth/Qwen3-4B-GGUF:Q4_0` once, then `npu-llm chat Qwen3-4B` (or
   `npu-llm run Qwen3-4B "prompt"`); beware of overheating (see below).
+* **Suspend** Press power key to turn off display - background tasks keep running. Choose 'Suspend' in shutdown menu to save more energy: display off, all tasks halted and CPU put to sleep.
 
 **Gaming**
 * Run `sudo apt install steam` for an up-to-date version of the arm64 steam client
@@ -76,12 +77,8 @@
   and does not run on erhai
   
 ## What does not work (yet)
-
-* **Real sleep** — screen off keeps the tablet running (the battery drains).
-  The manual **Suspend** in the power menu is experimental and auto-sleep is
-  off: shut the tablet down overnight instead.
 * **144 Hz** — removed on purpose (the panel misbehaves sometimes at this rate).
-* **USB-C headphones** — untested with real hardware.
+* **USB-C headphones**
 
 ## Tips & known quirks
 
