@@ -207,8 +207,7 @@ function oskInjectKeyval(kb, keyval, state, time) {
     if (!Number.isInteger(keyval) || keyval <= 0 || keyval > OSK_MAX_KEYVAL) {
         if (!kb._keyvalInvalid) {
             kb._keyvalInvalid = true;
-            console.warn(`GJS-OSK: refusing keyval ${keyval} ` +
-                `(${typeof keyval})`);
+            log(`GJS-OSK: refusing keyval ${keyval} (${typeof keyval})`);
         }
         return false;
     }
@@ -244,13 +243,85 @@ function oskKeyPlan(kb, keys) {
 /* Bounded diagnostic for the Shell 51 typing path: the first events are
  * logged with their keyvals, focus and grab so a broken injection can be read
  * from the journal instead of guessed at. */
+/* log(), NOT console.debug: gjs console.debug never reaches the journal in
+ * this shell (checked: zero "GJS-OSK dbg" lines in every boot although the
+ * code ran), which is why the two test builds after 2.32-test-05 looked as if
+ * nothing happened at all.  Bounded, and it never logs typed characters --
+ * only their code points and the length of the focused entry's text. */
 function oskDbg(kb, msg) {
     if (kb._oskDbgN === undefined)
         kb._oskDbgN = 0;
-    if (kb._oskDbgN >= 12)
+    if (kb._oskDbgN >= 30)
         return;
     kb._oskDbgN++;
-    console.debug(`GJS-OSK dbg ${kb._oskDbgN}: ${msg}`);
+    log(`GJS-OSK dbg ${kb._oskDbgN}: ${msg}`);
+}
+
+/* Text length of an actor, or null when it is not a text actor.  Only the
+ * LENGTH is ever logged: the focused entry may be a password field. */
+function oskTextLen(actor) {
+    if (!actor || typeof actor.get_text !== 'function')
+        return null;
+    try {
+        return actor.get_text().length;
+    } catch (e) {
+        return null;
+    }
+}
+
+/* True when the plan carries a Ctrl/Alt/Super keysym (GNOME's commit() sends
+ * raw key events in that case instead of an IM commit). */
+function oskPlanHasShortcutMod(plan) {
+    const modKeyvals = Object.values(OSK_SHORTCUT_MODS);
+    return plan.some(e => modKeyvals.includes(e.keyval));
+}
+
+/* The string a plan would type, or '' when it types nothing printable. */
+function oskPlanString(plan) {
+    let str = '';
+    for (const e of plan) {
+        const kv = e.keyval;
+        if (kv >= 0x20 && kv <= 0x7e && kv !== 0x7f)
+            str += String.fromCharCode(kv);
+        else if (kv >= 0x01000000 && kv <= OSK_MAX_KEYVAL)
+            str += String.fromCodePoint(kv - 0x01000000);
+    }
+    return str;
+}
+
+/* Fallback for a text field INSIDE the shell (the Wi-Fi credential entry,
+ * GDM's auth prompt): Shell 51's own keyboard does not send keysyms for a
+ * plain character when an input method has the focus -- ui/keyboard.js
+ * commit() calls Main.inputMethod.commit(str) instead, and that is the only
+ * path that puts text into such an entry.  Called only after the keysym path
+ * demonstrably did not change the entry's text, so a field that does accept
+ * keysyms can never get the character twice. */
+function oskCommitIfUnchanged(kb, focus, lenBefore, str) {
+    if (!str)
+        return;
+    if (global.stage.key_focus !== focus) {
+        oskDbg(kb, 'im fallback skipped: key focus moved away');
+        return;
+    }
+    const lenNow = oskTextLen(focus);
+    if (lenNow === null) {
+        oskDbg(kb, 'im fallback skipped: focus is not a text actor');
+        return;
+    }
+    if (lenNow !== lenBefore) {
+        oskDbg(kb, `keysym path worked: text len ${lenBefore} -> ${lenNow}`);
+        return;
+    }
+    const cps = [...str].map(c => '0x' + c.codePointAt(0).toString(16)).join(' ');
+    try {
+        Main.inputMethod.commit(str);
+    } catch (e) {
+        logError(e, 'GJS-OSK: Main.inputMethod.commit failed');
+        return;
+    }
+    oskDbg(kb, `keysyms were ignored by the shell entry (len stayed ` +
+        `${lenBefore}); inputMethod.commit([${cps}]) -> len ` +
+        `${oskTextLen(focus)}`);
 }
 
 class KeyboardMenuToggle extends QuickSettings.QuickMenuToggle {
@@ -495,6 +566,7 @@ export default class GjsOskExtension extends Extension {
         this._folioAttached = pogoKeyboardAttached();
         this._folioGateLogged = null;
         this._selfVisibleWrite = null;      // last `keyboard-visible` we wrote
+        log(`GJS-OSK: shell ${major}.${minor}`);
         log(`GJS-OSK: folio keyboard ${this._folioAttached
             ? 'attached - OSK auto-show gated'
             : 'detached - touch auto-show active'}`);
@@ -2135,22 +2207,34 @@ class Keyboard extends Dialog {
              * are NOT injected -- they are baked into the label we already
              * send (the layer), so pressing them would double-apply. */
             let keyvals = null;
+            let imCheck = null;
             if (major >= 51) {
                 keyvals = oskKeyPlan(this, keys);
                 const focus = global.stage.key_focus;
-                oskDbg(this, `keys=[${keys}] ` +
+                const imFocus = Main.inputMethod.currentFocus;
+                const grab = global.stage.get_grab_actor();
+                const lenBefore = oskTextLen(focus);
+                const commitStr = oskPlanHasShortcutMod(keyvals)
+                    ? '' : oskPlanString(keyvals);
+                oskDbg(this, `major=${major} keys=[${keys}] ` +
                     `keyvals=[${keyvals.map(e => e.keyval)}] ` +
                     `layer=${oskLabelLayer(this)} shift=${this.shift} ` +
                     `caps=${this.capsL} alt=${this.alt} ` +
-                    `im=${Main.inputMethod.currentFocus ? 'yes' : 'no'} ` +
                     `focus=${focus ? focus.constructor.name : 'none'} ` +
-                    `grab=${global.stage.get_grab_actor() ? 'yes' : 'no'}`);
+                    `textLen=${lenBefore} ` +
+                    `imFocus=${imFocus ? imFocus.constructor.name : 'none'} ` +
+                    `grab=${grab ? grab.constructor.name : 'none'}`);
                 for (const e of keyvals) {
                     if (!oskInjectKeyval(this, e.keyval, Clutter.KeyState.PRESSED,
                         event_time))
                         this.inputDevice.notify_key(event_time, e.code,
                             Clutter.KeyState.PRESSED);
                 }
+                /* text field inside the shell: remember what to hand to the
+                 * input method if the keysyms do not land (see
+                 * oskCommitIfUnchanged). */
+                if (lenBefore !== null)
+                    imCheck = {focus, lenBefore, str: commitStr};
             } else {
                 for (var i = 0; i < keys.length; i++) {
                     this.notifyKeyEvent(keys[i], Clutter.KeyState.PRESSED, event_time);
@@ -2182,6 +2266,10 @@ class Keyboard extends Dialog {
                 this.keyInProgress = false;
             }
             this.keyTimeout = setTimeout(this.keyTimeoutFunc, 5);
+            if (imCheck) {
+                setTimeout(() => oskCommitIfUnchanged(this, imCheck.focus,
+                    imCheck.lenBefore, imCheck.str), 150);
+            }
         } catch (err) {
             this.keyInProgress = false;
             throw new Error("GJS-OSK: An unknown error occured. Please report this bug to the Issues page (https://github.com/Vishram1123/gjs-osk/issues):\n\n" + err + "\n\nKeys Pressed: " + keys);
