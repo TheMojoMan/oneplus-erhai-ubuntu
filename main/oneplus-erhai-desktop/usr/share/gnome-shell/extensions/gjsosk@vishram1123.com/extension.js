@@ -273,10 +273,54 @@ function oskDbg(kb, msg) {
  * An actor outside the grab chrome gets an emission chain that is built from
  * the dialog and never reaches it: no events at all.
  */
+/* The compositor's INPUT PANEL GROUP -- the stage's grab chrome -- or null.
+ *
+ * Primary lookup: the shell's own OSK box lives in that group
+ * (layout.js: `inputPanelGroup.add_child(this.keyboardBox)`), so its parent IS
+ * the group.  global.compositor.get_input_panel_group() is the documented way
+ * and is tried second: on this build it returned nothing (the keyboard stayed
+ * in Main.uiGroup, parent=uiGroup in the log), which is exactly the bug. */
+function oskInputPanelGroup() {
+    try {
+        const box = Main.layoutManager.keyboardBox;
+        const parent = box ? box.get_parent() : null;
+        if (parent)
+            return parent;
+    } catch (e) {
+    }
+    try {
+        if (global.compositor &&
+            typeof global.compositor.get_input_panel_group === 'function') {
+            const group = global.compositor.get_input_panel_group();
+            if (group)
+                return group;
+        }
+    } catch (e) {
+    }
+    return null;
+}
+
+/* Move the keyboard into the grab chrome, unless it is already there. */
+function oskJoinInputPanel(actor) {
+    if (major < 51 || !actor)
+        return false;
+    try {
+        const group = oskInputPanelGroup();
+        if (!group)
+            return false;
+        if (actor.get_parent() === group)
+            return true;
+        group.add_child(actor);
+        return true;
+    } catch (e) {
+        logError(e, 'GJS-OSK: could not join the input panel group');
+    }
+    return false;
+}
+
 function oskInGrabChrome(actor) {
     try {
-        const group = major >= 51 && global.compositor
-            ? global.compositor.get_input_panel_group() : null;
+        const group = major >= 51 ? oskInputPanelGroup() : null;
         if (!group || !actor)
             return false;
         return group === actor || group.contains(actor);
@@ -1385,16 +1429,10 @@ class Keyboard extends Dialog {
          * this Dialog was built with -- never sees a touch while it is up.
          * Everything else (apps, ptyxis, the desktop) has no grab, which is
          * why typing worked there and only the Wi-Fi entry stayed dead. */
-        try {
-            const panelGroup = major >= 51 && global.compositor
-                ? global.compositor.get_input_panel_group() : null;
-            if (panelGroup) {
-                panelGroup.add_child(this);
-                this._oskPanelGroup = panelGroup;
-            }
-        } catch (e) {
-            logError(e, 'GJS-OSK: could not join the input panel group');
-        }
+        const joined = oskJoinInputPanel(this);
+        const panelParent = this.get_parent();
+        log(`GJS-OSK: keyboard parent=${panelParent ? (panelParent.name || panelParent.constructor.name) : 'none'} ` +
+            `grabChrome=${joined && oskInGrabChrome(this) ? 'yes' : 'no'}`);
         /* [erhai] this actor must never take the key focus: a shell dialog's
          * entry is a Clutter.Text that types only while IT has the focus, and
          * the shell's own OSK keys are can_focus=false for the same reason. */
@@ -1735,9 +1773,14 @@ class Keyboard extends Dialog {
     }
 
     open(noPrep = null, instant = null) {
+        /* Belt and braces: whatever happened at creation, the keyboard must be
+         * in the grab chrome before it is shown, or a shell dialog's grab
+         * silently swallows every touch. */
+        const joined = oskJoinInputPanel(this);
         const parent = this.get_parent();
         oskLife(this, `open(noPrep=${noPrep}, instant=${instant}) state=${this.state} ` +
-            `parent=${parent ? (parent.name || parent.constructor.name) : 'none'}`);
+            `parent=${parent ? (parent.name || parent.constructor.name) : 'none'} ` +
+            `grabChrome=${joined && oskInGrabChrome(this) ? 'yes' : 'no'}`);
         if (this.updateCapsLock) this.updateCapsLock()
         if (this.updateNumLock) this.updateNumLock()
         if (noPrep == null || !noPrep) {
