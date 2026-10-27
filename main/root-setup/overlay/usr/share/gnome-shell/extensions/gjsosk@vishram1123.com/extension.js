@@ -257,6 +257,45 @@ function oskDbg(kb, msg) {
     log(`GJS-OSK dbg ${kb._oskDbgN}: ${msg}`);
 }
 
+/* Is `actor` inside the compositor's input panel group?  That group is the
+ * stage's GRAB CHROME (see the note in Keyboard._init), and mutter only routes
+ * pointer/key events to actors inside the grab chrome while a shell dialog owns
+ * a grab -- clutter-sprite.c, clutter_sprite_propagate_event():
+ *
+ *   if (!clutter_actor_contains (seat_grab_actor, target_actor) &&
+ *       grab_chrome_actor &&
+ *       clutter_actor_contains (grab_chrome_actor, target_actor))
+ *         topmost = grab_chrome_actor;
+ *   else
+ *         topmost = seat_grab_actor;
+ *   create_event_emission_chain (sprite, chain, topmost, target_actor);
+ *
+ * An actor outside the grab chrome gets an emission chain that is built from
+ * the dialog and never reaches it: no events at all.
+ */
+function oskInGrabChrome(actor) {
+    try {
+        const group = major >= 51 && global.compositor
+            ? global.compositor.get_input_panel_group() : null;
+        if (!group || !actor)
+            return false;
+        return group === actor || group.contains(actor);
+    } catch (e) {
+        return false;
+    }
+}
+
+/* Raise an actor above its siblings, wherever it lives. */
+function oskRaise(actor) {
+    try {
+        const parent = actor.get_parent();
+        if (parent && parent.set_child_above_sibling)
+            parent.set_child_above_sibling(actor, null);
+    } catch (e) {
+        logError(e, 'GJS-OSK: raising the keyboard failed');
+    }
+}
+
 /* Lifecycle log (open/close/destroy/touch on the keyboard): a separate budget
  * from oskDbg, so a crash session still shows what the extension did last
  * instead of only the first 30 keystrokes. */
@@ -1172,8 +1211,60 @@ export default class GjsOskExtension extends Extension {
             ['after-im', () => say(`after inputMethod.commit('b'): entryLen=${len()}`)],
             ['direct', () => entry.set_text(entry.get_text() + 'c')],
             ['after-direct', () => say(`after entry.set_text: entryLen=${len()}`)],
+            ['open-keyboard', () => {
+                const kb = this.Keyboard;
+                if (!kb) {
+                    say('no keyboard instance for the pointer test');
+                    return;
+                }
+                kb.open(null, true);
+            }],
+            ['pointer-press', () => {
+                /* THE test for the Wi-Fi prompt: a modal dialog owns a stage
+                 * grab now (see the 'state' line), and the keyboard lives in
+                 * the compositor's input panel group, which mutter marks as
+                 * the stage's grab chrome.  Press a virtual pointer on one of
+                 * its keys: if the touch arrives, sendKey() types into the
+                 * dialog's entry above. */
+                const kb = this.Keyboard;
+                if (!kb)
+                    return;
+                const keys = kb.keys || [];
+                const actor = keys.find(k => k.char && k.char.code === 38) ||
+                    keys.find(k => k.char) || null;
+                if (!actor) {
+                    say('no key actor found');
+                    return;
+                }
+                const [kx, ky] = actor.get_transformed_position();
+                const px = kx + actor.width / 2;
+                const py = ky + actor.height / 2;
+                const picked = global.stage.get_actor_at_pos(
+                    Clutter.PickMode.REACTIVE, px, py);
+                const parent = kb.get_parent();
+                say(`press at ${Math.round(px)},${Math.round(py)} ` +
+                    `pick=${picked ? picked.constructor.name : 'none'} ` +
+                    `inKeyboard=${picked && kb.contains(picked) ? 'yes' : 'no'} ` +
+                    `kbdParent=${parent ? (parent.name || parent.constructor.name) : 'none'} ` +
+                    `kbdInChrome=${oskInGrabChrome(kb) ? 'yes' : 'no'}`);
+                const dev = global.stage.context.get_backend().get_default_seat()
+                    .create_virtual_device(Clutter.InputDeviceType.POINTER_DEVICE);
+                this._pointerDevice = dev;
+                const t = global.display.get_current_time_roundtrip() * 1000;
+                dev.notify_pointer_motion(t, px, py);
+                dev.notify_pointer_button(t, 1, Clutter.ButtonState.PRESSED);
+                GLib.timeout_add(GLib.PRIORITY_DEFAULT, 80, () => {
+                    dev.notify_pointer_button(
+                        global.display.get_current_time_roundtrip() * 1000,
+                        1, Clutter.ButtonState.RELEASED);
+                    return GLib.SOURCE_REMOVE;
+                });
+            }],
+            ['after-pointer', () => say(`after pointer press: entryLen=${len()}`)],
             ['done', () => {
                 say(`final entryLen=${len()}`);
+                if (this.Keyboard)
+                    this.Keyboard.close(true);
                 if (dialog) {
                     dialog.close();
                     dialog.destroy();
@@ -1284,6 +1375,26 @@ class Keyboard extends Dialog {
         this.customLayouts = extensionObject.customLayouts;
         let monitor = Main.layoutManager.monitors[currentMonitorId] ?? Main.layoutManager.primaryMonitor;
         super._init(Main.uiGroup, 'db-keyboard-content');
+        /* [erhai] THE reason gjs-osk was dead in the Wi-Fi password prompt.
+         * Shell 51 keeps its own OSK in the compositor's INPUT PANEL GROUP,
+         * and mutter marks that group as the stage's "grab chrome"
+         * (meta_compositor_manage() -> clutter_stage_set_grab_chrome()): its
+         * children keep receiving pointer input while a modal dialog owns a
+         * stage grab.  NetworkSecretDialog (the Wi-Fi secret prompt) pushes
+         * exactly such a grab, so a keyboard parented to Main.uiGroup -- what
+         * this Dialog was built with -- never sees a touch while it is up.
+         * Everything else (apps, ptyxis, the desktop) has no grab, which is
+         * why typing worked there and only the Wi-Fi entry stayed dead. */
+        try {
+            const panelGroup = major >= 51 && global.compositor
+                ? global.compositor.get_input_panel_group() : null;
+            if (panelGroup) {
+                panelGroup.add_child(this);
+                this._oskPanelGroup = panelGroup;
+            }
+        } catch (e) {
+            logError(e, 'GJS-OSK: could not join the input panel group');
+        }
         /* [erhai] this actor must never take the key focus: a shell dialog's
          * entry is a Clutter.Text that types only while IT has the focus, and
          * the shell's own OSK keys are can_focus=false for the same reason. */
@@ -1624,7 +1735,9 @@ class Keyboard extends Dialog {
     }
 
     open(noPrep = null, instant = null) {
-        oskLife(this, `open(noPrep=${noPrep}, instant=${instant}) state=${this.state}`);
+        const parent = this.get_parent();
+        oskLife(this, `open(noPrep=${noPrep}, instant=${instant}) state=${this.state} ` +
+            `parent=${parent ? (parent.name || parent.constructor.name) : 'none'}`);
         if (this.updateCapsLock) this.updateCapsLock()
         if (this.updateNumLock) this.updateNumLock()
         if (noPrep == null || !noPrep) {
@@ -1638,7 +1751,7 @@ class Keyboard extends Dialog {
             }
             this.state = State.OPENING
             this.show();
-            Main.uiGroup.set_child_above_sibling(this, null);
+            oskRaise(this);
         }
         if (noPrep == null || noPrep) {
             oskSetUnredirect(false);
@@ -1677,7 +1790,7 @@ class Keyboard extends Dialog {
                 })
             }
             this.opened = true;
-            Main.uiGroup.set_child_above_sibling(this, null);
+            oskRaise(this);
             // [insert handwriting 5]
         }
     }
