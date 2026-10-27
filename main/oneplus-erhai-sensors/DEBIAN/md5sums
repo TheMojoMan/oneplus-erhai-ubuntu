@@ -8,7 +8,7 @@ cc70c47fdc17b675eba9e518f9ea58a3  usr/local/bin/hexagonrpcd-erhai
 bae961b475fef6c6b3dfd5bc406eb2f1  usr/local/bin/ssccli
 5835dc1557dccfd1a39b679be3c943d0  usr/local/lib/aarch64-linux-gnu/libssc.so.2
 df12725c78284cd1dcd2458d60eefabd  usr/local/libexec/iio-sensor-proxy
-e348cfcd3a7f91a7357c37b810927e0a  usr/local/sbin/erhai-alsd.py
+4d3bde0add2a22fb96fe026ba78da6c8  usr/local/sbin/erhai-alsd.py
 278d43ba3cef2d9529dc6e836d98821a  usr/local/sbin/erhai-tablet-mode.py
 48b617c2a5bc84c806a741d8929002d5  usr/local/sbin/__pycache__/erhai-alsd.cpython-314.pyc
 e1ef56bc4d69091d1f3f4e1137a76834  usr/share/doc/oneplus-erhai-sensors/patches/hexagonrpcd-0.4.0-odm-sensor-config.patch

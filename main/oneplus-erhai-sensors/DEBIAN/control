@@ -1,5 +1,5 @@
 Package: oneplus-erhai-sensors
-Version: 2.7
+Version: 2.7-test-01
 Section: utils
 Priority: optional
 Architecture: arm64
