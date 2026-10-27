@@ -1,8 +1,12 @@
 #!/bin/bash
 # make-dconf-seed.sh -- turn a LIVE dconf user database into a shippable seed.
 #
-#   ./tools/make-dconf-seed.sh ~/.config/dconf/user  <out-dir>/user
-#   ./tools/make-dconf-seed.sh /path/to/someone/user stonking/root-setup/overlay/etc/skel/.config/dconf/user
+#   ./tools/make-dconf-seed.sh <dconf-file> <out-dconf-file> [account-name]
+#
+# The optional third argument is the ACCOUNT whose name must not survive in the
+# seed.  It defaults to the invoking user, which is wrong when the database comes
+# from another system or another login (e.g. the sda17 test image, user "test"):
+# pass it explicitly then.
 #
 # WHY: the image ships /etc/skel/.config/dconf/user so that a freshly created
 # account starts with the erhai desktop defaults (extension list, panel, power,
@@ -37,7 +41,8 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(dirname "$HERE")"
 SRC="${1:-}"
 OUT="${2:-}"
-[ -n "$SRC" ] && [ -n "$OUT" ] || { sed -n '3,6p' "$0" >&2; exit 2; }
+SEED_USER="${3:-$(id -un)}"
+[ -n "$SRC" ] && [ -n "$OUT" ] || { sed -n '3,9p' "$0" >&2; exit 2; }
 [ -f "$SRC" ] || { echo "no such dconf database: $SRC" >&2; exit 2; }
 command -v dconf >/dev/null || { echo "dconf missing" >&2; exit 1; }
 
@@ -51,9 +56,13 @@ HOME="$WORK/src" dbus-run-session -- dconf dump / > "$WORK/dump.txt"
 echo "seed: dumped $(grep -c '^\[' "$WORK/dump.txt") section(s) from $SRC"
 
 # 2. filter
-python3 - "$WORK/dump.txt" "$WORK/clean.txt" "$(id -un)" "$(hostname)" <<'PY'
+python3 - "$WORK/dump.txt" "$WORK/clean.txt" "$SEED_USER" "$(hostname)" <<'PY'
 import re, sys
 src, out, user, host = sys.argv[1:5]
+# NOTE: dconf writes section headers WITHOUT a leading slash ("[org/gnome/...]"),
+# so the list is normalised before comparing -- comparing against the leading-""
+# form silently dropped nothing until 2026-10-27 (sections survived, their
+# keys were only lost when a value tripped the value scan).
 DROP_SECTIONS = [
     "/org/gnome/desktop/recent-files", "/org/gtk/RecentFiles", "/ca/desrt/dconf-editor",
     "/org/gnome/console", "/org/gnome/gnome-system-monitor", "/org/gnome/usage/",
@@ -62,7 +71,10 @@ DROP_SECTIONS = [
     "/org/gnome/clocks", "/org/gnome/weather", "/org/gnome/maps", "/org/gnome/shell/world-clocks",
     "/org/gnome/TextEditor", "/org/gnome/Notes", "/org/gnome/desktop/notifications/applications",
     "/org/gnome/settings-daemon/plugins/color",
-    "/org/gnome/desktop/background", "/org/gnome/desktop/screensaver",
+    "/org/gnome/deja-dup", "/com/ubuntu/update-notifier",
+    # background/screensaver are KEPT: their picture-uri is part of the shipped
+    # look (a /usr/share/backgrounds file) and the value scan above already drops
+    # any URI that points into a home directory.
     "/org/gnome/desktop/search-providers", "/org/gnome/desktop/thumbnailers",
 ]
 DROP_KEYS = re.compile(r"(password|passwd|secret|token|api[-_]?key|username|user-name|"
@@ -76,12 +88,13 @@ BAD_VALUE = [re.compile(p, re.I) for p in
              (r"/home/", r"/media/", r"/mnt/",
               r"(?<![\w.-])%s(?![\w.-])" % re.escape(user),
               r"\b([0-9a-f]{2}:){5}[0-9a-f]{2}\b")]
+DROP_NORM = [d.strip("/") for d in DROP_SECTIONS]
 cur = None
 kept = dropped_sec = dropped_key = 0
 for line in open(src, encoding="utf-8", errors="replace"):
     if line.startswith("["):
         cur = line.strip().strip("[]")
-        if any(cur == d or cur.startswith(d + "/") for d in DROP_SECTIONS):
+        if any(cur == d or cur.startswith(d + "/") for d in DROP_NORM):
             cur = None
             dropped_sec += 1
             continue
@@ -111,10 +124,10 @@ HOME="$WORK/dst" dbus-run-session -- dconf load / < "$WORK/clean.txt"
 # full pattern set (host name as a whole word: "erhai" is a substring of every
 # erhai extension uuid, so a plain substring test would always fire); the binary
 # database only for the path/user patterns, which can never be legitimate.
-if grep -qE "/home/|/media/|/mnt/|(^|[^A-Za-z0-9._-])$(id -un)([^A-Za-z0-9._-]|$)|([0-9a-f]{2}:){5}[0-9a-f]{2}" "$WORK/clean.txt" ||
+if grep -qE "/home/|/media/|/mnt/|(^|[^A-Za-z0-9._-])$SEED_USER([^A-Za-z0-9._-]|$)|([0-9a-f]{2}:){5}[0-9a-f]{2}" "$WORK/clean.txt" ||
    grep -aqE "/home/|/media/" "$WORK/dst/.config/dconf/user"; then
 	echo "REFUSING: personal data survived the filter" >&2
-	grep -nE "/home/|/media/|/mnt/|$(id -un)" "$WORK/clean.txt" | head -5 >&2
+	grep -nE "/home/|/media/|/mnt/|$SEED_USER" "$WORK/clean.txt" | head -5 >&2
 	exit 1
 fi
 
