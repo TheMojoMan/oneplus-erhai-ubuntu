@@ -32,10 +32,10 @@
 #      a libllvmN Depends when the build actually links libLLVM (shared-llvm).
 #
 # /usr mode is BUILD INPUT, not a deb:
-#   next: ./build-mesa-usr-debs.sh   (splits oneplus-erhai-mesa/usr into the
+#   next: ./resolute/build-mesa-usr-debs.sh   (splits oneplus-erhai-mesa/usr into the
 #         six Ubuntu-named replacement .debs -- NEVER published to the PPA).
 # /opt mode (the default, keeps the opportunistic opt-in layout):
-#   next: ./build-mesa-deb.sh && ../update-ppa.sh --mvtomain
+#   next: ./resolute/build-mesa-deb.sh && ../update-ppa.sh --mvtomain
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -43,7 +43,7 @@ ROOT="$(cd "$HERE/.." && pwd)"
 SRC="${MESA_SRC:-/media/data/develop/mesa}"
 BUILD="$SRC/build-erhai"
 BRANCH="${MESA_BRANCH:-main}"
-STAGE="$HERE/oneplus-erhai-mesa"
+STAGE="$HERE/resolute/oneplus-erhai-mesa"
 PREFIX="${MESA_PREFIX:-/opt/mesa}"
 PAYLOAD="$STAGE$PREFIX"
 DEST="$HERE/../tmp/mesa-destdir.$$"

@@ -2,6 +2,7 @@
 # Every builder packs the .deb it produces into debs/ (ppa-common.sh DEB_DIR),
 # and no build artifact is ever committed -- neither from there nor from a
 # project directory (mesa payloads, gtk4/mutter rollback debs, ...).
+*/debs/*.deb
 debs/*.deb
 *.deb
 build-root.log

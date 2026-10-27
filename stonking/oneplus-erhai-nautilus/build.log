@@ -1,0 +1,518 @@
+== installed nautilus 1:50.2.2-0ubuntu0.2 (upstream 50.2.2)
+== extracting a clean source tree ==
+dpkg-source: info: verifying ./nautilus_50.2.2-0ubuntu0.2.dsc
+dpkg-source: info: skipping absent keyring /usr/share/keyrings/debian-keyring.pgp
+dpkg-source: info: skipping absent keyring /usr/share/keyrings/debian-tag2upload.pgp
+dpkg-source: info: skipping absent keyring /usr/share/keyrings/debian-nonupload.pgp
+dpkg-source: info: skipping absent keyring /usr/share/keyrings/debian-maintainers.pgp
+dpkg-source: info: using keyring /usr/share/keyrings/ubuntu-archive-keyring.gpg
+gpgv: Signature made Wed 09 Sep 2026 05:40:49 PM CEST
+gpgv:                using EDDSA key BC27F8FEF77F7207A7BA08BE0D0246F38220EDA6
+gpgv: Can't check signature: No public key
+dpkg-source: warning: cannot verify inline signature for ./nautilus_50.2.2-0ubuntu0.2.dsc: no acceptable signature found
+dpkg-source: info: extracting nautilus in nautilus-50.2.2
+dpkg-source: info: unpacking nautilus_50.2.2.orig.tar.xz
+dpkg-source: info: unpacking nautilus_50.2.2-0ubuntu0.2.debian.tar.xz
+dpkg-source: info: using patch list from debian/patches/series
+dpkg-source: info: applying debian/Revert-test-Disable-localsearch-tracker-tests.patch
+dpkg-source: info: applying 04_suppress_umount_in_ltsp.patch
+dpkg-source: info: applying appstream-compulsory.patch
+dpkg-source: info: applying fallback-to-gexiv-0.14.2.patch
+dpkg-source: info: applying ubuntu/unity_launcher_support.patch
+dpkg-source: info: applying ubuntu/unity_icon_color.patch
+dpkg-source: info: applying ubuntu/ubuntu_backspace_behaviour.patch
+dpkg-source: info: applying ubuntu/shell-search-provider-implement-XUbuntuCancel-to-request-.patch
+dpkg-source: info: applying ubuntu/nautilus-sendto.patch
+dpkg-source: info: applying ubuntu/files-view-Add-xdg-terminal-exec-action.patch
+dpkg-source: info: applying ubuntu/test-Disable-portal-file-chooser-test.patch
+dpkg-source: info: applying app-chooser-widget-use-connect_object-to-retain-a-referen.patch
+== applying patch ==
+patching file data/org.gnome.nautilus.gschema.xml
+patching file src/nautilus-global-preferences.h
+patching file src/nautilus-preferences-dialog.c
+patching file src/resources/ui/nautilus-preferences-dialog.blp
+patching file src/nautilus-view-cell.h
+patching file src/nautilus-view-cell.c
+patching file src/resources/ui/nautilus-name-cell.blp
+patching file src/nautilus-name-cell.c
+patching file src/nautilus-list-base.c
+== configuring ==
+The Meson build system
+Version: 1.11.1
+Source dir: /media/data/develop/erhai/tmp/nautilus-erhai-build/src/nautilus-50.2.2
+Build dir: /media/data/develop/erhai/tmp/nautilus-erhai-build/build
+Build type: native build
+DEPRECATION: Option "cloudproviders" value 'false' is replaced by 'disabled'
+DEPRECATION: Option "selinux" value 'true' is replaced by 'enabled'
+Project name: nautilus
+Project version: 50.2.2
+C compiler for the host machine: /usr/bin/ccache cc (gcc 15.2.0 "cc (Ubuntu 15.2.0-16ubuntu1) 15.2.0")
+C linker for the host machine: cc ld.bfd 2.46
+Host machine cpu family: aarch64
+Host machine cpu: aarch64
+Compiler for C supports arguments -Wduplicated-branches: YES 
+Compiler for C supports arguments -Wduplicated-cond: YES 
+Compiler for C supports arguments -Wlogical-op: YES 
+Compiler for C supports arguments -Werror=empty-body: YES 
+Compiler for C supports arguments -Werror=format=2: YES 
+Compiler for C supports arguments -Werror=implicit-function-declaration: YES 
+Compiler for C supports arguments -Werror=incompatible-pointer-types: YES 
+Compiler for C supports arguments -Werror=init-self: YES 
+Compiler for C supports arguments -Werror=missing-include-dirs: YES 
+Compiler for C supports arguments -Werror=missing-prototypes: YES 
+Compiler for C supports arguments -Werror=pointer-arith: YES 
+Compiler for C supports arguments -Werror=sequence-point: YES 
+Compiler for C supports arguments -Werror=shadow: YES 
+Compiler for C supports arguments -Werror=strict-prototypes: YES 
+Compiler for C supports arguments -Werror=undef: YES 
+Compiler for C supports arguments -Werror=uninitialized: YES 
+Compiler for C supports arguments -Wno-deprecated-declarations: YES 
+Compiler for C supports arguments -Wno-cast-function-type: YES 
+Compiler for C supports arguments -Wno-unused-parameter: YES 
+Compiler for C supports arguments -Wno-error=maybe-uninitialized: YES 
+Library m found: YES
+Found pkg-config: YES (/usr/bin/pkg-config) 2.5.1
+Run-time dependency gio-2.0 found: YES 2.88.0
+Run-time dependency gio-unix-2.0 found: YES 2.88.0
+Run-time dependency glib-2.0 found: YES 2.88.0
+Run-time dependency glycin-2 found: YES 2.1.0
+Run-time dependency glycin-gtk4-2 found: YES 2.1.0
+Run-time dependency gmodule-no-export-2.0 found: YES 2.88.0
+Run-time dependency gnome-autoar-0 found: YES 0.4.5
+Run-time dependency gnome-desktop-4 found: YES 44.5
+Run-time dependency gtk4 found: YES 4.22.4
+Run-time dependency libadwaita-1 found: YES 1.9.1
+Run-time dependency libportal found: YES 0.9.1
+Run-time dependency libportal-gtk4 found: YES 0.9.1
+Run-time dependency tinysparql-3.0 found: YES 3.11.0
+Run-time dependency icu-uc found: YES 78.2
+Run-time dependency icu-i18n found: YES 78.2
+Program blueprint-compiler found: YES 0.19.0 0.19.0 (/usr/bin/blueprint-compiler)
+Program gi-docgen found: YES (/usr/bin/gi-docgen)
+Run-time dependency gtk4-x11 found: YES 4.22.4
+Run-time dependency gtk4-wayland found: YES 4.22.4
+Run-time dependency wayland-client found: YES 1.24.0
+Run-time dependency libselinux found: YES 3.9
+Dependency cloudproviders for host machine skipped: feature cloudproviders disabled
+Run-time dependency gexiv2 found: YES 0.14.6
+Run-time dependency gdk-pixbuf-2.0 found: YES 2.44.5
+Run-time dependency gstreamer-tag-1.0 found: YES 1.28.2
+Run-time dependency gstreamer-pbutils-1.0 found: YES 1.28.2
+Run-time dependency unity found: YES 7.1.4
+Run-time dependency dbusmenu-glib-0.4 found: YES 16.04.0
+Checking for function "malloc_trim" : YES 
+Configuring config.h.in using configuration
+Configuring org.gnome.Nautilus.desktop.in using configuration
+Program msgfmt found: YES (/usr/bin/msgfmt)
+Program python3 found: YES (/usr/bin/python3)
+Configuring org.gnome.Nautilus.metainfo.xml.in using configuration
+Configuring org.gnome.Nautilus.service using configuration
+Configuring org.freedesktop.FileManager1.service using configuration
+Configuring org.gnome.Nautilus.search-provider.ini using configuration
+Dependency gio-2.0 for build machine found: YES 2.88.0 (cached)
+Program /usr/lib/aarch64-linux-gnu/glib-2.0/glib-compile-schemas found: YES (/usr/lib/aarch64-linux-gnu/glib-2.0/glib-compile-schemas)
+Program desktop-file-validate found: YES (/usr/bin/desktop-file-validate)
+Program appstreamcli found: YES (/usr/bin/appstreamcli)
+Dependency gio-2.0 for build machine found: YES 2.88.0 (cached)
+Program /usr/bin/gdbus-codegen found: YES (/usr/bin/gdbus-codegen)
+Dependency gio-2.0 for build machine found: YES 2.88.0 (cached)
+Program /usr/bin/gdbus-codegen found: YES (/usr/bin/gdbus-codegen)
+Run-time dependency x11 found: YES 1.8.13
+Program wayland-scanner found: YES (/usr/bin/wayland-scanner)
+Dependency wayland-client for host machine found: YES 1.24.0 (cached)
+Dependency glib-2.0 for build machine found: YES 2.88.0 (cached)
+Program /usr/bin/glib-mkenums found: YES (/usr/bin/glib-mkenums)
+Dependency glib-2.0 for build machine found: YES 2.88.0 (cached)
+Program /usr/bin/glib-mkenums found: YES (/usr/bin/glib-mkenums)
+Found pkg-config: YES (/usr/bin/pkg-config) 2.5.1
+Program msginit found: YES (/usr/bin/msginit)
+Program msgmerge found: YES (/usr/bin/msgmerge)
+Program xgettext found: YES (/usr/bin/xgettext)
+Configuring nautilus.gresource.xml using configuration
+Dependency gio-2.0 for build machine found: YES 2.88.0 (cached)
+Program /usr/bin/glib-compile-resources found: YES (/usr/bin/glib-compile-resources)
+Dependency glib-2.0 for build machine found: YES 2.88.0 (cached)
+Program /usr/bin/glib-mkenums found: YES (/usr/bin/glib-mkenums)
+Dependency glib-2.0 for build machine found: YES 2.88.0 (cached)
+Program /usr/bin/glib-mkenums found: YES (/usr/bin/glib-mkenums)
+Dependency gio-2.0 for build machine found: YES 2.88.0 (cached)
+Program /usr/bin/gdbus-codegen found: YES (/usr/bin/gdbus-codegen)
+Dependency gio-2.0 for build machine found: YES 2.88.0 (cached)
+Program /usr/bin/gdbus-codegen found: YES (/usr/bin/gdbus-codegen)
+Dependency gio-2.0 for build machine found: YES 2.88.0 (cached)
+Program /usr/bin/gdbus-codegen found: YES (/usr/bin/gdbus-codegen)
+Library m found: YES
+Dependency gio-2.0 for build machine found: YES 2.88.0 (cached)
+Program /usr/lib/aarch64-linux-gnu/glib-2.0/glib-compile-schemas found: YES (/usr/lib/aarch64-linux-gnu/glib-2.0/glib-compile-schemas)
+Program gtk4-update-icon-cache found: YES (/usr/bin/gtk4-update-icon-cache)
+Program update-desktop-database found: YES (/usr/bin/update-desktop-database)
+Build targets in project: 158
+
+nautilus 50.2.2
+
+  Features
+    Extensions             : YES
+    Cloud providers support: NO
+    SELinux support        : YES
+
+  Build
+    Profile                : 
+    Debugging              : NO
+    Optimization           : 3
+    Documentation          : NO
+    Introspection          : NO
+    Tests                  : none
+
+  User defined options
+    buildtype              : release
+    cloudproviders         : false
+    docs                   : false
+    extensions             : true
+    introspection          : false
+    prefix                 : /usr
+    selinux                : true
+    tests                  : none
+    unity-launcher         : true
+    xdg-terminal-exec      : true
+
+Found ninja-1.13.2 at /usr/bin/ninja
+Generating targets:   0%|          | 0/158 eta ?                                                Writing build.ninja:   0%|          | 0/345 eta ?                                                 == building (8 jobs) ==
+ninja: Entering directory `/media/data/develop/erhai/tmp/nautilus-erhai-build/build'
+[1/309] Generating gdbus source xdp-gnome/xdg-desktop-portal-dbus.c
+[2/309] Generating gdbus header xdp-gnome/xdg-desktop-portal-dbus.h
+[3/309] Generating config.h with a custom command
+[4/309] Generating xdp-gnome/mutter-x11-interop client header with a custom command
+[5/309] Generating xdp-gnome/mutter-x11-interop source with a custom command
+[6/309] Generating GObject enum file src/nautilus-enum-types.h (wrapped by meson to capture output)
+[7/309] Generating GObject enum file libnautilus-extension/nautilus-extension-enum-types.c (wrapped by meson because command contains newlines, to capture output)
+[8/309] Generating gdbus header xdp-gnome/shell-dbus.h
+[9/309] Generating gdbus source src/nautilus-freedesktop-generated.c
+[10/309] Generating gdbus source xdp-gnome/shell-dbus.c
+[11/309] Generating GObject enum file libnautilus-extension/nautilus-extension-enum-types.h (wrapped by meson because command contains newlines, to capture output)
+[12/309] Generating gdbus source src/nautilus-generated2.c
+[13/309] Compiling C object libnautilus-extension/libnautilus-extension.so.4.1.p/meson-generated_.._nautilus-extension-enum-types.c.o
+[14/309] Compiling C object libnautilus-extension/libnautilus-extension.so.4.1.p/nautilus-column.c.o
+[15/309] Compiling C object libnautilus-extension/libnautilus-extension.so.4.1.p/nautilus-column-provider.c.o
+[16/309] Compiling C object libnautilus-extension/libnautilus-extension.so.4.1.p/nautilus-file-info.c.o
+[17/309] Compiling C object libnautilus-extension/libnautilus-extension.so.4.1.p/nautilus-info-provider.c.o
+[18/309] Generating gdbus header src/nautilus-freedesktop-generated.h
+[19/309] Generating gdbus header src/nautilus-generated2.h
+[20/309] Compiling C object libnautilus-extension/libnautilus-extension.so.4.1.p/nautilus-properties-model-provider.c.o
+[21/309] Generating gdbus source src/nautilus-shell-search-provider-generated.c
+[22/309] Generating GObject enum file src/nautilus-enum-types.c (wrapped by meson to capture output)
+[23/309] Compiling C object libnautilus-extension/libnautilus-extension.so.4.1.p/nautilus-properties-item.c.o
+[24/309] Compiling C object xdp-gnome/libxdp-gnome.a.p/meson-generated_.._xdg-desktop-portal-dbus.c.o
+[25/309] Compiling C object xdp-gnome/libxdp-gnome.a.p/meson-generated_.._shell-dbus.c.o
+[26/309] Compiling C object xdp-gnome/libxdp-gnome.a.p/meson-generated_.._mutter-x11-interop-protocol.c.o
+[27/309] Compiling C object libnautilus-extension/libnautilus-extension.so.4.1.p/nautilus-menu-item.c.o
+[28/309] Compiling C object xdp-gnome/libxdp-gnome.a.p/request.c.o
+[29/309] Compiling C object libnautilus-extension/libnautilus-extension.so.4.1.p/nautilus-properties-model.c.o
+[30/309] Compiling C object libnautilus-extension/libnautilus-extension.so.4.1.p/nautilus-menu.c.o
+[31/309] Compiling C object libnautilus-extension/libnautilus-extension.so.4.1.p/nautilus-menu-provider.c.o
+[32/309] Generating gdbus header src/nautilus-shell-search-provider-generated.h
+[33/309] Linking target libnautilus-extension/libnautilus-extension.so.4.1
+[34/309] Compiling C object extensions/image-properties/libnautilus-image-properties.so.p/nautilus-image-properties-module.c.o
+[35/309] Compiling C object extensions/image-properties/libnautilus-image-properties.so.p/nautilus-image-properties-model.c.o
+[36/309] Compiling C object extensions/image-properties/libnautilus-image-properties.so.p/nautilus-image-properties-model-provider.c.o
+[37/309] Compiling C object xdp-gnome/libxdp-gnome.a.p/externalwindow.c.o
+[38/309] Generating symbol file libnautilus-extension/libnautilus-extension.so.4.1.p/libnautilus-extension.so.4.1.symbols
+[39/309] Compiling C object extensions/audio-video-properties/libtotem-properties-page.so.p/totem-properties-main.c.o
+[40/309] Compiling C object extensions/audio-video-properties/libtotem-properties-page.so.p/totem-gst-helpers.c.o
+[41/309] Compiling C object xdp-gnome/libxdp-gnome.a.p/externalwindow-x11.c.o
+[42/309] Compiling gschemas data/gsettings-compile-data
+[43/309] Compiling C object src/nautilus-autorun-software.p/nautilus-autorun-software.c.o
+[44/309] Building translation po/ab/LC_MESSAGES/nautilus-ab.mo
+[45/309] Building translation po/am/LC_MESSAGES/nautilus-am.mo
+[46/309] Compiling C object xdp-gnome/libxdp-gnome.a.p/externalwindow-wayland.c.o
+[47/309] Building translation po/af/LC_MESSAGES/nautilus-af.mo
+[48/309] Linking static target xdp-gnome/libxdp-gnome.a
+[49/309] Building translation po/an/LC_MESSAGES/nautilus-an.mo
+[50/309] Building translation po/as/LC_MESSAGES/nautilus-as.mo
+[51/309] Building translation po/ar/LC_MESSAGES/nautilus-ar.mo
+[52/309] Building translation po/ast/LC_MESSAGES/nautilus-ast.mo
+[53/309] Building translation po/be/LC_MESSAGES/nautilus-be.mo
+[54/309] Building translation po/be@latin/LC_MESSAGES/nautilus-be@latin.mo
+[55/309] Building translation po/az/LC_MESSAGES/nautilus-az.mo
+[56/309] Compiling C object extensions/audio-video-properties/libtotem-properties-page.so.p/totem-properties-view.c.o
+[57/309] Building translation po/bg/LC_MESSAGES/nautilus-bg.mo
+[58/309] Building translation po/bn/LC_MESSAGES/nautilus-bn.mo
+[59/309] Building translation po/bn_IN/LC_MESSAGES/nautilus-bn_IN.mo
+[60/309] Building translation po/br/LC_MESSAGES/nautilus-br.mo
+[61/309] Building translation po/bo/LC_MESSAGES/nautilus-bo.mo
+[62/309] Building translation po/ckb/LC_MESSAGES/nautilus-ckb.mo
+[63/309] Building translation po/bs/LC_MESSAGES/nautilus-bs.mo
+[64/309] Building translation po/ca@valencia/LC_MESSAGES/nautilus-ca@valencia.mo
+[65/309] Building translation po/ca/LC_MESSAGES/nautilus-ca.mo
+[66/309] Building translation po/cs/LC_MESSAGES/nautilus-cs.mo
+[67/309] Building translation po/crh/LC_MESSAGES/nautilus-crh.mo
+[68/309] Building translation po/cy/LC_MESSAGES/nautilus-cy.mo
+[69/309] Building translation po/dz/LC_MESSAGES/nautilus-dz.mo
+[70/309] Building translation po/de/LC_MESSAGES/nautilus-de.mo
+[71/309] Building translation po/da/LC_MESSAGES/nautilus-da.mo
+[72/309] Building translation po/el/LC_MESSAGES/nautilus-el.mo
+[73/309] Building translation po/en_CA/LC_MESSAGES/nautilus-en_CA.mo
+[74/309] Building translation po/en_GB/LC_MESSAGES/nautilus-en_GB.mo
+[75/309] Building translation po/et/LC_MESSAGES/nautilus-et.mo
+[76/309] Building translation po/en@shaw/LC_MESSAGES/nautilus-en@shaw.mo
+[77/309] Building translation po/eo/LC_MESSAGES/nautilus-eo.mo
+[78/309] Building translation po/eu/LC_MESSAGES/nautilus-eu.mo
+[79/309] Building translation po/es/LC_MESSAGES/nautilus-es.mo
+[80/309] Building translation po/fa/LC_MESSAGES/nautilus-fa.mo
+[81/309] Building translation po/fi/LC_MESSAGES/nautilus-fi.mo
+[82/309] Building translation po/fr/LC_MESSAGES/nautilus-fr.mo
+[83/309] Building translation po/fo/LC_MESSAGES/nautilus-fo.mo
+[84/309] Building translation po/ga/LC_MESSAGES/nautilus-ga.mo
+[85/309] Building translation po/fur/LC_MESSAGES/nautilus-fur.mo
+[86/309] Building translation po/fy/LC_MESSAGES/nautilus-fy.mo
+[87/309] Building translation po/gd/LC_MESSAGES/nautilus-gd.mo
+[88/309] Building translation po/gl/LC_MESSAGES/nautilus-gl.mo
+[89/309] Building translation po/gv/LC_MESSAGES/nautilus-gv.mo
+[90/309] Building translation po/gu/LC_MESSAGES/nautilus-gu.mo
+[91/309] Building translation po/ha/LC_MESSAGES/nautilus-ha.mo
+[92/309] Building translation po/hi/LC_MESSAGES/nautilus-hi.mo
+[93/309] Building translation po/he/LC_MESSAGES/nautilus-he.mo
+[94/309] Building translation po/hr/LC_MESSAGES/nautilus-hr.mo
+[95/309] Building translation po/ia/LC_MESSAGES/nautilus-ia.mo
+[96/309] Building translation po/hu/LC_MESSAGES/nautilus-hu.mo
+[97/309] Building translation po/hy/LC_MESSAGES/nautilus-hy.mo
+[98/309] Building translation po/ie/LC_MESSAGES/nautilus-ie.mo
+[99/309] Building translation po/id/LC_MESSAGES/nautilus-id.mo
+[100/309] Building translation po/io/LC_MESSAGES/nautilus-io.mo
+[101/309] Building translation po/ig/LC_MESSAGES/nautilus-ig.mo
+[102/309] Building translation po/is/LC_MESSAGES/nautilus-is.mo
+[103/309] Building translation po/ja/LC_MESSAGES/nautilus-ja.mo
+[104/309] Building translation po/it/LC_MESSAGES/nautilus-it.mo
+[105/309] Building translation po/kab/LC_MESSAGES/nautilus-kab.mo
+[106/309] Building translation po/ka/LC_MESSAGES/nautilus-ka.mo
+[107/309] Generating src/resources/blueprints with a custom command
+[108/309] Building translation po/kn/LC_MESSAGES/nautilus-kn.mo
+[109/309] Building translation po/kk/LC_MESSAGES/nautilus-kk.mo
+[110/309] Building translation po/ky/LC_MESSAGES/nautilus-ky.mo
+[111/309] Building translation po/km/LC_MESSAGES/nautilus-km.mo
+[112/309] Building translation po/ko/LC_MESSAGES/nautilus-ko.mo
+[113/309] Building translation po/ln/LC_MESSAGES/nautilus-ln.mo
+[114/309] Building translation po/li/LC_MESSAGES/nautilus-li.mo
+[115/309] Building translation po/ku/LC_MESSAGES/nautilus-ku.mo
+[116/309] Building translation po/lo/LC_MESSAGES/nautilus-lo.mo
+[117/309] Building translation po/mai/LC_MESSAGES/nautilus-mai.mo
+[118/309] Building translation po/mg/LC_MESSAGES/nautilus-mg.mo
+[119/309] Building translation po/lt/LC_MESSAGES/nautilus-lt.mo
+[120/309] Building translation po/lv/LC_MESSAGES/nautilus-lv.mo
+[121/309] Building translation po/mjw/LC_MESSAGES/nautilus-mjw.mo
+[122/309] Building translation po/mk/LC_MESSAGES/nautilus-mk.mo
+[123/309] Building translation po/mi/LC_MESSAGES/nautilus-mi.mo
+[124/309] Building translation po/ms/LC_MESSAGES/nautilus-ms.mo
+[125/309] Building translation po/mr/LC_MESSAGES/nautilus-mr.mo
+[126/309] Building translation po/my/LC_MESSAGES/nautilus-my.mo
+[127/309] Building translation po/ml/LC_MESSAGES/nautilus-ml.mo
+[128/309] Building translation po/nds/LC_MESSAGES/nautilus-nds.mo
+[129/309] Building translation po/mn/LC_MESSAGES/nautilus-mn.mo
+[130/309] Building translation po/nb/LC_MESSAGES/nautilus-nb.mo
+[131/309] Building translation po/nl/LC_MESSAGES/nautilus-nl.mo
+[132/309] Building translation po/nso/LC_MESSAGES/nautilus-nso.mo
+[133/309] Building translation po/nn/LC_MESSAGES/nautilus-nn.mo
+[134/309] Building translation po/ne/LC_MESSAGES/nautilus-ne.mo
+[135/309] Building translation po/or/LC_MESSAGES/nautilus-or.mo
+[136/309] Building translation po/ps/LC_MESSAGES/nautilus-ps.mo
+[137/309] Building translation po/pa/LC_MESSAGES/nautilus-pa.mo
+[138/309] Building translation po/pl/LC_MESSAGES/nautilus-pl.mo
+[139/309] Building translation po/oc/LC_MESSAGES/nautilus-oc.mo
+[140/309] Building translation po/pt/LC_MESSAGES/nautilus-pt.mo
+[141/309] Building translation po/pt_BR/LC_MESSAGES/nautilus-pt_BR.mo
+[142/309] Building translation po/ro/LC_MESSAGES/nautilus-ro.mo
+[143/309] Building translation po/ru/LC_MESSAGES/nautilus-ru.mo
+[144/309] Building translation po/sk/LC_MESSAGES/nautilus-sk.mo
+[145/309] Building translation po/rw/LC_MESSAGES/nautilus-rw.mo
+[146/309] Building translation po/sl/LC_MESSAGES/nautilus-sl.mo
+[147/309] Building translation po/si/LC_MESSAGES/nautilus-si.mo
+[148/309] Building translation po/sr/LC_MESSAGES/nautilus-sr.mo
+[149/309] Building translation po/sr@latin/LC_MESSAGES/nautilus-sr@latin.mo
+[150/309] Building translation po/sq/LC_MESSAGES/nautilus-sq.mo
+[151/309] Building translation po/sv/LC_MESSAGES/nautilus-sv.mo
+[152/309] Building translation po/sr@ije/LC_MESSAGES/nautilus-sr@ije.mo
+[153/309] Building translation po/tg/LC_MESSAGES/nautilus-tg.mo
+[154/309] Building translation po/ta/LC_MESSAGES/nautilus-ta.mo
+[155/309] Building translation po/th/LC_MESSAGES/nautilus-th.mo
+[156/309] Building translation po/tk/LC_MESSAGES/nautilus-tk.mo
+[157/309] Building translation po/tr/LC_MESSAGES/nautilus-tr.mo
+[158/309] Building translation po/uz@cyrillic/LC_MESSAGES/nautilus-uz@cyrillic.mo
+[159/309] Building translation po/ug/LC_MESSAGES/nautilus-ug.mo
+[160/309] Building translation po/uz/LC_MESSAGES/nautilus-uz.mo
+[161/309] Building translation po/te/LC_MESSAGES/nautilus-te.mo
+[162/309] Building translation po/vi/LC_MESSAGES/nautilus-vi.mo
+[163/309] Building translation po/uk/LC_MESSAGES/nautilus-uk.mo
+[164/309] Building translation po/wa/LC_MESSAGES/nautilus-wa.mo
+[165/309] Building translation po/yi/LC_MESSAGES/nautilus-yi.mo
+[166/309] Building translation po/zh_CN/LC_MESSAGES/nautilus-zh_CN.mo
+[167/309] Building translation po/xh/LC_MESSAGES/nautilus-xh.mo
+[168/309] Building translation po/zh_HK/LC_MESSAGES/nautilus-zh_HK.mo
+[169/309] Building translation po/yo/LC_MESSAGES/nautilus-yo.mo
+[170/309] Building translation po/zu/LC_MESSAGES/nautilus-zu.mo
+[171/309] Building translation po/zh_TW/LC_MESSAGES/nautilus-zh_TW.mo
+[172/309] Linking target extensions/audio-video-properties/libtotem-properties-page.so
+[173/309] Linking target extensions/image-properties/libnautilus-image-properties.so
+[174/309] Linking target src/nautilus-autorun-software
+[175/309] Merging translations for data/org.gnome.Nautilus.metainfo.xml
+[176/309] Merging translations for data/org.gnome.Nautilus.desktop
+[177/309] Generating src/resources/nautilus-resources_h with a custom command
+[178/309] Generating src/resources/nautilus-resources_c with a custom command
+[179/309] Compiling C object src/libnautilus.a.p/meson-generated_.._nautilus-shell-search-provider-generated.c.o
+[180/309] Compiling C object src/libnautilus.a.p/meson-generated_.._resources_nautilus-resources.c.o
+[181/309] Compiling C object src/libnautilus.a.p/meson-generated_.._.._xdp-gnome_xdg-desktop-portal-dbus.c.o
+[182/309] Compiling C object src/libnautilus.a.p/meson-generated_.._.._xdp-gnome_shell-dbus.c.o
+[183/309] Compiling C object src/libnautilus.a.p/meson-generated_.._nautilus-freedesktop-generated.c.o
+[184/309] Merging translations for data/nautilus-autorun-software.desktop
+[185/309] Compiling C object src/libnautilus.a.p/meson-generated_.._nautilus-generated2.c.o
+[186/309] Compiling C object src/libnautilus.a.p/nautilus-app-chooser-widget.c.o
+[187/309] Compiling C object src/libnautilus.a.p/nautilus-app-chooser.c.o
+[188/309] Compiling C object src/libnautilus.a.p/meson-generated_.._nautilus-enum-types.c.o
+[189/309] Compiling C object src/libnautilus.a.p/nautilus-batch-rename-utilities.c.o
+[190/309] Compiling C object src/libnautilus.a.p/nautilus-batch-rename-dialog.c.o
+[191/309] Compiling C object src/libnautilus.a.p/nautilus-bookmark-list.c.o
+[192/309] Compiling C object src/libnautilus.a.p/nautilus-batch-rename-item.c.o
+[193/309] Compiling C object src/libnautilus.a.p/nautilus-bookmark.c.o
+[194/309] Compiling C object src/libnautilus.a.p/nautilus-column-utilities.c.o
+[195/309] Compiling C object src/libnautilus.a.p/nautilus-column-chooser.c.o
+[196/309] Compiling C object src/libnautilus.a.p/nautilus-date-utilities.c.o
+[197/309] Compiling C object src/libnautilus.a.p/nautilus-date-range-dialog.c.o
+[198/309] Compiling C object src/libnautilus.a.p/nautilus-clipboard.c.o
+[199/309] Compiling C object src/libnautilus.a.p/nautilus-dbus-launcher.c.o
+[200/309] Compiling C object src/libnautilus.a.p/nautilus-dbus-manager.c.o
+[201/309] Compiling C object src/libnautilus.a.p/nautilus-date-entry-row.c.o
+[202/309] Compiling C object src/libnautilus.a.p/nautilus-compress-dialog.c.o
+[203/309] Compiling C object src/libnautilus.a.p/nautilus-directory.c.o
+[204/309] Compiling C object src/libnautilus.a.p/nautilus-fd-holder.c.o
+[205/309] Compiling C object src/libnautilus.a.p/nautilus-dnd.c.o
+[206/309] Compiling C object src/libnautilus.a.p/nautilus-dialog-utilities.c.o
+[207/309] Compiling C object src/libnautilus.a.p/nautilus-file-operations-dbus-data.c.o
+[208/309] Compiling C object src/libnautilus.a.p/nautilus-directory-async.c.o
+[209/309] Compiling C object src/libnautilus.a.p/nautilus-file-conflict-dialog.c.o
+[210/309] Compiling C object src/libnautilus.a.p/nautilus-file.c.o
+[211/309] Compiling C object src/libnautilus.a.p/nautilus-error-reporting.c.o
+[212/309] Compiling C object src/libnautilus.a.p/nautilus-file-changes-queue.c.o
+[213/309] Compiling C object src/libnautilus.a.p/nautilus-file-operations.c.o
+[214/309] Compiling C object src/libnautilus.a.p/nautilus-application.c.o
+[215/309] Compiling C object src/libnautilus.a.p/nautilus-filename-utilities.c.o
+[216/309] Compiling C object src/libnautilus.a.p/nautilus-file-undo-manager.c.o
+[217/309] Compiling C object src/libnautilus.a.p/nautilus-file-chooser.c.o
+[218/309] Compiling C object src/libnautilus.a.p/nautilus-files-view-dnd.c.o
+[219/309] Compiling C object src/libnautilus.a.p/nautilus-floating-bar.c.o
+[220/309] Compiling C object src/libnautilus.a.p/nautilus-file-utilities.c.o
+[221/309] Compiling C object src/libnautilus.a.p/nautilus-file-undo-operations.c.o
+[222/309] Compiling C object src/libnautilus.a.p/nautilus-grid-cell.c.o
+[223/309] Compiling C object src/libnautilus.a.p/nautilus-global-preferences.c.o
+[224/309] Compiling C object src/libnautilus.a.p/nautilus-filename-validator.c.o
+[225/309] Compiling C object src/libnautilus.a.p/nautilus-grid-view.c.o
+[226/309] Compiling C object src/libnautilus.a.p/nautilus-hash-queue.c.o
+[227/309] Compiling C object src/libnautilus.a.p/nautilus-files-view.c.o
+[228/309] Compiling C object src/libnautilus.a.p/nautilus-freedesktop-dbus.c.o
+[229/309] Compiling C object src/libnautilus.a.p/nautilus-grid-view-captions-dialog.c.o
+[230/309] Compiling C object src/libnautilus.a.p/nautilus-image.c.o
+[231/309] Compiling C object src/libnautilus.a.p/nautilus-list-base.c.o
+[232/309] Compiling C object src/libnautilus.a.p/nautilus-icon-info.c.o
+[233/309] Compiling C object src/libnautilus.a.p/nautilus-history-controls.c.o
+[234/309] Compiling C object src/libnautilus.a.p/nautilus-keyfile-metadata.c.o
+[235/309] Compiling C object src/libnautilus.a.p/nautilus-internal-place-file.c.o
+[236/309] Compiling C object src/libnautilus.a.p/nautilus-label-cell.c.o
+[237/309] Compiling C object src/libnautilus.a.p/nautilus-localsearch-utilities.c.o
+[238/309] Compiling C object src/libnautilus.a.p/nautilus-metadata.c.o
+[239/309] Compiling C object src/libnautilus.a.p/nautilus-module.c.o
+[240/309] Compiling C object src/libnautilus.a.p/nautilus-list-view.c.o
+[241/309] Compiling C object src/libnautilus.a.p/nautilus-location-banner.c.o
+[242/309] Compiling C object src/libnautilus.a.p/nautilus-mime-actions.c.o
+[243/309] Compiling C object src/libnautilus.a.p/nautilus-network-address-bar.c.o
+[244/309] Compiling C object src/libnautilus.a.p/nautilus-location-entry.c.o
+[245/309] Compiling C object src/libnautilus.a.p/nautilus-minimal-cell.c.o
+[246/309] Compiling C object src/libnautilus.a.p/nautilus-network-cell.c.o
+[247/309] Compiling C object src/libnautilus.a.p/nautilus-monitor.c.o
+[248/309] Compiling C object src/libnautilus.a.p/nautilus-name-cell.c.o
+[249/309] Compiling C object src/libnautilus.a.p/nautilus-operations-ui-manager.c.o
+[250/309] Compiling C object src/libnautilus.a.p/nautilus-network-view.c.o
+[251/309] Compiling C object src/libnautilus.a.p/nautilus-pathbar.c.o
+[252/309] Compiling C object src/libnautilus.a.p/nautilus-network-directory.c.o
+[253/309] Compiling C object src/libnautilus.a.p/nautilus-new-folder-dialog.c.o
+[254/309] Compiling C object src/libnautilus.a.p/nautilus-portal.c.o
+[255/309] Compiling C object src/libnautilus.a.p/nautilus-progress-info-manager.c.o
+[256/309] Compiling C object src/libnautilus.a.p/nautilus-preferences-dialog.c.o
+[257/309] Compiling C object src/libnautilus.a.p/nautilus-previewer.c.o
+[258/309] Compiling C object src/libnautilus.a.p/nautilus-program-choosing.c.o
+[259/309] Compiling C object src/libnautilus.a.p/nautilus-progress-info.c.o
+[260/309] Compiling C object src/libnautilus.a.p/nautilus-recent-servers.c.o
+[261/309] Compiling C object src/libnautilus.a.p/nautilus-progress-paintable.c.o
+[262/309] Compiling C object src/libnautilus.a.p/nautilus-progress-info-widget.c.o
+[263/309] Compiling C object src/libnautilus.a.p/nautilus-scheme.c.o
+[264/309] Compiling C object src/libnautilus.a.p/nautilus-query.c.o
+[265/309] Compiling C object src/libnautilus.a.p/nautilus-progress-persistence-handler.c.o
+[266/309] Compiling C object src/libnautilus.a.p/nautilus-properties.c.o
+[267/309] Compiling C object src/libnautilus.a.p/nautilus-query-editor.c.o
+[268/309] Compiling C object src/libnautilus.a.p/nautilus-search-directory-file.c.o
+[269/309] Compiling C object src/libnautilus.a.p/nautilus-rename-file-popover.c.o
+[270/309] Compiling C object src/libnautilus.a.p/nautilus-search-engine.c.o
+[271/309] Compiling C object src/libnautilus.a.p/nautilus-search-directory.c.o
+[272/309] Compiling C object src/libnautilus.a.p/nautilus-search-engine-localsearch.c.o
+[273/309] Compiling C object src/libnautilus.a.p/nautilus-search-hit.c.o
+[274/309] Compiling C object src/libnautilus.a.p/nautilus-search-provider.c.o
+[275/309] Compiling C object src/libnautilus.a.p/nautilus-search-engine-recent.c.o
+[276/309] Compiling C object src/libnautilus.a.p/nautilus-search-engine-simple.c.o
+[277/309] Compiling C object src/libnautilus.a.p/nautilus-signaller.c.o
+[278/309] Compiling C object src/libnautilus.a.p/nautilus-search-engine-model.c.o
+[279/309] Compiling C object src/libnautilus.a.p/nautilus-progress-indicator.c.o
+[280/309] Compiling C object src/libnautilus.a.p/nautilus-shortcut-manager.c.o
+[281/309] Compiling C object src/libnautilus.a.p/nautilus-star-cell.c.o
+[282/309] Compiling C object src/libnautilus.a.p/nautilus-search-popover.c.o
+[283/309] Compiling C object src/libnautilus.a.p/nautilus-sidebar.c.o
+[284/309] Compiling C object src/libnautilus.a.p/nautilus-shell-search-provider.c.o
+[285/309] Compiling C object src/libnautilus.a.p/nautilus-trash-monitor.c.o
+[286/309] Compiling C object src/libnautilus.a.p/nautilus-starred-directory.c.o
+[287/309] Compiling C object src/libnautilus.a.p/nautilus-sidebar-row.c.o
+[288/309] Compiling C object src/libnautilus.a.p/nautilus-tag-manager.c.o
+[289/309] Compiling C object src/libnautilus.a.p/nautilus-ui-utilities.c.o
+[290/309] Compiling C object src/libnautilus.a.p/nautilus-thumbnails.c.o
+[291/309] Compiling C object src/libnautilus.a.p/nautilus-vfs-directory.c.o
+[292/309] Compiling C object src/libnautilus.a.p/nautilus-view-item.c.o
+[293/309] Compiling C object src/libnautilus.a.p/nautilus-vfs-file.c.o
+[294/309] Compiling C object src/libnautilus.a.p/nautilus-toolbar.c.o
+[295/309] Compiling C object src/libnautilus.a.p/nautilus-view-cell.c.o
+[296/309] Compiling C object src/libnautilus.a.p/nautilus-view-item-filter.c.o
+[297/309] Compiling C object src/libnautilus.a.p/unity-quicklist-handler.c.o
+In file included from /usr/lib/aarch64-linux-gnu/glib-2.0/include/glibconfig.h:9,
+                 from /usr/include/glib-2.0/glib/gtypes.h:34,
+                 from /usr/include/glib-2.0/glib/galloca.h:34,
+                 from /usr/include/glib-2.0/glib.h:32,
+                 from /usr/include/glib-2.0/gobject/gbinding.h:30,
+                 from /usr/include/glib-2.0/glib-object.h:24,
+                 from ../src/nautilus-50.2.2/src/unity-quicklist-handler.h:28,
+                 from ../src/nautilus-50.2.2/src/unity-quicklist-handler.c:26:
+../src/nautilus-50.2.2/src/unity-quicklist-handler.c: In function ‘unity_quicklist_handler_init’:
+/usr/include/glib-2.0/glib/gmacros.h:1337:33: warning: Deprecated pre-processor symbol: replace with "G_ADD_PRIVATE"
+ 1337 | #define _GLIB_GNUC_DO_PRAGMA(x) _Pragma(G_STRINGIFY (x))
+      |                                 ^~~~~~~
+/usr/include/glib-2.0/glib/gmacros.h:1340:3: note: in expansion of macro ‘_GLIB_GNUC_DO_PRAGMA’
+ 1340 |   _GLIB_GNUC_DO_PRAGMA(GCC warning G_STRINGIFY (Deprecated pre-processor symbol: replace with #f))
+      |   ^~~~~~~~~~~~~~~~~~~~
+/usr/include/glib-2.0/gobject/gobject-visibility.h:584:49: note: in expansion of macro ‘GLIB_DEPRECATED_MACRO_FOR’
+  584 | #define GOBJECT_DEPRECATED_MACRO_IN_2_58_FOR(f) GLIB_DEPRECATED_MACRO_FOR (f)
+      |                                                 ^~~~~~~~~~~~~~~~~~~~~~~~~
+/usr/include/glib-2.0/gobject/gtype.h:688:145: note: in expansion of macro ‘GOBJECT_DEPRECATED_MACRO_IN_2_58_FOR’
+  688 | #define G_TYPE_INSTANCE_GET_PRIVATE(instance, g_type, c_type)   ((c_type*) g_type_instance_get_private ((GTypeInstance*) (instance), (g_type))) GOBJECT_DEPRECATED_MACRO_IN_2_58_FOR(G_ADD_PRIVATE)
+      |                                                                                                                                                 ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+../src/nautilus-50.2.2/src/unity-quicklist-handler.c:134:18: note: in expansion of macro ‘G_TYPE_INSTANCE_GET_PRIVATE’
+  134 |     self->priv = G_TYPE_INSTANCE_GET_PRIVATE (self, UNITY_TYPE_QUICKLIST_HANDLER,
+      |                  ^~~~~~~~~~~~~~~~~~~~~~~~~~~
+[298/309] Compiling C object src/libnautilus.a.p/nautilus-view-model.c.o
+[299/309] Compiling C object src/nautilus.p/meson-generated_.._resources_nautilus-resources.c.o
+[300/309] Compiling C object src/libnautilus.a.p/nautilus-view-controls.c.o
+[301/309] Compiling C object src/libnautilus.a.p/nautilus-window-slot.c.o
+[302/309] Compiling C object src/libnautilus.a.p/nautilus-window.c.o
+[303/309] Compiling C object src/nautilus.p/meson-generated_.._.._xdp-gnome_xdg-desktop-portal-dbus.c.o
+[304/309] Compiling C object src/nautilus.p/meson-generated_.._.._xdp-gnome_shell-dbus.c.o
+[305/309] Compiling C object src/libnautilus.a.p/nautilus-x-content-bar.c.o
+[306/309] Compiling C object src/nautilus.p/nautilus-main.c.o
+[307/309] Compiling C object src/libnautilus.a.p/unity-bookmarks-handler.c.o
+[308/309] Linking static target src/libnautilus.a
+[309/309] Linking target src/nautilus
+== staging into /media/data/develop/erhai/oneplus-erhai-ubuntu/oneplus-erhai-nautilus/build ==
+== done ==
+  binary   : /media/data/develop/erhai/oneplus-erhai-ubuntu/oneplus-erhai-nautilus/build/bin/nautilus
+  gschema  : /media/data/develop/erhai/oneplus-erhai-ubuntu/oneplus-erhai-nautilus/build/schemas/org.gnome.nautilus.gschema.xml
+  install  : /media/data/develop/erhai/oneplus-erhai-ubuntu/oneplus-erhai-nautilus/install-nautilus-erhai.sh apply

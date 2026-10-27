@@ -41,7 +41,11 @@ case "$SERIES" in
 	resolute|stonking) ;;
 	*) echo "unknown series '$SERIES' (resolute = 26.04, stonking = 26.10)" >&2; exit 2 ;;
 esac
-[ -x "$HERE/$BUILDER" ] || { echo "no such builder: $HERE/$BUILDER" >&2; exit 2; }
+# Builders live in their suite folder (main/, resolute/, stonking/); accept a
+# bare file name (looked up in <series>/) or a path relative to this repo.
+BUILDER_PATH="$HERE/$SERIES/$BUILDER"
+[ -x "$BUILDER_PATH" ] || BUILDER_PATH="$HERE/$BUILDER"
+[ -x "$BUILDER_PATH" ] || { echo "no such builder in $SERIES/: $BUILDER" >&2; exit 2; }
 
 MIRROR="${SERIES_MIRROR:-http://ports.ubuntu.com/ubuntu-ports}"
 ROOT="${SERIES_ROOT:-$W/series-build/$SERIES}"
@@ -115,6 +119,6 @@ chroot "$ROOT" /usr/bin/env -i \
 	DEB_DIR="${DEB_DIR:-$HERE/debs}" \
 	PPA_SERIES_DEB_DIR="${PPA_SERIES_DEB_DIR:-}" \
 	${BASE:+BASE="$BASE"} ${ERHAI_SUFFIX:+ERHAI_SUFFIX="$ERHAI_SUFFIX"} \
-	/bin/bash -c "cd '$HERE' && exec ./'$BUILDER' $*"
+	/bin/bash -c "cd '$(dirname "$BUILDER_PATH")' && exec ./'$(basename "$BUILDER_PATH")' $*"
 
 echo "done: $BUILDER ($SERIES)"

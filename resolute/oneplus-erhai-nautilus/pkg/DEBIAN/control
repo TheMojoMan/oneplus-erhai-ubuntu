@@ -1,0 +1,30 @@
+Package: oneplus-erhai-nautilus
+Version: 0.3
+Section: gnome
+Priority: optional
+Architecture: arm64
+Maintainer: TheMojoMan <themojoman@gmx.net>
+Depends: nautilus (>= 1:50), nautilus-data (>= 1:50), libglib2.0-bin
+Recommends: xdg-terminal-exec
+Description: Touch-friendly GNOME Files (Nautilus) for the OnePlus Pad 3 (erhai)
+ A patched build of GNOME Files (Nautilus) with touchscreen features:
+  * long-press on the empty view background opens the context menu (the
+    touch equivalent of a right click);
+  * a "Show Select Boxes" preference (Files > Preferences > General) that
+    shows a selection checkbox to the left of every file/folder, so several
+    items can be selected on a touchscreen -- tap a box to toggle one item,
+    or swipe a finger across the boxes to select/deselect several at once;
+  * FILE DRAGS ARE ONE-FINGER ONLY: with a second or third finger on the
+    glass (e.g. the 3-finger workspace swipe starting over an icon) the primary
+    finger used to start a drag and MOVE THE FILES.  The view counts the live
+    touch points (a GtkEventControllerLegacy in the capture phase) and
+    on_item_drag_prepare() returns NULL -- cancelling the drag before GTK's
+    gdk_drag_begin() -- while more than one finger is down.  Mouse and trackpad
+    drags are unaffected.
+ .
+ Nautilus is C/GTK4, so this is a source patch, not an extension.  The
+ package installs the patched /usr/bin/nautilus and its gschema by diverting
+ Ubuntu's files (kept as *.erhai-orig); removing the package restores them.
+ The build matches Ubuntu's debian/rules meson options (including
+ -Dxdg-terminal-exec=true, so "Open in Terminal" is present).
+ Package README: /usr/share/oneplus-erhai-nautilus/README.md

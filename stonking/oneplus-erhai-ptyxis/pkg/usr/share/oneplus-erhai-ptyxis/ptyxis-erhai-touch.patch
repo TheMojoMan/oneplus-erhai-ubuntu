@@ -1,0 +1,1613 @@
+diff -ruN ref/src/ptyxis-terminal.c patched/src/ptyxis-terminal.c
+--- ref/src/ptyxis-terminal.c	2026-03-17 01:25:49.000000000 +0100
++++ patched/src/ptyxis-terminal.c	2026-10-06 18:44:55.878520027 +0200
+@@ -23,6 +23,8 @@
+ 
+ #include "config.h"
+ 
++#include <math.h>
++
+ #define PCRE2_CODE_UNIT_WIDTH 0
+ #include <pcre2.h>
+ 
+@@ -43,6 +45,54 @@
+ #define SIZE_DISMISS_TIMEOUT_MSEC 1000
+ #define URL_MATCH_CURSOR_NAME "pointer"
+ 
++/* erhai: touch support (finger scroll, long-press text selection). */
++#define TOUCH_LONG_PRESS_MSEC    450
++#define TOUCH_MOVE_THRESHOLD     12.0
++#define TOUCH_HANDLE_RADIUS      11.0
++#define TOUCH_HANDLE_GRAB        34.0
++#define TOUCH_FLING_TIMEOUT_MSEC 16
++#define TOUCH_FLING_MIN          0.03
++#define TOUCH_FLING_DECAY        0.96
++#define TOUCH_FLING_GAIN         1.10
++
++/* VteTerminal::apply_mouse_cursor() puts this cursor (VTE_MOUSING_CURSOR) on
++ * the widget while the application has mouse tracking enabled, and the "text"
++ * cursor (VTE_DEFAULT_CURSOR) otherwise; reading it is how a plain tap learns
++ * whether the running application expects clicks. */
++#define TOUCH_MOUSE_CURSOR_NAME  "default"
++
++/* In a mouse-tracking application a finger drag cannot scroll the terminal's
++ * own viewport (the alternate screen has no scrollback), so it is forwarded as
++ * mouse wheel events instead — exactly what `VteTerminal::widget_mouse_scroll`
++ * does for a real wheel.  One wheel notch per this much finger travel (in
++ * pixels); a whole cell would be far too twitchy. */
++#define TOUCH_WHEEL_STEP_CELLS   3
++
++/* One-finger drag: the content follows the finger exactly for slow movement
++ * (precise positioning), but a fast swipe is accelerated up to
++ * TOUCH_SCROLL_GAIN_MAX so quick flicks cover more ground. */
++#define TOUCH_SCROLL_GAIN_PER_PX 0.30
++#define TOUCH_SCROLL_GAIN_MAX    1.30
++
++/* Auto-scroll while dragging a selection or a handle near the top/bottom edge:
++ * the scroll starts once the finger is within TOUCH_AUTOSCROLL_BAND of the
++ * visible height (or TOUCH_AUTOSCROLL_MIN_PX, whichever is larger) and gets
++ * faster the closer it is to the edge, up to TOUCH_AUTOSCROLL_MAX_LINES_PER_SEC
++ * (expressed in lines so it feels the same at any font size). */
++#define TOUCH_AUTOSCROLL_BAND             0.10
++#define TOUCH_AUTOSCROLL_MIN_PX           48.0
++#define TOUCH_AUTOSCROLL_MAX_LINES_PER_SEC 25.0
++#define TOUCH_AUTOSCROLL_TICK_MSEC        15
++
++typedef enum
++{
++  PTYXIS_TOUCH_NONE,
++  PTYXIS_TOUCH_SCROLL,
++  PTYXIS_TOUCH_SELECT,
++  PTYXIS_TOUCH_DRAG_START,
++  PTYXIS_TOUCH_DRAG_END,
++} PtyxisTouchMode;
++
+ #define DROP_REQUEST_PRIORITY               G_PRIORITY_DEFAULT
+ #define APPLICATION_VND_PORTAL_FILETRANSFER "application/vnd.portal.filetransfer"
+ #define APPLICATION_VND_PORTAL_FILES        "application/vnd.portal.files"
+@@ -75,6 +125,38 @@
+ 
+   guint               cell_height;
+   guint               cell_width;
++
++  /* erhai: touch handling */
++  GtkEventController *touch_controller;
++  guint               touch_long_press_id;
++  guint               fling_source;
++  guint               autoscroll_source;
++  GdkEventSequence   *touch_sequence;
++  double              touch_start_x;
++  double              touch_start_y;
++  double              touch_last_x;
++  double              touch_last_y;
++  gint64              touch_last_time;
++  double              fling_velocity;
++  double              wheel_accum;
++  PtyxisTouchMode     touch_mode;
++  gboolean            touch_scroll_disabled;
++  gboolean            tap_pending;
++  gboolean            sel_active;
++  /* Set while we feed input to the child ourselves (the synthetic tap click and
++   * the mouse-wheel forwarding), so the "commit" handler does not mistake it for
++   * user input (see ptyxis_terminal_commit_cb()). */
++  gboolean            feeding_synthetic;
++  /* Whether the app wants mouse events, sampled once per gesture (see
++   * ptyxis_terminal_detect_mouse_tracking()). */
++  gboolean            mouse_tracking;
++  /* Rows already dropped from VTE's ring (row_data->delta()); see
++   * ptyxis_terminal_ring_delta().  Sampled when a touch starts. */
++  long                row_offset;
++  long                sel_start_row;
++  long                sel_start_col;
++  long                sel_end_row;
++  long                sel_end_col;
+ };
+ 
+ enum {
+@@ -197,6 +279,17 @@
+   gtk_widget_action_set_enabled (GTK_WIDGET (self), "clipboard.copy", has_selection);
+   gtk_widget_action_set_enabled (GTK_WIDGET (self), "clipboard.copy-as-html", has_selection);
+   gtk_widget_action_set_enabled (GTK_WIDGET (self), "clipboard.paste", can_paste);
++
++  /* erhai: the header bar Paste button (win.paste) mirrors the ACTIVE terminal's
++   * state — the header bar is not a child of the terminal, so it cannot resolve
++   * the actions above by itself. */
++  if (ptyxis_terminal_is_active (self))
++    {
++      GtkWidget *window = gtk_widget_get_ancestor (GTK_WIDGET (self), PTYXIS_TYPE_WINDOW);
++
++      if (window != NULL)
++        gtk_widget_action_set_enabled (window, "win.paste", can_paste);
++    }
+ }
+ 
+ static void
+@@ -966,6 +1059,20 @@
+ 
+   GTK_WIDGET_CLASS (ptyxis_terminal_parent_class)->size_allocate (widget, width, height, baseline);
+ 
++  /* erhai: we implement finger scrolling ourselves, so turn off the
++   * GtkScrolledWindow's kinetic touch gestures (otherwise they would fight
++   * our own capture-phase touch controller for the same sequences). */
++  if (!self->touch_scroll_disabled)
++    {
++      GtkWidget *scroller = gtk_widget_get_ancestor (widget, GTK_TYPE_SCROLLED_WINDOW);
++
++      if (scroller != NULL)
++        {
++          gtk_scrolled_window_set_kinetic_scrolling (GTK_SCROLLED_WINDOW (scroller), FALSE);
++          self->touch_scroll_disabled = TRUE;
++        }
++    }
++
+   column_count = vte_terminal_get_column_count (VTE_TERMINAL (self));
+   row_count = vte_terminal_get_row_count (VTE_TERMINAL (self));
+   emit_size_changed = self->n_columns != column_count || self->n_rows != row_count;
+@@ -1027,6 +1134,1254 @@
+     g_signal_emit (self, signals[GRID_SIZE_CHANGED], 0, column_count, row_count);
+ }
+ 
++/* erhai: touch support ----------------------------------------------------
++ *
++ * The VteTerminal claims touch sequences for its own button-1 handling, which
++ * prevents GtkScrolledWindow from scrolling with a finger, and its touch
++ * long-press opens the context menu.  We take touch input over completely:
++ * a capture-phase GtkEventControllerLegacy consumes every touch event before
++ * VTE sees it, the containing GtkScrolledWindow's kinetic touch gestures are
++ * switched off, and we implement
++ *
++ *   - one-finger drag  -> scroll (with a simple inertia/fling),
++ *   - long-press        -> select the word under the finger (dragging extends
++ *                          the selection; releasing copies it and shows the
++ *                          selection handles).
++ *
++ * The selection is our own (VTE has no public API to set its selection); it is
++ * rendered by inverting the marked cells (a DIFFERENCE blend with white) and
++ * the handles are two draggable dots.
++ */
++
++static GtkAdjustment *
++ptyxis_terminal_get_vadjustment (PtyxisTerminal *self)
++{
++  GtkWidget *scroller;
++
++  g_assert (PTYXIS_IS_TERMINAL (self));
++
++  scroller = gtk_widget_get_ancestor (GTK_WIDGET (self), GTK_TYPE_SCROLLED_WINDOW);
++
++  if (scroller == NULL)
++    return NULL;
++
++  return gtk_scrolled_window_get_vadjustment (GTK_SCROLLED_WINDOW (scroller));
++}
++
++/* The vertical adjustment of a pixel-scrolling VteTerminal holds
++ * round(scroll_delta) * cell_height; this mirrors VteTerminal::
++ * scroll_delta_pixel(). */
++static long
++ptyxis_terminal_get_scroll_pixel (PtyxisTerminal *self)
++{
++  GtkAdjustment *adjustment = ptyxis_terminal_get_vadjustment (self);
++
++  if (adjustment == NULL)
++    return 0;
++
++  return (long) llround (gtk_adjustment_get_value (adjustment));
++}
++
++/* Mirrors VteTerminal::widget_size_allocate(): the grid is aligned inside the
++ * content area according to the xalign/yalign properties. */
++static void
++ptyxis_terminal_get_grid_origin (PtyxisTerminal *self,
++                                 long           *x,
++                                 long           *y)
++{
++  long cell_width = MAX (1, (long) self->cell_width);
++  long cell_height = MAX (1, (long) self->cell_height);
++  long cols = vte_terminal_get_column_count (VTE_TERMINAL (self));
++  long rows = vte_terminal_get_row_count (VTE_TERMINAL (self));
++  long rem_x = MAX (0, (long) gtk_widget_get_width (GTK_WIDGET (self)) - cols * cell_width);
++  long rem_y = MAX (0, (long) gtk_widget_get_height (GTK_WIDGET (self)) - rows * cell_height);
++  long lpad = 0;
++  long tpad = 0;
++
++  switch (vte_terminal_get_xalign (VTE_TERMINAL (self)))
++    {
++    case VTE_ALIGN_CENTER: lpad = rem_x / 2; break;
++    case VTE_ALIGN_END:    lpad = rem_x; break;
++    case VTE_ALIGN_START:
++    default:               lpad = 0; break;
++    }
++
++  switch (vte_terminal_get_yalign (VTE_TERMINAL (self)))
++    {
++    case VTE_ALIGN_CENTER: tpad = rem_y / 2; break;
++    case VTE_ALIGN_END:    tpad = rem_y; break;
++    case VTE_ALIGN_START:
++    default:               tpad = 0; break;
++    }
++
++  *x = lpad;
++  *y = tpad;
++}
++
++/* One row's text in VTE's absolute row space. */
++static char *
++ptyxis_terminal_extract_row (PtyxisTerminal *self,
++                             long            row)
++{
++  long cols = vte_terminal_get_column_count (VTE_TERMINAL (self));
++
++  if (cols <= 0)
++    return NULL;
++
++  return vte_terminal_get_text_range_format (VTE_TERMINAL (self),
++                                             VTE_FORMAT_TEXT,
++                                             row, 0, row, cols, NULL);
++}
++
++/*
++ * VTE numbers rows absolutely, from the oldest row still in the ring:
++ *
++ *   first_displayed_row = round(scroll_delta * cell_height) / cell_height
++ *   scroll_delta        = adjustment_value / cell_height + row_data->delta()
++ *   (Widget::vadjustment_value_changed(), widget.cc)
++ *
++ * On the primary screen delta stays 0 until the scrollback ring wraps, which is
++ * what our pixel maths used to assume.  On the ALTERNATE screen (micro, vim,
++ * less, mc, ...) the adjustment is pinned at 0 (no scrollback) while the
++ * absolute numbering keeps its offset, so `value / cell_height` alone is tens
++ * or hundreds of rows short — every selection and copy then misses entirely.
++ *
++ * VTE exposes neither first_displayed_row() nor delta, but rows below the ring
++ * extract as EMPTY text, so delta is the index of the first row that extracts
++ * non-empty (the binary search; a blank row only pushes the answer down, which
++ * the verification against the displayed text corrects).
++ */
++static long
++ptyxis_terminal_ring_delta (PtyxisTerminal *self)
++{
++  long rows = vte_terminal_get_row_count (VTE_TERMINAL (self));
++  long cols = vte_terminal_get_column_count (VTE_TERMINAL (self));
++  long cell_height = MAX (1, (long) self->cell_height);
++  long v = ptyxis_terminal_get_scroll_pixel (self) / cell_height;
++  long cursor_row = 0, lo, hi;
++  int  step;
++  g_autofree char *disp = NULL;
++  g_autofree char *probe = NULL;
++
++  if (rows <= 0 || cols <= 0)
++    return 0;
++
++  G_GNUC_BEGIN_IGNORE_DEPRECATIONS
++  disp = vte_terminal_get_text (VTE_TERMINAL (self), NULL, NULL, NULL);
++  G_GNUC_END_IGNORE_DEPRECATIONS
++
++  /* Exact, cheap check for the ordinary case: the visible rows are exactly
++   * where the adjustment says they are, i.e. nothing has been dropped yet.
++   * vte_terminal_get_text() is get_text(first_disp, 0, last_disp + 1, 0), i.e.
++   * ONE row past the visible area, so compare rows + 1 rows. */
++  probe = vte_terminal_get_text_range_format (VTE_TERMINAL (self),
++                                              VTE_FORMAT_TEXT,
++                                              v, 0, v + rows, cols, NULL);
++  if (disp != NULL && probe != NULL && g_strcmp0 (disp, probe) == 0)
++    return 0;
++
++  vte_terminal_get_cursor_position (VTE_TERMINAL (self), NULL, &cursor_row);
++
++  lo = 0;
++  hi = MAX (0, cursor_row - v);
++  while (lo < hi)
++    {
++      long mid = lo + (hi - lo) / 2;
++      g_autofree char *t = ptyxis_terminal_extract_row (self, mid);
++
++      if (t == NULL || *t == '\0')
++        lo = mid + 1;
++      else
++        hi = mid;
++    }
++
++  /* Blank rows above the first real content shift the answer down by a few
++   * rows; step back until the extraction really is the visible screen.  If it
++   * never matches, refuse rather than guess (delta 0 = old behaviour). */
++  for (step = 0; lo > 0 && step < 64; step++, lo--)
++    {
++      g_autofree char *t =
++        vte_terminal_get_text_range_format (VTE_TERMINAL (self),
++                                            VTE_FORMAT_TEXT,
++                                            v + lo, 0, v + lo + rows,
++                                            cols, NULL);
++
++      if (disp != NULL && t != NULL && g_strcmp0 (disp, t) == 0)
++        return lo;
++    }
++
++  return 0;
++}
++
++/* VTE's scroll_delta_pixel(): the adjustment value shifted by the ring offset.
++ * Everything that converts a row to a pixel (or back) must use this, never the
++ * raw adjustment value. */
++static long
++ptyxis_terminal_scroll_delta_pixel (PtyxisTerminal *self)
++{
++  long cell_height = MAX (1, (long) self->cell_height);
++
++  return ptyxis_terminal_get_scroll_pixel (self) +
++         self->row_offset * cell_height;
++}
++
++/* Mirrors VteTerminal::pixel_to_row()/grid_coords_from_view_coords(). */
++static void
++ptyxis_terminal_grid_from_pixel (PtyxisTerminal *self,
++                                 double          x,
++                                 double          y,
++                                 long           *row,
++                                 long           *col)
++{
++  long cell_width = MAX (1, (long) self->cell_width);
++  long cell_height = MAX (1, (long) self->cell_height);
++  long cols = vte_terminal_get_column_count (VTE_TERMINAL (self));
++  long rows = vte_terminal_get_row_count (VTE_TERMINAL (self));
++  long scroll_pixel = ptyxis_terminal_scroll_delta_pixel (self);
++  long first = scroll_pixel / cell_height;
++  long ox, oy;
++  long abs_row, abs_col;
++
++  ptyxis_terminal_get_grid_origin (self, &ox, &oy);
++
++  abs_row = (scroll_pixel + (long) (y - oy)) / cell_height;
++  abs_col = (long) (x - ox) / cell_width;
++
++  if (abs_row < first)
++    abs_row = first;
++  if (rows > 0 && abs_row > first + rows - 1)
++    abs_row = first + rows - 1;
++  if (abs_col < 0)
++    abs_col = 0;
++  if (cols > 0 && abs_col > cols - 1)
++    abs_col = cols - 1;
++
++  *row = abs_row;
++  *col = abs_col;
++}
++
++/* Mirrors VteTerminal::row_to_pixel(). */
++static void
++ptyxis_terminal_grid_to_pixel (PtyxisTerminal *self,
++                               long            row,
++                               long            col,
++                               double         *x,
++                               double         *y)
++{
++  long cell_width = MAX (1, (long) self->cell_width);
++  long cell_height = MAX (1, (long) self->cell_height);
++  long ox, oy;
++
++  ptyxis_terminal_get_grid_origin (self, &ox, &oy);
++
++  *x = ox + col * cell_width;
++  *y = oy + row * cell_height - ptyxis_terminal_scroll_delta_pixel (self);
++}
++
++static void
++ptyxis_terminal_normalize_selection (PtyxisTerminal *self)
++{
++  if (self->sel_end_row < self->sel_start_row ||
++      (self->sel_end_row == self->sel_start_row &&
++       self->sel_end_col < self->sel_start_col))
++    {
++      long row = self->sel_start_row;
++      long col = self->sel_start_col;
++
++      self->sel_start_row = self->sel_end_row;
++      self->sel_start_col = self->sel_end_col;
++      self->sel_end_row = row;
++      self->sel_end_col = col;
++    }
++}
++
++static gboolean
++ptyxis_terminal_has_selection (PtyxisTerminal *self)
++{
++  if (!self->sel_active)
++    return FALSE;
++
++  ptyxis_terminal_normalize_selection (self);
++
++  return self->sel_start_row != self->sel_end_row ||
++         self->sel_start_col != self->sel_end_col;
++}
++
++static gboolean
++ptyxis_terminal_point_in_selection (PtyxisTerminal *self,
++                                    double          x,
++                                    double          y)
++{
++  long row, col;
++
++  if (!ptyxis_terminal_has_selection (self))
++    return FALSE;
++
++  ptyxis_terminal_grid_from_pixel (self, x, y, &row, &col);
++
++  if (row < self->sel_start_row || row > self->sel_end_row)
++    return FALSE;
++
++  if (self->sel_start_row == self->sel_end_row)
++    return col >= self->sel_start_col && col < self->sel_end_col;
++  if (row == self->sel_start_row)
++    return col >= self->sel_start_col;
++  if (row == self->sel_end_row)
++    return col < self->sel_end_col;
++
++  return TRUE;
++}
++
++static void
++ptyxis_terminal_clear_selection (PtyxisTerminal *self)
++{
++  if (!self->sel_active)
++    return;
++
++  self->sel_active = FALSE;
++  gtk_widget_queue_draw (GTK_WIDGET (self));
++}
++
++/* VteTerminal::commit -- emitted for every byte VTE sends to the child, i.e.
++ * for typing, the on-screen keyboard, the paste action and middle-click paste.
++ *
++ * VTE dismisses its own selection as soon as input reaches the child (and when
++ * an insertion changes the selected text); our touch marking must do the same,
++ * because while it is up the marked cells are drawn INVERTED.  Pasting into a
++ * still-marked region is exactly how it looked wrong on the pad: a marking was
++ * left up, the paste landed inside it, and the freshly pasted text was rendered
++ * inverted.  Our own synthetic tap click (mouse-report bytes) sets
++ * ->feeding_synthetic, so a tap inside a marking still keeps it, as designed. */
++static void
++ptyxis_terminal_commit_cb (VteTerminal *terminal,
++                           const char  *text,
++                           guint        size,
++                           gpointer     data)
++{
++  PtyxisTerminal *self = PTYXIS_TERMINAL (data);
++
++  if (!self->feeding_synthetic)
++    ptyxis_terminal_clear_selection (self);
++}
++
++static void
++ptyxis_terminal_get_handle_positions (PtyxisTerminal *self,
++                                      double         *start_x,
++                                      double         *start_y,
++                                      double         *end_x,
++                                      double         *end_y)
++{
++  long cell_height = MAX (1, (long) self->cell_height);
++  double x, y;
++
++  ptyxis_terminal_normalize_selection (self);
++
++  ptyxis_terminal_grid_to_pixel (self, self->sel_start_row, self->sel_start_col, &x, &y);
++  *start_x = x;
++  *start_y = y + cell_height / 2.0;
++
++  ptyxis_terminal_grid_to_pixel (self, self->sel_end_row, self->sel_end_col, &x, &y);
++  *end_x = x;
++  *end_y = y + cell_height / 2.0;
++}
++
++static gboolean
++ptyxis_terminal_cell_is_word (PtyxisTerminal *self,
++                              long            row,
++                              long            col)
++{
++  g_autofree char *cell = NULL;
++  gunichar ch;
++
++  cell = vte_terminal_get_text_range_format (VTE_TERMINAL (self),
++                                             VTE_FORMAT_TEXT,
++                                             row, col, row, col + 1,
++                                             NULL);
++
++  if (cell == NULL || cell[0] == '\0' || cell[0] == '\n' || cell[0] == ' ')
++    return FALSE;
++
++  ch = g_utf8_get_char (cell);
++
++  return g_unichar_isalnum (ch) || ch == '_' || ch == '-' || ch == '.' ||
++         ch == '/' || ch == '~' || ch == '$' || ch == ':';
++}
++
++static void
++ptyxis_terminal_select_word_at (PtyxisTerminal *self,
++                                long            row,
++                                long            col)
++{
++  long cols = vte_terminal_get_column_count (VTE_TERMINAL (self));
++  long start = col;
++  long end = col;
++
++  if (cols <= 0)
++    return;
++
++  self->sel_start_row = self->sel_end_row = row;
++
++  if (!ptyxis_terminal_cell_is_word (self, row, col))
++    {
++      self->sel_start_col = col;
++      self->sel_end_col = MIN (col + 1, cols);
++      return;
++    }
++
++  while (start > 0 && ptyxis_terminal_cell_is_word (self, row, start - 1))
++    start--;
++  while (end + 1 < cols && ptyxis_terminal_cell_is_word (self, row, end + 1))
++    end++;
++
++  self->sel_start_col = start;
++  self->sel_end_col = MIN (end + 1, cols);
++}
++
++static void
++ptyxis_terminal_copy_selection (PtyxisTerminal *self)
++{
++  GdkClipboard *clipboard;
++  g_autofree char *text = NULL;
++  gsize length = 0;
++
++  if (!ptyxis_terminal_has_selection (self))
++    return;
++
++  text = vte_terminal_get_text_range_format (VTE_TERMINAL (self),
++                                             VTE_FORMAT_TEXT,
++                                             self->sel_start_row,
++                                             self->sel_start_col,
++                                             self->sel_end_row,
++                                             self->sel_end_col,
++                                             &length);
++
++  if (ptyxis_str_empty0 (text))
++    return;
++
++  clipboard = gtk_widget_get_clipboard (GTK_WIDGET (self));
++  gdk_clipboard_set_text (clipboard, text);
++
++  ptyxis_terminal_toast (self, 1, _("Copied to clipboard"));
++}
++
++static void
++ptyxis_terminal_draw_handle (GtkSnapshot   *snapshot,
++                             double         cx,
++                             double         cy,
++                             const GdkRGBA *fg,
++                             const GdkRGBA *bg)
++{
++  const double r = TOUCH_HANDLE_RADIUS;
++  graphene_rect_t bounds;
++  GskRoundedRect rounded;
++  double outer = r + 2;
++
++  bounds = GRAPHENE_RECT_INIT (cx - outer, cy - outer, 2 * outer, 2 * outer);
++  rounded.bounds = bounds;
++  rounded.corner[0] = rounded.corner[1] = rounded.corner[2] = rounded.corner[3] =
++    (graphene_size_t) { outer, outer };
++  gtk_snapshot_push_rounded_clip (snapshot, &rounded);
++  gtk_snapshot_append_color (snapshot, bg, &bounds);
++  gtk_snapshot_pop (snapshot);
++
++  bounds = GRAPHENE_RECT_INIT (cx - r, cy - r, 2 * r, 2 * r);
++  rounded.bounds = bounds;
++  rounded.corner[0] = rounded.corner[1] = rounded.corner[2] = rounded.corner[3] =
++    (graphene_size_t) { r, r };
++  gtk_snapshot_push_rounded_clip (snapshot, &rounded);
++  gtk_snapshot_append_color (snapshot, fg, &bounds);
++  gtk_snapshot_pop (snapshot);
++}
++
++static gboolean
++ptyxis_terminal_renderer_supports_blend (PtyxisTerminal *self)
++{
++  GtkNative *native = gtk_widget_get_native (GTK_WIDGET (self));
++  GskRenderer *renderer = native != NULL ? gtk_native_get_renderer (native) : NULL;
++
++  if (renderer == NULL)
++    return TRUE;
++
++  /* The Cairo renderer does not implement blend nodes and would drop ours
++   * wholesale (which would blank the terminal area), so detect it. */
++  return !g_str_has_suffix (G_OBJECT_TYPE_NAME (renderer), "CairoRenderer");
++}
++
++static void
++ptyxis_terminal_snapshot_selection (PtyxisTerminal *self,
++                                    GtkSnapshot    *snapshot,
++                                    GskRenderNode  *terminal_node)
++{
++  const PtyxisPaletteFace *face = NULL;
++  GdkRGBA fg = { 1, 1, 1, 1 };
++  GdkRGBA bg = { 0, 0, 0, 1 };
++  GdkRGBA white = { 1, 1, 1, 1 };
++  long cell_width, cell_height, rows, cols;
++  long scroll_pixel;
++  long sr, sc, er, ec;
++  long ox, oy;
++  double start_x, start_y, end_x, end_y;
++
++  /* Nothing was drawn this frame (e.g. the blinking-cursor-off frame). */
++  if (terminal_node == NULL)
++    return;
++
++  if (self->palette != NULL)
++    {
++      gboolean dark = adw_style_manager_get_dark (adw_style_manager_get_default ());
++
++      face = ptyxis_palette_get_face (self->palette, dark);
++    }
++
++  if (face != NULL)
++    fg = face->foreground;
++
++  /* The background VTE actually draws on; needed because ptyxis drops VTE's
++   * background colour node, so the frame node alone is transparent there. */
++  vte_terminal_get_color_background_for_draw (VTE_TERMINAL (self), &bg);
++
++  if (!self->sel_active)
++    {
++      gtk_snapshot_append_node (snapshot, terminal_node);
++      return;
++    }
++
++  cell_width = MAX (1, (long) self->cell_width);
++  cell_height = MAX (1, (long) self->cell_height);
++  rows = vte_terminal_get_row_count (VTE_TERMINAL (self));
++  cols = vte_terminal_get_column_count (VTE_TERMINAL (self));
++  scroll_pixel = ptyxis_terminal_scroll_delta_pixel (self);
++  ptyxis_terminal_get_grid_origin (self, &ox, &oy);
++
++  sr = self->sel_start_row;
++  sc = self->sel_start_col;
++  er = self->sel_end_row;
++  ec = self->sel_end_col;
++
++  if (er < sr || (er == sr && ec < sc))
++    {
++      long t;
++
++      t = sr; sr = er; er = t;
++      t = sc; sc = ec; ec = t;
++    }
++
++  if (rows <= 0 || cols <= 0 || (er == sr && ec <= sc) ||
++      !ptyxis_terminal_renderer_supports_blend (self))
++    {
++      gtk_snapshot_append_node (snapshot, terminal_node);
++    }
++  else
++    {
++      /* gtk_snapshot_push_blend() takes two images: the BOTTOM image is
++       * recorded until the first pop, the TOP image until the second one.
++       * The result is a DIFFERENCE blend, and blending white against a pixel
++       * yields its colour inverse, so the marked cells end up inverted while
++       * the glyphs stay readable.
++       *
++       * The bottom image must include the terminal background (ptyxis drops
++       * VTE's own background colour node), otherwise the inversion would be
++       * computed against transparency and the region would come out solid
++       * white. */
++      gtk_snapshot_push_blend (snapshot, GSK_BLEND_MODE_DIFFERENCE);
++
++      gtk_snapshot_append_color (snapshot, &bg,
++                                 &GRAPHENE_RECT_INIT (0, 0,
++                                                      gtk_widget_get_width (GTK_WIDGET (self)),
++                                                      gtk_widget_get_height (GTK_WIDGET (self))));
++      gtk_snapshot_append_node (snapshot, terminal_node);
++      gtk_snapshot_pop (snapshot);
++
++      for (long row = sr; row <= er; row++)
++        {
++          long c0, c1;
++          double top;
++          graphene_rect_t rect;
++
++          /* Exact VTE mapping (row_to_pixel()): row * cell_height minus the
++           * pixel scroll offset.  Using (row - first) * cell_height instead
++           * would be wrong whenever the view sits on a fractional row (pixel
++           * scrolling), off by up to one cell. */
++          top = oy + row * cell_height - scroll_pixel;
++
++          if (top >= gtk_widget_get_height (GTK_WIDGET (self)) ||
++              top + cell_height <= 0)
++            continue;
++
++          if (row == sr && row == er) { c0 = sc; c1 = ec; }
++          else if (row == sr)         { c0 = sc; c1 = cols; }
++          else if (row == er)         { c0 = 0;  c1 = ec; }
++          else                        { c0 = 0;  c1 = cols; }
++
++          if (c1 <= c0)
++            continue;
++
++          rect = GRAPHENE_RECT_INIT (ox + c0 * cell_width,
++                                     top,
++                                     (c1 - c0) * cell_width,
++                                     cell_height);
++          gtk_snapshot_append_color (snapshot, &white, &rect);
++        }
++
++      gtk_snapshot_pop (snapshot);
++    }
++
++  ptyxis_terminal_get_handle_positions (self, &start_x, &start_y, &end_x, &end_y);
++  ptyxis_terminal_draw_handle (snapshot, start_x, start_y, &fg, &bg);
++  ptyxis_terminal_draw_handle (snapshot, end_x, end_y, &fg, &bg);
++}
++
++static gboolean
++ptyxis_terminal_fling_cb (gpointer data)
++{
++  PtyxisTerminal *self = data;
++  GtkAdjustment *adjustment;
++  double velocity;
++  double lower;
++  double max_value;
++  double value;
++
++  self->fling_source = 0;
++
++  adjustment = ptyxis_terminal_get_vadjustment (self);
++
++  if (adjustment == NULL)
++    {
++      self->fling_velocity = 0;
++      return G_SOURCE_REMOVE;
++    }
++
++  velocity = self->fling_velocity * TOUCH_FLING_DECAY;
++
++  if (fabs (velocity) < TOUCH_FLING_MIN)
++    {
++      self->fling_velocity = 0;
++      return G_SOURCE_REMOVE;
++    }
++
++  lower = gtk_adjustment_get_lower (adjustment);
++  max_value = MAX (lower,
++                   gtk_adjustment_get_upper (adjustment) -
++                   gtk_adjustment_get_page_size (adjustment));
++  value = gtk_adjustment_get_value (adjustment) +
++          velocity * TOUCH_FLING_TIMEOUT_MSEC;
++
++  if (value <= lower || value >= max_value)
++    {
++      self->fling_velocity = 0;
++      return G_SOURCE_REMOVE;
++    }
++
++  self->fling_velocity = velocity;
++  gtk_adjustment_set_value (adjustment, CLAMP (value, lower, max_value));
++
++  self->fling_source = g_timeout_add (TOUCH_FLING_TIMEOUT_MSEC,
++                                      ptyxis_terminal_fling_cb,
++                                      self);
++
++  return G_SOURCE_REMOVE;
++}
++
++static gboolean
++ptyxis_terminal_long_press_cb (gpointer data)
++{
++  PtyxisTerminal *self = data;
++  long row, col;
++
++  self->touch_long_press_id = 0;
++
++  if (self->touch_mode != PTYXIS_TOUCH_NONE || self->touch_sequence == NULL)
++    return G_SOURCE_REMOVE;
++
++  ptyxis_terminal_grid_from_pixel (self,
++                                   self->touch_start_x,
++                                   self->touch_start_y,
++                                   &row, &col);
++
++  /* A long press always starts a text selection (the word under the finger). */
++  self->touch_mode = PTYXIS_TOUCH_SELECT;
++  self->sel_active = TRUE;
++  ptyxis_terminal_select_word_at (self, row, col);
++  gtk_widget_queue_draw (GTK_WIDGET (self));
++
++  return G_SOURCE_REMOVE;
++}
++
++static void
++ptyxis_terminal_update_dragged_handle (PtyxisTerminal *self,
++                                       double          x,
++                                       double          y)
++{
++  long row, col;
++
++  ptyxis_terminal_grid_from_pixel (self, x, y, &row, &col);
++
++  if (self->touch_mode == PTYXIS_TOUCH_DRAG_START)
++    {
++      if (row < self->sel_end_row ||
++          (row == self->sel_end_row && col <= self->sel_end_col))
++        {
++          self->sel_start_row = row;
++          self->sel_start_col = col;
++        }
++      else
++        {
++          self->sel_start_row = self->sel_end_row;
++          self->sel_start_col = self->sel_end_col;
++          self->sel_end_row = row;
++          self->sel_end_col = col;
++          self->touch_mode = PTYXIS_TOUCH_DRAG_END;
++        }
++    }
++  else
++    {
++      if (row > self->sel_start_row ||
++          (row == self->sel_start_row && col >= self->sel_start_col))
++        {
++          self->sel_end_row = row;
++          self->sel_end_col = col;
++        }
++      else
++        {
++          self->sel_end_row = self->sel_start_row;
++          self->sel_end_col = self->sel_start_col;
++          self->sel_start_row = row;
++          self->sel_start_col = col;
++          self->touch_mode = PTYXIS_TOUCH_DRAG_START;
++        }
++    }
++
++  gtk_widget_queue_draw (GTK_WIDGET (self));
++}
++
++/* GdkEvent positions are in SURFACE coordinates and a legacy controller does
++ * not receive GTK's widget translation, so do it here (this mirrors
++ * translate_event_coordinates() in gtk/gtkwidget.c). */
++static gboolean
++ptyxis_terminal_event_position (PtyxisTerminal *self,
++                                GdkEvent       *event,
++                                double         *x,
++                                double         *y)
++{
++  GtkWidget *widget = GTK_WIDGET (self);
++  GtkRoot *root = gtk_widget_get_root (widget);
++  graphene_point_t p;
++  double px, py;
++  double nx = 0;
++  double ny = 0;
++
++  if (!gdk_event_get_position (event, &px, &py))
++    return FALSE;
++
++  if (root != NULL)
++    {
++      if (GTK_IS_NATIVE (root))
++        gtk_native_get_surface_transform (GTK_NATIVE (root), &nx, &ny);
++
++      p.x = px - nx;
++      p.y = py - ny;
++
++      if (!gtk_widget_compute_point (GTK_WIDGET (root), widget, &p, &p))
++        return FALSE;
++    }
++  else
++    {
++      p.x = px;
++      p.y = py;
++    }
++
++  *x = p.x;
++  *y = p.y;
++
++  return TRUE;
++}
++
++/* Signed auto-scroll speed (px per ms) for the finger's current position:
++ * negative scrolls towards older lines (top edge), positive towards newer
++ * ones (bottom edge), 0 inside the middle of the view. */
++static double
++ptyxis_terminal_autoscroll_speed (PtyxisTerminal *self)
++{
++  double height = gtk_widget_get_height (GTK_WIDGET (self));
++  double cell_height = MAX (1, (long) self->cell_height);
++  double band;
++  double max_speed;
++  double depth;
++
++  if (height <= 0)
++    return 0;
++
++  band = MAX (TOUCH_AUTOSCROLL_MIN_PX, height * TOUCH_AUTOSCROLL_BAND);
++  max_speed = TOUCH_AUTOSCROLL_MAX_LINES_PER_SEC * cell_height / 1000.0;
++
++  if (self->touch_last_y < band)
++    depth = (band - self->touch_last_y) / band;          /* 1 at/above the edge */
++  else if (self->touch_last_y > height - band)
++    depth = -((self->touch_last_y - (height - band)) / band);
++  else
++    return 0;
++
++  depth = CLAMP (depth, -1.0, 1.0);
++
++  return -depth * max_speed;
++}
++
++static gboolean
++ptyxis_terminal_autoscroll_cb (gpointer data)
++{
++  PtyxisTerminal *self = data;
++  GtkAdjustment *adjustment;
++  double speed, lower, max_value, value;
++
++  self->autoscroll_source = 0;
++
++  if (self->touch_mode != PTYXIS_TOUCH_SELECT &&
++      self->touch_mode != PTYXIS_TOUCH_DRAG_START &&
++      self->touch_mode != PTYXIS_TOUCH_DRAG_END)
++    return G_SOURCE_REMOVE;
++
++  speed = ptyxis_terminal_autoscroll_speed (self);
++
++  if (speed == 0)
++    return G_SOURCE_REMOVE;
++
++  if ((adjustment = ptyxis_terminal_get_vadjustment (self)) == NULL)
++    return G_SOURCE_REMOVE;
++
++  lower = gtk_adjustment_get_lower (adjustment);
++  max_value = MAX (lower,
++                   gtk_adjustment_get_upper (adjustment) -
++                   gtk_adjustment_get_page_size (adjustment));
++  value = CLAMP (gtk_adjustment_get_value (adjustment) + speed * TOUCH_AUTOSCROLL_TICK_MSEC,
++                 lower, max_value);
++
++  if (value == gtk_adjustment_get_value (adjustment))
++    return G_SOURCE_REMOVE;  /* We reached an end of the scrollback. */
++
++  gtk_adjustment_set_value (adjustment, value);
++
++  /* Move the dragged end of the region with the finger's (unmoved) position at
++   * the new scroll offset, so the selection keeps growing while we scroll. */
++  if (self->touch_mode == PTYXIS_TOUCH_SELECT)
++    {
++      long row, col;
++
++      ptyxis_terminal_grid_from_pixel (self, self->touch_last_x, self->touch_last_y, &row, &col);
++      self->sel_end_row = row;
++      self->sel_end_col = col;
++      gtk_widget_queue_draw (GTK_WIDGET (self));
++    }
++  else
++    {
++      ptyxis_terminal_update_dragged_handle (self, self->touch_last_x, self->touch_last_y);
++    }
++
++  self->autoscroll_source = g_timeout_add (TOUCH_AUTOSCROLL_TICK_MSEC,
++                                           ptyxis_terminal_autoscroll_cb,
++                                           self);
++
++  return G_SOURCE_REMOVE;
++}
++
++static void
++ptyxis_terminal_update_autoscroll (PtyxisTerminal *self)
++{
++  if (ptyxis_terminal_autoscroll_speed (self) == 0.0)
++    {
++      g_clear_handle_id (&self->autoscroll_source, g_source_remove);
++      return;
++    }
++
++  if (self->autoscroll_source == 0)
++    self->autoscroll_source = g_timeout_add (TOUCH_AUTOSCROLL_TICK_MSEC,
++                                             ptyxis_terminal_autoscroll_cb,
++                                             self);
++}
++
++/* Whether the application running in the terminal wants mouse events (micro,
++ * vim, less, ...).  VTE's mouse-tracking mode is not public API, but the widget
++ * cursor it derives from it is: apply_mouse_cursor() selects VTE_MOUSING_CURSOR
++ * ("default") while mouse tracking is on and VTE_DEFAULT_CURSOR ("text") -- or
++ * nothing, before the first mouse event -- when it is off.  Anything else is
++ * an override (autohide's "none", a URL hover's "pointer"); see
++ * ptyxis_terminal_mouse_tracking_enabled(). */
++static const char *
++ptyxis_terminal_cursor_name (PtyxisTerminal *self)
++{
++  GdkCursor *cursor = gtk_widget_get_cursor (GTK_WIDGET (self));
++
++  return cursor != NULL ? gdk_cursor_get_name (cursor) : NULL;
++}
++
++/* The result is sampled once per gesture at GDK_TOUCH_BEGIN, both because it
++ * is not free (the ambiguous path toggles a VTE property twice) and because it
++ * is read on every drag update. */
++static gboolean
++ptyxis_terminal_mouse_tracking_enabled (PtyxisTerminal *self)
++{
++  return self->mouse_tracking;
++}
++
++static gboolean
++ptyxis_terminal_detect_mouse_tracking (PtyxisTerminal *self)
++{
++  const char *name = ptyxis_terminal_cursor_name (self);
++  gboolean result = FALSE;
++
++  if (name == NULL || g_strcmp0 (name, "text") == 0)
++    return FALSE;                   /* unset / plain default: definitely off */
++
++  if (g_strcmp0 (name, TOUCH_MOUSE_CURSOR_NAME) == 0)
++    return TRUE;                    /* VTE's mousing cursor: definitely on */
++
++  /* Ambiguous.  "none" means the pointer is autohidden (a non-modifier key was
++   * pressed with the pointer over the terminal -- the norm on this pad, which
++   * has a pogo touchpad: after typing, EVERY tap found no mouse mode and did
++   * nothing).  "pointer" means a URL/regex hover.  VTE recomputes the cursor
++   * from the mode when the autohide setting toggles (set_mouse_autohide() ->
++   * apply_mouse_cursor()), so read it again with autohide off and restore the
++   * setting right away.  If the hover is what hides it the answer is STILL
++   * ambiguous -- then no click is sent, never a wrong one. */
++  {
++    VteTerminal *term = VTE_TERMINAL (self);
++    gboolean autohide = vte_terminal_get_mouse_autohide (term);
++    const char *probed;
++
++    vte_terminal_set_mouse_autohide (term, !autohide);
++    probed = ptyxis_terminal_cursor_name (self);
++    result = probed != NULL && g_strcmp0 (probed, TOUCH_MOUSE_CURSOR_NAME) == 0;
++    vte_terminal_set_mouse_autohide (term, autohide);
++  }
++
++  return result;
++}
++
++/* In unpatched ptyxis a finger tap reaches VteTerminal as a left mouse click
++ * (GtkGestureClick maps touch to button 1); with mouse tracking on, VTE
++ * forwards it to the application and its text cursor follows the finger.  We
++ * consume every touch event before VTE's gestures can see it (that is what
++ * makes finger scrolling possible), so a plain tap has to be turned back into
++ * that click here: a press and a release of button 1, in the xterm SGR (1006)
++ * encoding that modern mouse-aware applications enable (micro/tcell emits
++ * ?1000h/?1002h/?1006h, vim emits ?1006h too). */
++static void
++ptyxis_terminal_send_tap_click (PtyxisTerminal *self,
++                                double          x,
++                                double          y)
++{
++  GtkAdjustment *adjustment;
++  long row, col, first_row, view_row, cell_height;
++  char buf[64];
++  int len;
++
++  if (!ptyxis_terminal_mouse_tracking_enabled (self))
++    return;
++
++  adjustment = ptyxis_terminal_get_vadjustment (self);
++  if (adjustment == NULL)
++    return;
++
++  /* Mirror VteTerminal::feed_mouse_event(), which refuses to send events for
++   * scrollback contents (bug 755187): clicking history is not a click.  The
++   * view is "live" only while the adjustment sits at its lower end. */
++  if (gtk_adjustment_get_value (adjustment) >
++      MAX (gtk_adjustment_get_lower (adjustment),
++           gtk_adjustment_get_upper (adjustment) -
++           gtk_adjustment_get_page_size (adjustment)) + 0.5)
++    return;
++
++  ptyxis_terminal_grid_from_pixel (self, x, y, &row, &col);
++
++  cell_height = MAX (1, (long) self->cell_height);
++  first_row = MAX (0, ptyxis_terminal_scroll_delta_pixel (self) / cell_height);
++  view_row = row - first_row;   /* 0-based row inside the visible grid */
++
++  len = g_snprintf (buf, sizeof buf,
++                    "\033[<0;%ld;%ldM\033[<0;%ld;%ldm",
++                    col + 1, view_row + 1, col + 1, view_row + 1);
++  /* Our own click must not dismiss a touch marking (a tap inside the marked
++   * region keeps it by design) -- see ptyxis_terminal_commit_cb(). */
++  self->feeding_synthetic = TRUE;
++  vte_terminal_feed_child (VTE_TERMINAL (self), buf, len);
++  self->feeding_synthetic = FALSE;
++}
++
++/* A finger drag in a mouse-tracking application: instead of moving the
++ * terminal's own viewport (which is impossible on the alternate screen, where
++ * micro/vim/less/... live) forward the travel as mouse wheel notches so the
++ * application scrolls itself — VteTerminal::widget_mouse_scroll() does the same
++ * for a real wheel.  `dy` is (last_y - y): a finger moving up gives dy > 0 and
++ * must scroll DOWN, i.e. wheel button 5 (xterm SGR encodes the wheels as
++ * cb 64/65). */
++static void
++ptyxis_terminal_forward_wheel (PtyxisTerminal *self,
++                               double          dy,
++                               double          x,
++                               double          y)
++{
++  long row = 0, col = 0, first_row, view_row, cell_height;
++  double step;
++
++  cell_height = MAX (1, (long) self->cell_height);
++  step = (double) cell_height * TOUCH_WHEEL_STEP_CELLS;
++
++  self->wheel_accum += dy;
++
++  if (fabs (self->wheel_accum) < step)
++    return;
++
++  ptyxis_terminal_grid_from_pixel (self, x, y, &row, &col);
++
++  first_row = MAX (0, ptyxis_terminal_scroll_delta_pixel (self) / cell_height);
++  view_row = row - first_row;   /* 0-based row inside the visible grid */
++
++  while (fabs (self->wheel_accum) >= step)
++    {
++      gboolean down = self->wheel_accum > 0;
++      char buf[48];
++      int len;
++
++      len = g_snprintf (buf, sizeof buf, "\033[<%d;%ld;%ldM",
++                        down ? 65 : 64, col + 1, view_row + 1);
++      /* Like the tap click, this is OUR synthetic input: a scroll must NOT
++       * dismiss a touch marking (see ptyxis_terminal_commit_cb()). */
++      self->feeding_synthetic = TRUE;
++      vte_terminal_feed_child (VTE_TERMINAL (self), buf, len);
++      self->feeding_synthetic = FALSE;
++
++      self->wheel_accum += down ? -step : step;
++    }
++}
++
++static gboolean
++ptyxis_terminal_touch_event_cb (GtkEventControllerLegacy *controller,
++                                GdkEvent                 *event,
++                                PtyxisTerminal           *self)
++{
++  GdkEventType type = gdk_event_get_event_type (event);
++  GdkEventSequence *sequence;
++  double x, y;
++
++  g_assert (PTYXIS_IS_TERMINAL (self));
++
++  if (type != GDK_TOUCH_BEGIN && type != GDK_TOUCH_UPDATE &&
++      type != GDK_TOUCH_END && type != GDK_TOUCH_CANCEL)
++    return GDK_EVENT_PROPAGATE;
++
++  sequence = gdk_event_get_event_sequence (event);
++
++  if (type == GDK_TOUCH_BEGIN)
++    {
++      if (self->touch_sequence != NULL)
++        return GDK_EVENT_STOP;  /* Ignore a second finger. */
++      self->touch_sequence = sequence;
++    }
++  else if (self->touch_sequence == NULL || self->touch_sequence != sequence)
++    {
++      return GDK_EVENT_PROPAGATE;
++    }
++
++  if (!ptyxis_terminal_event_position (self, event, &x, &y))
++    {
++      x = self->touch_last_x;
++      y = self->touch_last_y;
++    }
++
++  switch ((int) type)
++    {
++    case GDK_TOUCH_BEGIN:
++      {
++        double start_x, start_y, end_x, end_y;
++
++        g_clear_handle_id (&self->fling_source, g_source_remove);
++        g_clear_handle_id (&self->autoscroll_source, g_source_remove);
++        self->fling_velocity = 0;
++        self->touch_start_x = self->touch_last_x = x;
++        self->touch_start_y = self->touch_last_y = y;
++        self->touch_last_time = g_get_monotonic_time ();
++        self->touch_mode = PTYXIS_TOUCH_NONE;
++        /* VTE's absolute row space (see ptyxis_terminal_ring_delta()).  Sample
++         * it once per gesture so every pixel/row conversion below agrees. */
++        self->row_offset = ptyxis_terminal_ring_delta (self);
++        self->wheel_accum = 0;
++        self->mouse_tracking = ptyxis_terminal_detect_mouse_tracking (self);
++        /* A touch that neither moves nor turns into a long press is a tap, and
++         * only a tap OUTSIDE the marked region dismisses it (scrolling, or a
++         * long press, must keep it).  Decide that on release. */
++        self->tap_pending = !self->sel_active ?
++                              FALSE :
++                              !ptyxis_terminal_point_in_selection (self, x, y);
++
++        if (self->sel_active)
++          {
++            ptyxis_terminal_get_handle_positions (self,
++                                                  &start_x, &start_y,
++                                                  &end_x, &end_y);
++
++            if (hypot (x - start_x, y - start_y) <= TOUCH_HANDLE_GRAB)
++              {
++                self->touch_mode = PTYXIS_TOUCH_DRAG_START;
++                self->tap_pending = FALSE;
++                break;
++              }
++            if (hypot (x - end_x, y - end_y) <= TOUCH_HANDLE_GRAB)
++              {
++                self->touch_mode = PTYXIS_TOUCH_DRAG_END;
++                self->tap_pending = FALSE;
++                break;
++              }
++          }
++
++        self->touch_long_press_id =
++          g_timeout_add (TOUCH_LONG_PRESS_MSEC,
++                         ptyxis_terminal_long_press_cb,
++                         self);
++      }
++      break;
++
++    case GDK_TOUCH_UPDATE:
++      switch (self->touch_mode)
++        {
++        case PTYXIS_TOUCH_DRAG_START:
++        case PTYXIS_TOUCH_DRAG_END:
++          ptyxis_terminal_update_dragged_handle (self, x, y);
++          break;
++
++        case PTYXIS_TOUCH_SELECT:
++          {
++            long row, col;
++
++            ptyxis_terminal_grid_from_pixel (self, x, y, &row, &col);
++            self->sel_end_row = row;
++            self->sel_end_col = col;
++            gtk_widget_queue_draw (GTK_WIDGET (self));
++          }
++          break;
++
++        case PTYXIS_TOUCH_SCROLL:
++          {
++            gint64 now = g_get_monotonic_time ();
++            double dt_ms = (now - self->touch_last_time) / 1000.0;
++            double dy = self->touch_last_y - y;
++
++            if (dt_ms < 1.0)
++              dt_ms = 1.0;
++            else if (dt_ms > 100.0)
++              dt_ms = 100.0;    /* a pause means the finger stopped */
++
++            /* Speed estimate in px/ms, weighted towards the newest sample. */
++            self->fling_velocity = 0.75 * (dy / dt_ms) + 0.25 * self->fling_velocity;
++            self->touch_last_time = now;
++
++            if (ptyxis_terminal_mouse_tracking_enabled (self))
++              {
++                /* The application owns the content, and on the alternate
++                 * screen there is no scrollback to move anyway, so hand the
++                 * drag to it as mouse wheel notches. */
++                ptyxis_terminal_forward_wheel (self, dy, x, y);
++              }
++            else
++              {
++                GtkAdjustment *adjustment = ptyxis_terminal_get_vadjustment (self);
++                double gain = CLAMP (1.0 + fabs (self->fling_velocity) * TOUCH_SCROLL_GAIN_PER_PX,
++                                     1.0, TOUCH_SCROLL_GAIN_MAX);
++
++                if (adjustment != NULL)
++                  {
++                    double lower = gtk_adjustment_get_lower (adjustment);
++                    double max_value = MAX (lower,
++                                            gtk_adjustment_get_upper (adjustment) -
++                                            gtk_adjustment_get_page_size (adjustment));
++
++                    gtk_adjustment_set_value (adjustment,
++                                              CLAMP (gtk_adjustment_get_value (adjustment) + dy * gain,
++                                                     lower, max_value));
++                  }
++              }
++          }
++          break;
++
++        case PTYXIS_TOUCH_NONE:
++        default:
++          if (fabs (x - self->touch_start_x) > TOUCH_MOVE_THRESHOLD ||
++              fabs (y - self->touch_start_y) > TOUCH_MOVE_THRESHOLD)
++            {
++              g_clear_handle_id (&self->touch_long_press_id, g_source_remove);
++              self->touch_mode = PTYXIS_TOUCH_SCROLL;
++              self->tap_pending = FALSE;
++              self->fling_velocity = 0;
++            }
++          break;
++        }
++
++      self->touch_last_x = x;
++      self->touch_last_y = y;
++
++      if (self->touch_mode == PTYXIS_TOUCH_SELECT ||
++          self->touch_mode == PTYXIS_TOUCH_DRAG_START ||
++          self->touch_mode == PTYXIS_TOUCH_DRAG_END)
++        ptyxis_terminal_update_autoscroll (self);
++      break;
++
++    case GDK_TOUCH_END:
++    case GDK_TOUCH_CANCEL:
++    default:
++      {
++        PtyxisTouchMode mode = self->touch_mode;
++
++        g_clear_handle_id (&self->touch_long_press_id, g_source_remove);
++        g_clear_handle_id (&self->autoscroll_source, g_source_remove);
++
++        if (type == GDK_TOUCH_END)
++          {
++            if (mode == PTYXIS_TOUCH_DRAG_START ||
++                mode == PTYXIS_TOUCH_DRAG_END ||
++                mode == PTYXIS_TOUCH_SELECT)
++              {
++                ptyxis_terminal_copy_selection (self);
++                gtk_widget_queue_draw (GTK_WIDGET (self));
++              }
++            else if (mode == PTYXIS_TOUCH_SCROLL &&
++                     fabs (self->fling_velocity) >= TOUCH_FLING_MIN &&
++                     !ptyxis_terminal_mouse_tracking_enabled (self))
++              {
++                /* Throw the content: a small gain, then exponential decay.
++                 * Not in mouse mode: there the scrolling belongs to the
++                 * application, which has no kinetic phase to drive. */
++                self->fling_velocity *= TOUCH_FLING_GAIN;
++                self->fling_source =
++                  g_timeout_add (TOUCH_FLING_TIMEOUT_MSEC,
++                                 ptyxis_terminal_fling_cb,
++                                 self);
++              }
++            else if (mode == PTYXIS_TOUCH_NONE)
++              {
++                /* A plain tap is ALWAYS a click when the application wants
++                 * mouse events, so tapping sets its text cursor exactly as in
++                 * unpatched ptyxis — including right after a marking was made
++                 * (gating this on the marking left every tap after a long press
++                 * doing nothing but dismissing it).  In addition, a tap outside
++                 * the marked region dismisses the marking. */
++                ptyxis_terminal_send_tap_click (self, x, y);
++
++                if (self->tap_pending && self->sel_active)
++                  ptyxis_terminal_clear_selection (self);
++              }
++          }
++
++        self->tap_pending = FALSE;
++        /* Keep the velocity only while a fling is actually running. */
++        if (self->fling_source == 0)
++          self->fling_velocity = 0;
++        self->touch_mode = PTYXIS_TOUCH_NONE;
++        self->touch_sequence = NULL;
++      }
++      break;
++    }
++
++  return GDK_EVENT_STOP;
++}
++
+ /*
+  * ptyxis_terminal_rewrite_snapshot:
+  *
+@@ -1040,24 +2395,21 @@
+  * in the normal case (so that it fits rounded corners well) but also
+  * allow the content to reach the top and bottom when scrolling.
+  */
+-static void
+-ptyxis_terminal_rewrite_snapshot (GtkWidget   *widget,
+-                                  GtkSnapshot *snapshot)
++static GskRenderNode *
++ptyxis_terminal_rewrite_snapshot (GtkWidget *widget)
+ {
+   g_autoptr(GtkSnapshot) alternate = NULL;
+   g_autoptr(GskRenderNode) root = NULL;
+   g_autoptr(GPtrArray) children = NULL;
+   gboolean dropped_bg = FALSE;
+ 
+-  g_assert (GTK_IS_SNAPSHOT (snapshot));
+-
+   alternate = gtk_snapshot_new ();
+   children = g_ptr_array_new ();
+ 
+   GTK_WIDGET_CLASS (ptyxis_terminal_parent_class)->snapshot (widget, alternate);
+ 
+   if (!(root = gtk_snapshot_free_to_node (g_steal_pointer (&alternate))))
+-    return;
++    return NULL;
+ 
+   if (gsk_render_node_get_node_type (root) == GSK_CONTAINER_NODE)
+     {
+@@ -1099,7 +2451,7 @@
+        * This is effectively the background and we don't care about that for
+        * the same reasons as above. Just remove it and paint nothing.
+        */
+-      return;
++      return NULL;
+     }
+ 
+   if (children->len > 0)
+@@ -1111,7 +2463,7 @@
+       root = new_root;
+     }
+ 
+-  gtk_snapshot_append_node (snapshot, root);
++  return g_steal_pointer (&root);
+ }
+ 
+ static void
+@@ -1119,6 +2471,7 @@
+                           GtkSnapshot *snapshot)
+ {
+   PtyxisTerminal *self = PTYXIS_TERMINAL (widget);
++  g_autoptr(GskRenderNode) terminal_node = NULL;
+   GtkBorder padding;
+ 
+   g_assert (PTYXIS_IS_TERMINAL (self));
+@@ -1128,12 +2481,14 @@
+   gtk_style_context_get_padding (gtk_widget_get_style_context (widget), &padding);
+   G_GNUC_END_IGNORE_DEPRECATIONS
+ 
++  terminal_node = ptyxis_terminal_rewrite_snapshot (widget);
++
+   gtk_snapshot_push_clip (snapshot,
+                           &GRAPHENE_RECT_INIT (-2,
+                                                -padding.top,
+                                                gtk_widget_get_width (widget) + 4,
+                                                padding.top + gtk_widget_get_height (widget) + padding.bottom));
+-  ptyxis_terminal_rewrite_snapshot (widget, snapshot);
++  ptyxis_terminal_snapshot_selection (self, snapshot, terminal_node);
+   gtk_snapshot_pop (snapshot);
+ 
+   gtk_widget_snapshot_child (widget, GTK_WIDGET (self->size_revealer), snapshot);
+@@ -1227,6 +2582,10 @@
+   g_clear_object (&self->palette);
+   g_clear_object (&self->shortcuts);
+   g_clear_handle_id (&self->size_dismiss_source, g_source_remove);
++  g_clear_handle_id (&self->touch_long_press_id, g_source_remove);
++  g_clear_handle_id (&self->fling_source, g_source_remove);
++  g_clear_handle_id (&self->autoscroll_source, g_source_remove);
++  self->touch_sequence = NULL;
+   g_clear_pointer (&self->custom_links, g_hash_table_unref);
+   g_clear_pointer (&self->url, g_free);
+ 
+@@ -1476,6 +2835,28 @@
+                            G_CONNECT_SWAPPED);
+ 
+   ptyxis_terminal_update_clipboard_actions (self);
++
++  /* erhai: a touch marking is dismissed by whatever the user sends to the child
++   * (typing, the on-screen keyboard, paste), exactly like VTE's own selection --
++   * otherwise text pasted into a still-marked, inverted region looked wrong. */
++  g_signal_connect (self,
++                    "commit",
++                    G_CALLBACK (ptyxis_terminal_commit_cb),
++                    self);
++
++  /* erhai: take over all touch input (finger scroll, long-press selection).
++   * A CAPTURE-phase legacy controller runs
++   * before VteTerminal's own gestures, so consuming the event here keeps VTE
++   * from claiming the touch sequence for a button-1 selection. */
++  G_GNUC_BEGIN_IGNORE_DEPRECATIONS
++  self->touch_controller = gtk_event_controller_legacy_new ();
++  G_GNUC_END_IGNORE_DEPRECATIONS
++  gtk_event_controller_set_propagation_phase (self->touch_controller, GTK_PHASE_CAPTURE);
++  g_signal_connect (self->touch_controller,
++                    "event",
++                    G_CALLBACK (ptyxis_terminal_touch_event_cb),
++                    self);
++  gtk_widget_add_controller (GTK_WIDGET (self), self->touch_controller);
+ }
+ 
+ PtyxisPalette *
+diff -ruN ref/src/ptyxis-window.c patched/src/ptyxis-window.c
+--- ref/src/ptyxis-window.c	2026-10-05 20:50:52.000000000 +0200
++++ patched/src/ptyxis-window.c	2026-10-06 17:28:06.132040846 +0200
+@@ -451,6 +451,35 @@
+   return TRUE;
+ }
+ 
++/*
++ * erhai: the header bar carries a Paste button.  It is a child of the window
++ * (the terminal is not an ancestor of the header bar), so this mirrors the
++ * ACTIVE terminal's clipboard state onto the window's "win.paste" action; the
++ * terminal pushes its own changes here and this refresh also runs on every page
++ * switch.
++ */
++static void
++ptyxis_window_update_clipboard_actions (PtyxisWindow *self)
++{
++  PtyxisTerminal *terminal = NULL;
++  PtyxisTab *active_tab;
++  gboolean can_paste = FALSE;
++
++  g_assert (PTYXIS_IS_WINDOW (self));
++
++  if ((active_tab = ptyxis_window_get_active_tab (self)))
++    terminal = ptyxis_tab_get_terminal (active_tab);
++
++  if (terminal != NULL)
++    {
++      GdkClipboard *clipboard = gtk_widget_get_clipboard (GTK_WIDGET (terminal));
++
++      can_paste = gdk_content_formats_contain_gtype (gdk_clipboard_get_formats (clipboard), G_TYPE_STRING);
++    }
++
++  gtk_widget_action_set_enabled (GTK_WIDGET (self), "win.paste", can_paste);
++}
++
+ static void
+ ptyxis_window_notify_selected_page_cb (PtyxisWindow *self,
+                                        GParamSpec   *pspec,
+@@ -504,6 +533,9 @@
+ 
+   gtk_widget_action_set_enabled (GTK_WIDGET (self), "win.search", has_page);
+ 
++  /* erhai: keep the header bar Paste button in sync with the page */
++  ptyxis_window_update_clipboard_actions (self);
++
+   /* Update "Change Profile" action state based on number of profiles */
+   {
+     g_autoptr(GListModel) profiles = NULL;
+@@ -1236,6 +1268,26 @@
+   adw_dialog_present (ADW_DIALOG (dialog), GTK_WIDGET (self));
+ }
+ 
++/*
++ * erhai: header bar Paste button.  The real work lives in the terminal (paste,
++ * and the enabled state); this forwards to it and honours that action's state.
++ */
++static void
++ptyxis_window_clipboard_paste_action (GtkWidget  *widget,
++                                      const char *action_name,
++                                      GVariant   *param)
++{
++  PtyxisWindow *self = (PtyxisWindow *)widget;
++  PtyxisTab *active_tab;
++
++  g_assert (PTYXIS_IS_WINDOW (self));
++
++  if ((active_tab = ptyxis_window_get_active_tab (self)))
++    gtk_widget_activate_action (GTK_WIDGET (ptyxis_tab_get_terminal (active_tab)),
++                                "clipboard.paste",
++                                NULL);
++}
++
+ static void
+ ptyxis_window_search_action (GtkWidget  *widget,
+                              const char *action_name,
+@@ -2122,6 +2174,8 @@
+   gtk_widget_class_install_action (widget_class, "win.set-title", NULL, ptyxis_window_set_title_action);
+   gtk_widget_class_install_action (widget_class, "win.set-profile", NULL, ptyxis_window_set_profile_action);
+   gtk_widget_class_install_action (widget_class, "win.search", NULL, ptyxis_window_search_action);
++  /* erhai: header bar Paste button (forwards to the active terminal) */
++  gtk_widget_class_install_action (widget_class, "win.paste", NULL, ptyxis_window_clipboard_paste_action);
+   gtk_widget_class_install_action (widget_class, "win.undo-close-tab", NULL, ptyxis_window_undo_close_tab_action);
+   gtk_widget_class_install_action (widget_class, "my-computer", NULL, ptyxis_window_my_computer_action);
+   gtk_widget_class_install_action (widget_class, "win.preferences", NULL, ptyxis_window_preferences_action);
+diff -ruN ref/src/ptyxis-window.ui patched/src/ptyxis-window.ui
+--- ref/src/ptyxis-window.ui	2026-03-17 01:25:49.000000000 +0100
++++ patched/src/ptyxis-window.ui	2026-10-06 17:27:58.545454137 +0200
+@@ -632,6 +632,14 @@
+                             </child>
+                           </object>
+                         </child>
++                        <child type="start">
++                          <object class="GtkButton" id="erhai_paste_button">
++                            <property name="icon-name">edit-paste-symbolic</property>
++                            <property name="tooltip-text" translatable="yes">Paste</property>
++                            <property name="action-name">win.paste</property>
++                            <property name="focus-on-click">false</property>
++                          </object>
++                        </child>
+                         <child type="title">
+                           <object class="AdwWindowTitle">
+                             <binding name="subtitle">

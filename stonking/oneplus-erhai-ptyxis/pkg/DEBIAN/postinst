@@ -1,0 +1,36 @@
+#!/bin/bash
+# oneplus-erhai-ptyxis postinst: divert Ubuntu's /usr/bin/ptyxis (the original
+# is kept as /usr/bin/ptyxis.erhai-orig) and install the patched binary.
+#
+# Uses --no-rename --divert <file>.erhai-orig so `dpkg -V` stays clean (dpkg's
+# file list then expects the original at the diverted name) and we keep our own
+# copy of the original.
+#
+# The payload is moved into place with a rename rather than written over the
+# target: overwriting a *running* executable fails with ETXTBSY ("Text file
+# busy"), and killing ptyxis here would close the user's shells.  Running
+# windows simply keep the old inode; the next launch uses the new binary.
+set -e
+
+PAYLOAD=/usr/share/oneplus-erhai-ptyxis
+BIN=/usr/bin/ptyxis
+PKG=oneplus-erhai-ptyxis
+
+if [ -f "$PAYLOAD/ptyxis" ]; then
+	bak="$BIN.erhai-orig"
+	if [ ! -f "$bak" ] && [ -f "$BIN" ]; then
+		cp -a "$BIN" "$bak"
+	fi
+	if ! dpkg-divert --list "$BIN" 2>/dev/null | grep -qF "$BIN"; then
+		dpkg-divert --package "$PKG" --add --no-rename --divert "$bak" "$BIN" >/dev/null
+	fi
+
+	tmp="$BIN.erhai-new.$$"
+	install -m 0755 "$PAYLOAD/ptyxis" "$tmp"
+	mv -f "$tmp" "$BIN"
+
+	echo "oneplus-erhai-ptyxis: patched GNOME terminal installed."
+	echo "  Close all Ptyxis windows once to pick up the new binary."
+fi
+
+exit 0

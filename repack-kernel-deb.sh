@@ -99,7 +99,7 @@ case "$(printf '%s\n' "$FROZEN_RELEASES" | grep -Fx "$KVER" || true)" in
 	    exit 1 ;;
 esac
 REPACK_REV="${REV:-$INNER_REV}"
-SNAP="$HERE/$PKG_NAME"
+SNAP="$HERE/main/$PKG_NAME"
 
 echo "==> inner deb    : $BASE"
 echo "==> package      : $PKG_NAME (inner version $VERSION_FIELD, revision +b$INNER_REV)"
@@ -107,7 +107,7 @@ echo "==> kernelrelease: $KVER (clean $CLEAN_KVER)"
 echo "==> repack as    : ${KVER}+b${REPACK_REV}"
 echo "==> snapshot     : $SNAP"
 
-if [ "$SNAP" = "$HERE/oneplus-erhai-linux" ]; then
+if [ "$SNAP" = "$HERE/main/oneplus-erhai-linux" ]; then
 	echo "ERROR: refusing to repack into build-kernel.sh's snapshot ($SNAP)." >&2
 	echo "       Repack into a per-line snapshot (oneplus-erhai-linux-<major.minor>)." >&2
 	exit 1

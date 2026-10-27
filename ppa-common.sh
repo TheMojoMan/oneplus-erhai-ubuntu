@@ -2,8 +2,17 @@
 # Shared helper for all erhai .deb builders: where the apt repo (PPA) lives and
 # how to publish a freshly built .deb into it.
 #
-# Source this from a builder script:
-#   . "$(dirname "$0")/ppa-common.sh"
+# Layout (2026-10-27): the repo is split into one folder per PPA suite --
+#   main/       release-independent packages + their builders + debs/
+#   resolute/   Ubuntu 26.04 (resolute) ABI-bound packages + builders + debs/
+#   stonking/   Ubuntu 26.10 (stonking) ABI-bound packages + builders + debs/
+# The folder a builder lives in IS its suite: it decides DEB_DIR and the publish
+# target, so nothing has to be passed around.
+#
+# Source this from a builder script (one level below the repo root, or from a
+# package directory inside a suite folder):
+#   . "$HERE/../ppa-common.sh"        # builder in <suite>/
+#   . "$HERE/../../ppa-common.sh"     # builder in <suite>/<package>/
 # then call:
 #   ppa_copy path/to/pkg_version_arch.deb [more.deb ...]
 #
@@ -47,7 +56,47 @@ _ppa_host_series() {
 	c="$(sed -n 's/^VERSION_CODENAME=//p' /etc/os-release 2>/dev/null | tr -d '\"')"
 	echo "${c:-resolute}"
 }
-ERHAI_SERIES="${ERHAI_SERIES:-$(_ppa_host_series)}"
+# The suite is the folder the CALLING builder lives in (main/resolute/stonking);
+# walk up until the parent is this repo root.  ERHAI_SERIES still wins when set
+# explicitly (that is how a builder is pointed at another suite on purpose).
+# Which file asked for us?  Inside a FUNCTION the frame list starts with the
+# file the function is defined in (this one), so scan the whole BASH_SOURCE
+# stack and take the first entry that is not ppa-common.sh itself.
+_ppa_caller_dir() {
+	local i f d
+	for i in "${!BASH_SOURCE[@]}"; do
+		f="${BASH_SOURCE[$i]}"
+		[ -n "$f" ] || continue
+		d="$(cd "$(dirname "$f")" 2>/dev/null && pwd)" || continue
+		[ "$d" = "$_PPA_COMMON_DIR" ] && continue
+		printf '%s\n' "$d"
+		return 0
+	done
+	return 1
+}
+# The suite is the top-level folder of the repo the caller sits in
+# (main|resolute|stonking), no matter how deep the script is nested.
+_ppa_series_of_caller() {
+	local d
+	d="$(_ppa_caller_dir)" || return 1
+	while [ "$d" != "/" ] && [ "$d" != "$_PPA_COMMON_DIR" ]; do
+		if [ "$(dirname "$d")" = "$_PPA_COMMON_DIR" ]; then
+			printf '%s\n' "$(basename "$d")"
+			return 0
+		fi
+		d="$(dirname "$d")"
+	done
+	return 1
+}
+_ppa_series_dir() {	# absolute path of the calling builder's suite folder
+	local s
+	s="$(_ppa_series_of_caller)" || return 1
+	case "$s" in
+		main|resolute|stonking) printf '%s\n' "$_PPA_COMMON_DIR/$s" ;;
+		*) return 1 ;;
+	esac
+}
+ERHAI_SERIES="${ERHAI_SERIES:-$(_ppa_series_of_caller || _ppa_host_series)}"
 PPA_SERIES_DEB_DIR="${PPA_SERIES_DEB_DIR:-$(_ppa_repo_root)/ppa/oneplus-erhai/ubuntu/$ERHAI_SERIES}"
 PPA_SERIES_LIST="${PPA_SERIES_LIST:-$_PPA_COMMON_DIR/ppa-series-packages.txt}"
 export ERHAI_SERIES PPA_SERIES_DEB_DIR PPA_SERIES_LIST
@@ -72,7 +121,8 @@ PPA_DEB_DIR="${PPA_DEB_DIR:-$PPA_TESTING_DEB_DIR}"
 # (PUBLISHING is a separate step: ppa_copy/ppa_mv below still install a copy
 # into the selected suite; DEB_DIR only says where the file is built.)
 # Override with DEB_DIR=<dir>.
-DEB_DIR="${DEB_DIR:-$_PPA_COMMON_DIR/debs}"
+# One debs/ folder PER SUITE: <repo>/<series>/debs (main|resolute|stonking).
+DEB_DIR="${DEB_DIR:-$(_ppa_series_dir || echo "$_PPA_COMMON_DIR")/debs}"
 mkdir -p "$DEB_DIR"
 
 # ----------------------------------------------------------- ppa_scrub_debug --

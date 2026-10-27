@@ -1,0 +1,27 @@
+#!/bin/bash
+# oneplus-erhai-ptyxis postrm: restore Ubuntu's /usr/bin/ptyxis and drop the
+# diversion on remove/purge.  On upgrade the new version keeps them (its
+# postinst has already reinstalled the payload), so nothing happens then.
+set -e
+
+BIN=/usr/bin/ptyxis
+PKG=oneplus-erhai-ptyxis
+
+if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
+	bak="$BIN.erhai-orig"
+
+	if [ -f "$bak" ]; then
+		tmp="$BIN.erhai-restore.$$"
+		cp -a "$bak" "$tmp"
+		mv -f "$tmp" "$BIN"
+	fi
+
+	if dpkg-divert --list "$BIN" 2>/dev/null | grep -qF "$BIN"; then
+		dpkg-divert --package "$PKG" --remove --no-rename "$BIN" >/dev/null 2>&1 || \
+			dpkg-divert --remove --no-rename "$BIN" >/dev/null 2>&1 || true
+	fi
+
+	rm -f "$bak"
+fi
+
+exit 0

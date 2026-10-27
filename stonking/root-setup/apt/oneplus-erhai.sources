@@ -1,0 +1,46 @@
+# TheMojoMan PPA – OnePlus Pad 3 (erhai) kernel packages
+# Ubuntu 26.04 LTS (Resolute Racoon) / 26.10 (Stonking Stingray)
+# Modern DEB822 format (.sources)
+#
+# Installation:
+#   1. Import GPG key:
+#      wget -qO- https://themojoman.github.io/ppa/themojoman.gpg \
+#        | sudo gpg --dearmor -o /etc/apt/keyrings/themojoman.gpg
+#
+# The SERIES PLACEHOLDER in the version-specific block below is the CODENAME of
+# the base release this image/source belongs to (resolute, stonking, ...).
+# build-root/<series>/build-root.sh substitutes it while building the image (and
+# the stonking script deletes the whole block instead); a hand copy must replace
+# it yourself.  An image must NEVER list another release's suite: the packages
+# there are built against that release's ABI.
+
+# Universal Repository (for all Ubuntu versions)
+# kernel, firmware, audio/UCam, wifi, camera, sensors, the device helpers --
+# everything that does not carry an Ubuntu package name.
+Types: deb
+URIs: https://themojoman.github.io/ppa/oneplus-erhai/ubuntu/main/
+Suites: ./
+Signed-By: /etc/apt/keyrings/themojoman.gpg
+
+# Version-Specific Repository (this release only)
+# ONLY the packages that repackage or divert an Ubuntu artifact of the same
+# name and therefore carries that release's ABI: mutter, GTK4, Mesa, steam,
+# ptyxis, nautilus (the list is oneplus-erhai-ubuntu/ppa-series-packages.txt).
+#
+# The block is delimited so an image that deliberately ships the STOCK desktop
+# stack can drop it whole (build-root/stonking deletes it by these markers).
+# >>> series-suite
+Types: deb
+URIs: https://themojoman.github.io/ppa/oneplus-erhai/ubuntu/@ERHAI_SERIES@/
+Suites: ./
+Signed-By: /etc/apt/keyrings/themojoman.gpg
+# <<< series-suite
+
+# TESTING suite -- PRIVATE, opt-in. NOT enabled in shipped images: fresh
+# builds land here first and only the repo owner's own device lists this
+# entry. Promoted to main/ (universal) or <series>/ (release-bound) via
+# update-ppa.sh --mvtomain.
+#Types: deb
+#URIs: https://themojoman.github.io/ppa/oneplus-erhai/ubuntu/testing/
+#Suites: ./
+#Signed-By: /etc/apt/keyrings/themojoman.gpg

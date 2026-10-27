@@ -38,23 +38,23 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
 declare -A BUILDERS=(
-	[wifi]=build-wifi-deb.sh
-	[audio]=build-audio-deb.sh
-	[bluetooth]=build-bluetooth-deb.sh
-	[camera]=build-camera-deb.sh
-	[cam]=build-cam-deb.sh
-	[sensors]=build-sensors-deb.sh
-	[desktop]=build-desktop-deb.sh
-	[thermal]=build-thermal-deb.sh
-	[torch]=build-torch-deb.sh
-	[otg]=build-otg-deb.sh
-	[firmware]=build-firmware-deb.sh
-	[mesa]=build-mesa-deb.sh
-	[linux]=build-linux-deb.sh
-	[npu]=build-npu-deb.sh
-	[fastrpc]=build-fastrpc-deb.sh
-	[llamacpp]=build-llamacpp-deb.sh
-	[waydroid]=build-waydroid-installer-deb.sh
+	[wifi]=main/build-wifi-deb.sh
+	[audio]=main/build-audio-deb.sh
+	[bluetooth]=main/build-bluetooth-deb.sh
+	[camera]=main/build-camera-deb.sh
+	[cam]=main/build-cam-deb.sh
+	[sensors]=main/build-sensors-deb.sh
+	[desktop]=main/build-desktop-deb.sh
+	[thermal]=main/build-thermal-deb.sh
+	[torch]=main/build-torch-deb.sh
+	[otg]=main/build-otg-deb.sh
+	[firmware]=main/build-firmware-deb.sh
+	[mesa]=resolute/build-mesa-deb.sh
+	[linux]=main/build-linux-deb.sh
+	[npu]=main/build-npu-deb.sh
+	[fastrpc]=main/build-fastrpc-deb.sh
+	[llamacpp]=main/build-llamacpp-deb.sh
+	[waydroid]=main/build-waydroid-installer-deb.sh
 )
 
 # waydroid LAST: its builder needs the patcher project in ../tmp/waydroid-patcher
@@ -74,10 +74,10 @@ else
 fi
 
 for name in "${SELECTED[@]}"; do
-	echo "=== $name: ${BUILDERS[$name]} ==="
+	echo "=== $name: ${BUILDERS[$name]} (suite ${BUILDERS[$name]%%/*}) ==="
 	"$HERE/${BUILDERS[$name]}"
 done
 
 echo
-echo "all requested debs built and published."
+echo "all requested debs built; each landed in <suite>/debs (suite = the builder folder)"
 echo "next: ../update-ppa.sh"

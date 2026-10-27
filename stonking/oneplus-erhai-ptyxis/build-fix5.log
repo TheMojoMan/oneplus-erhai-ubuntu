@@ -1,0 +1,279 @@
+== installed ptyxis 50.1-1ubuntu2 (upstream 50.1)
+== extracting a clean source tree ==
+dpkg-source: info: verifying ./ptyxis_50.1-1ubuntu2.dsc
+dpkg-source: info: skipping absent keyring /usr/share/keyrings/debian-keyring.pgp
+dpkg-source: info: skipping absent keyring /usr/share/keyrings/debian-tag2upload.pgp
+dpkg-source: info: skipping absent keyring /usr/share/keyrings/debian-nonupload.pgp
+dpkg-source: info: skipping absent keyring /usr/share/keyrings/debian-maintainers.pgp
+dpkg-source: info: using keyring /usr/share/keyrings/ubuntu-archive-keyring.gpg
+gpgv: Signature made Wed 15 Apr 2026 10:57:58 AM CEST
+gpgv:                using EDDSA key BC27F8FEF77F7207A7BA08BE0D0246F38220EDA6
+gpgv: Can't check signature: No public key
+dpkg-source: warning: cannot verify inline signature for ./ptyxis_50.1-1ubuntu2.dsc: no acceptable signature found
+dpkg-source: info: extracting ptyxis in ptyxis-50.1
+dpkg-source: info: unpacking ptyxis_50.1.orig.tar.xz
+dpkg-source: info: unpacking ptyxis_50.1-1ubuntu2.debian.tar.xz
+dpkg-source: info: using patch list from debian/patches/series
+dpkg-source: info: applying Treat-new-window-plus-command-as-single-terminal-mode.patch
+dpkg-source: info: applying ubuntu/color-palette.patch
+== applying patch ==
+patching file src/ptyxis-terminal.c
+== configuring ==
+The Meson build system
+Version: 1.11.1
+Source dir: /media/data/develop/erhai/tmp/ptyxis-erhai-build/src/ptyxis-50.1
+Build dir: /media/data/develop/erhai/tmp/ptyxis-erhai-build/build-erhai
+Build type: native build
+Project name: ptyxis
+Project version: 50.1
+C compiler for the host machine: /usr/bin/ccache cc (gcc 15.2.0 "cc (Ubuntu 15.2.0-16ubuntu1) 15.2.0")
+C linker for the host machine: cc ld.bfd 2.46
+Host machine cpu family: aarch64
+Host machine cpu: aarch64
+Checking for function "grantpt" : YES 
+Checking for function "posix_openpt" : YES 
+Checking for function "ptsname" : YES 
+Checking for function "ptsname_r" : YES 
+Checking for function "unlockpt" : YES 
+Compiler for C supports arguments -Wmissing-declarations: YES 
+Compiler for C supports arguments -Wcast-align: YES 
+Compiler for C supports arguments -Wdeclaration-after-statement: YES 
+Compiler for C supports arguments -Werror=address: YES 
+Compiler for C supports arguments -Werror=array-bounds: YES 
+Compiler for C supports arguments -Werror=empty-body: YES 
+Compiler for C supports arguments -Werror=implicit: YES 
+Compiler for C supports arguments -Werror=implicit-function-declaration: YES 
+Compiler for C supports arguments -Werror=incompatible-pointer-types: YES 
+Compiler for C supports arguments -Werror=init-self: YES 
+Compiler for C supports arguments -Werror=int-conversion: YES 
+Compiler for C supports arguments -Werror=int-to-pointer-cast: YES 
+Compiler for C supports arguments -Werror=main: YES 
+Compiler for C supports arguments -Werror=misleading-indentation: YES 
+Compiler for C supports arguments -Werror=missing-braces: YES 
+Compiler for C supports arguments -Werror=missing-include-dirs: YES 
+Compiler for C supports arguments -Werror=nonnull: YES 
+Compiler for C supports arguments -Werror=overflow: YES 
+Compiler for C supports arguments -Werror=parenthesis: NO 
+Compiler for C supports arguments -Werror=pointer-arith: YES 
+Compiler for C supports arguments -Werror=pointer-to-int-cast: YES 
+Compiler for C supports arguments -Werror=redundant-decls: YES 
+Compiler for C supports arguments -Werror=return-type: YES 
+Compiler for C supports arguments -Werror=sequence-point: YES 
+Compiler for C supports arguments -Werror=shadow: YES 
+Compiler for C supports arguments -Werror=strict-prototypes: YES 
+Compiler for C supports arguments -Werror=trigraphs: YES 
+Compiler for C supports arguments -Werror=undef: YES 
+Compiler for C supports arguments -Werror=write-strings: YES 
+Compiler for C supports arguments -Wformat-nonliteral: YES 
+Compiler for C supports arguments -Wignored-qualifiers: YES 
+Compiler for C supports arguments -Wimplicit-function-declaration: YES 
+Compiler for C supports arguments -Wlogical-op: YES 
+Compiler for C supports arguments -Wmissing-format-attribute: YES 
+Compiler for C supports arguments -Wmissing-include-dirs: YES 
+Compiler for C supports arguments -Wmissing-noreturn: YES 
+Compiler for C supports arguments -Wnested-externs: YES 
+Compiler for C supports arguments -Wno-cast-function-type: YES 
+Compiler for C supports arguments -Wno-dangling-pointer: YES 
+Compiler for C supports arguments -Wno-missing-field-initializers: YES 
+Compiler for C supports arguments -Wno-sign-compare: YES 
+Compiler for C supports arguments -Wno-unused-parameter: YES 
+Compiler for C supports arguments -Wold-style-definition: YES 
+Compiler for C supports arguments -Wpointer-arith: YES 
+Compiler for C supports arguments -Wredundant-decls: YES 
+Compiler for C supports arguments -Wstrict-prototypes: YES 
+Compiler for C supports arguments -Wswitch-default: YES 
+Compiler for C supports arguments -Wswitch-enum: YES 
+Compiler for C supports arguments -Wundef: YES 
+Compiler for C supports arguments -Wuninitialized: YES 
+Compiler for C supports arguments -Wunused: YES 
+Compiler for C supports arguments -fno-strict-aliasing: YES 
+Compiler for C supports arguments -Werror=format-security -Werror=format=2: YES 
+Compiler for C supports arguments -fstack-protector-strong: YES 
+Compiler for C supports link arguments -Wl,-z,defs: YES 
+Compiler for C supports link arguments -Wl,-z,now: YES 
+Compiler for C supports link arguments -Wl,-z,relro: YES 
+Compiler for C supports link arguments -Wl,-Bsymbolic: YES 
+Compiler for C supports link arguments -fno-plt: YES 
+Configuring org.gnome.Ptyxis.desktop.in using configuration
+Program msgfmt found: YES (/usr/bin/msgfmt)
+Program desktop-file-validate found: YES (/usr/bin/desktop-file-validate)
+Configuring org.gnome.Ptyxis.metainfo.xml.in using configuration
+Program appstreamcli found: YES (/usr/bin/appstreamcli)
+Program glib-compile-schemas found: YES (/usr/bin/glib-compile-schemas)
+Configuring org.gnome.Ptyxis.service using configuration
+Found pkg-config: YES (/usr/bin/pkg-config) 2.5.1
+Run-time dependency gio-2.0 found: YES 2.88.0
+Run-time dependency gio-unix-2.0 found: YES 2.88.0
+Run-time dependency json-glib-1.0 found: YES 1.10.8
+Dependency gio-2.0 for build machine found: YES 2.88.0 (cached)
+Program /usr/bin/gdbus-codegen found: YES (/usr/bin/gdbus-codegen)
+Build-time dependency glib-2.0 found: YES 2.88.0
+Program /usr/bin/glib-mkenums found: YES (/usr/bin/glib-mkenums)
+Dependency glib-2.0 for build machine found: YES 2.88.0 (cached)
+Program /usr/bin/glib-mkenums found: YES (/usr/bin/glib-mkenums)
+Dependency gio-2.0 for build machine found: YES 2.88.0 (cached)
+Program /usr/bin/glib-compile-resources found: YES (/usr/bin/glib-compile-resources)
+Configuring org.gnome.Ptyxis.gschema.xml using configuration
+Dependency gio-unix-2.0 for host machine found: YES 2.88.0 (cached)
+Run-time dependency gtk4 found: YES 4.22.4
+Run-time dependency libadwaita-1 found: YES 1.9.1
+Dependency json-glib-1.0 for host machine found: YES 1.10.8 (cached)
+Run-time dependency vte-2.91-gtk4 found: YES 0.84.0
+Library m found: YES
+Run-time dependency libportal-gtk4 found: YES 0.9.1
+Program msginit found: YES (/usr/bin/msginit)
+Program msgmerge found: YES (/usr/bin/msgmerge)
+Program xgettext found: YES (/usr/bin/xgettext)
+Configuring ptyxis.1 using configuration
+Configuring config.h using configuration
+Dependency gio-2.0 for build machine found: YES 2.88.0 (cached)
+Program /usr/lib/aarch64-linux-gnu/glib-2.0/glib-compile-schemas found: YES (/usr/lib/aarch64-linux-gnu/glib-2.0/glib-compile-schemas)
+Program gtk4-update-icon-cache found: YES (/usr/bin/gtk4-update-icon-cache)
+Program update-desktop-database found: YES (/usr/bin/update-desktop-database)
+Build targets in project: 50
+
+ptyxis 50.1
+
+    Application ID     : org.gnome.Ptyxis
+    GSchema ID Prefix  : org.gnome.Ptyxis
+    GSchema Path Prefix: /org/gnome/Ptyxis/
+    Development Banner : false
+    Generic            : false
+
+  User defined options
+    buildtype          : release
+    prefix             : /usr
+
+Found ninja-1.13.2 at /usr/bin/ninja
+Generating targets:   0%|          | 0/50 eta ?                                               Writing build.ninja:   0%|          | 0/151 eta ?                                                 == building (8 jobs) ==
+ninja: Entering directory `/media/data/develop/erhai/tmp/ptyxis-erhai-build/build-erhai'
+[1/118] Generating src/ptyxis-build-ident.h with a custom command
+[2/118] Generating gdbus header agent/ptyxis-agent-ipc.h
+[3/118] Generating gdbus source agent/ptyxis-agent-ipc.c
+[4/118] Generating src/ptyxis-resources_h with a custom command
+[5/118] Compiling C object agent/ptyxis-agent.p/ptyxis-agent-util.c.o
+[6/118] Compiling C object agent/ptyxis-agent.p/meson-generated_.._ptyxis-agent-ipc.c.o
+[7/118] Compiling C object agent/ptyxis-agent.p/ptyxis-container-provider.c.o
+[8/118] Compiling C object agent/ptyxis-agent.p/ptyxis-distrobox-container.c.o
+[9/118] Generating src/ptyxis-resources_c with a custom command
+[10/118] Compiling C object agent/ptyxis-agent.p/ptyxis-podman-container.c.o
+[11/118] Compiling C object agent/ptyxis-agent.p/ptyxis-podman-provider.c.o
+[12/118] Compiling C object agent/ptyxis-agent.p/ptyxis-process-impl.c.o
+[13/118] Compiling C object agent/ptyxis-agent.p/ptyxis-run-context.c.o
+[14/118] Compiling C object agent/ptyxis-agent.p/ptyxis-toolbox-container.c.o
+[15/118] Compiling C object agent/ptyxis-agent.p/ptyxis-session-container.c.o
+[16/118] Compiling C object agent/ptyxis-agent.p/ptyxis-unix-fd-map.c.o
+[17/118] Compiling C object agent/ptyxis-agent.p/ptyxis-agent.c.o
+[18/118] Compiling C object agent/ptyxis-agent.p/ptyxis-agent-impl.c.o
+[19/118] Compiling C object testsuite/test-podman.p/meson-generated_.._.._agent_ptyxis-agent-ipc.c.o
+[20/118] Compiling C object testsuite/test-podman.p/test-podman.c.o
+[21/118] Compiling C object testsuite/test-podman.p/.._agent_ptyxis-agent-util.c.o
+[22/118] Compiling C object testsuite/test-podman.p/.._agent_ptyxis-container-provider.c.o
+[23/118] Compiling C object testsuite/test-podman.p/.._agent_ptyxis-distrobox-container.c.o
+[24/118] Compiling C object testsuite/test-podman.p/.._agent_ptyxis-process-impl.c.o
+[25/118] Compiling C object testsuite/test-podman.p/.._agent_ptyxis-podman-provider.c.o
+[26/118] Compiling C object testsuite/test-podman.p/.._agent_ptyxis-podman-container.c.o
+[27/118] Compiling C object testsuite/test-podman.p/.._agent_ptyxis-run-context.c.o
+[28/118] Compiling C object testsuite/test-podman.p/.._agent_ptyxis-session-container.c.o
+[29/118] Compiling C object testsuite/test-podman.p/.._agent_ptyxis-toolbox-container.c.o
+[30/118] Compiling C object testsuite/test-podman.p/.._agent_ptyxis-unix-fd-map.c.o
+[31/118] Compiling C object testsuite/test-podman.p/.._agent_ptyxis-agent-impl.c.o
+[32/118] Generating GObject enum file src/ptyxis-enums.h (wrapped by meson because command contains newlines, to capture output)
+[33/118] Compiling C object testsuite/test-podman.p/.._agent_ptyxis-agent.c.o
+[34/118] Building translation po/be/LC_MESSAGES/ptyxis-be.mo
+[35/118] Compiling C object src/ptyxis.p/meson-generated_.._.._agent_ptyxis-agent-ipc.c.o
+[36/118] Building translation po/bg/LC_MESSAGES/ptyxis-bg.mo
+[37/118] Compiling C object src/ptyxis.p/meson-generated_.._ptyxis-resources.c.o
+[38/118] Compiling C object src/ptyxis.p/gdkhsla.c.o
+[39/118] Compiling C object src/ptyxis.p/ptyxis-add-button-list-item.c.o
+[40/118] Compiling C object src/ptyxis.p/main.c.o
+[41/118] Compiling C object src/ptyxis.p/ptyxis-add-button-list-model.c.o
+[42/118] Generating GObject enum file src/ptyxis-enums.c (wrapped by meson because command contains newlines, to capture output)
+[43/118] Compiling C object src/ptyxis.p/ptyxis-application.c.o
+[44/118] Compiling C object src/ptyxis.p/ptyxis-client.c.o
+[45/118] Merging translations for data/org.gnome.Ptyxis.desktop
+[46/118] Compiling C object src/ptyxis.p/ptyxis-close-dialog.c.o
+[47/118] Compiling C object src/ptyxis.p/meson-generated_.._ptyxis-enums.c.o
+[48/118] Compiling C object src/ptyxis.p/ptyxis-custom-link-editor.c.o
+[49/118] Compiling C object src/ptyxis.p/ptyxis-custom-link-row.c.o
+[50/118] Linking target agent/ptyxis-agent
+[51/118] Compiling C object src/ptyxis.p/ptyxis-gated-list-model.c.o
+[52/118] Compiling C object src/ptyxis.p/ptyxis-custom-link.c.o
+[53/118] Compiling C object src/ptyxis.p/ptyxis-find-bar.c.o
+[54/118] Compiling C object src/ptyxis.p/ptyxis-fullscreen-box.c.o
+[55/118] Compiling C object src/ptyxis.p/ptyxis-inspector.c.o
+[56/118] Compiling C object src/ptyxis.p/ptyxis-palette.c.o
+[57/118] Compiling C object src/ptyxis.p/ptyxis-menu-row.c.o
+[58/118] Compiling C object src/ptyxis.p/ptyxis-preferences-list-item.c.o
+[59/118] Compiling C object src/ptyxis.p/ptyxis-palette-preview-color.c.o
+[60/118] Compiling C object src/ptyxis.p/ptyxis-palette-preview.c.o
+[61/118] Compiling C object src/ptyxis.p/ptyxis-parking-lot.c.o
+[62/118] Compiling C object src/ptyxis.p/ptyxis-preferences-window.c.o
+[63/118] Compiling C object src/ptyxis.p/ptyxis-profile-editor.c.o
+[64/118] Compiling C object src/ptyxis.p/ptyxis-profile.c.o
+[65/118] Compiling C object src/ptyxis.p/ptyxis-profile-row.c.o
+[66/118] Compiling C object src/ptyxis.p/ptyxis-session.c.o
+[67/118] Compiling C object src/ptyxis.p/ptyxis-settings.c.o
+[68/118] Compiling C object src/ptyxis.p/ptyxis-shortcut-accel-dialog.c.o
+[69/118] Compiling C object src/ptyxis.p/ptyxis-shortcuts.c.o
+[70/118] Compiling C object src/ptyxis.p/ptyxis-shortcut-row.c.o
+[71/118] Compiling C object src/ptyxis.p/ptyxis-shrinker.c.o
+[72/118] Compiling C object src/ptyxis.p/ptyxis-tab-monitor.c.o
+[73/118] Compiling C object src/ptyxis.p/ptyxis-tab.c.o
+[74/118] Compiling C object src/ptyxis.p/ptyxis-theme-selector.c.o
+[75/118] Compiling C object src/ptyxis.p/ptyxis-title-dialog.c.o
+[76/118] Compiling C object src/ptyxis.p/ptyxis-profile-dialog.c.o
+[77/118] Compiling C object src/ptyxis.p/ptyxis-user-palettes.c.o
+[78/118] Compiling C object src/ptyxis.p/eggshell.c.o
+[79/118] Compiling C object src/ptyxis.p/ptyxis-window-dressing.c.o
+[80/118] Compiling C object src/ptyxis.p/ptyxis-util.c.o
+[81/118] Compiling C object src/ptyxis.p/ptyxis-window.c.o
+../src/ptyxis-50.1/src/ptyxis-window.c: In function ‘ptyxis_window_show_keyboard_shortcuts_action’:
+../src/ptyxis-50.1/src/ptyxis-window.c:1308:17: warning: unused variable ‘self’ [-Wunused-variable]
+ 1308 |   PtyxisWindow *self = (PtyxisWindow *)widget;
+      |                 ^~~~
+[82/118] Building translation po/ca/LC_MESSAGES/ptyxis-ca.mo
+[83/118] Building translation po/cs/LC_MESSAGES/ptyxis-cs.mo
+[84/118] Building translation po/de/LC_MESSAGES/ptyxis-de.mo
+[85/118] Building translation po/en_GB/LC_MESSAGES/ptyxis-en_GB.mo
+[86/118] Building translation po/fi/LC_MESSAGES/ptyxis-fi.mo
+[87/118] Building translation po/fa/LC_MESSAGES/ptyxis-fa.mo
+[88/118] Building translation po/eu/LC_MESSAGES/ptyxis-eu.mo
+[89/118] Building translation po/he/LC_MESSAGES/ptyxis-he.mo
+[90/118] Building translation po/fr/LC_MESSAGES/ptyxis-fr.mo
+[91/118] Building translation po/hi/LC_MESSAGES/ptyxis-hi.mo
+[92/118] Building translation po/ja/LC_MESSAGES/ptyxis-ja.mo
+[93/118] Building translation po/id/LC_MESSAGES/ptyxis-id.mo
+[94/118] Building translation po/es/LC_MESSAGES/ptyxis-es.mo
+[95/118] Building translation po/hu/LC_MESSAGES/ptyxis-hu.mo
+[96/118] Building translation po/ka/LC_MESSAGES/ptyxis-ka.mo
+[97/118] Building translation po/it/LC_MESSAGES/ptyxis-it.mo
+[98/118] Building translation po/kk/LC_MESSAGES/ptyxis-kk.mo
+[99/118] Building translation po/nb/LC_MESSAGES/ptyxis-nb.mo
+[100/118] Building translation po/kab/LC_MESSAGES/ptyxis-kab.mo
+[101/118] Building translation po/ko/LC_MESSAGES/ptyxis-ko.mo
+[102/118] Building translation po/nl/LC_MESSAGES/ptyxis-nl.mo
+[103/118] Building translation po/oc/LC_MESSAGES/ptyxis-oc.mo
+[104/118] Building translation po/pt/LC_MESSAGES/ptyxis-pt.mo
+[105/118] Building translation po/pt_BR/LC_MESSAGES/ptyxis-pt_BR.mo
+[106/118] Building translation po/sr/LC_MESSAGES/ptyxis-sr.mo
+[107/118] Building translation po/th/LC_MESSAGES/ptyxis-th.mo
+[108/118] Building translation po/ru/LC_MESSAGES/ptyxis-ru.mo
+[109/118] Building translation po/sl/LC_MESSAGES/ptyxis-sl.mo
+[110/118] Building translation po/sv/LC_MESSAGES/ptyxis-sv.mo
+[111/118] Building translation po/tr/LC_MESSAGES/ptyxis-tr.mo
+[112/118] Building translation po/zh_TW/LC_MESSAGES/ptyxis-zh_TW.mo
+[113/118] Building translation po/uk/LC_MESSAGES/ptyxis-uk.mo
+[114/118] Building translation po/zh_CN/LC_MESSAGES/ptyxis-zh_CN.mo
+[115/118] Linking target testsuite/test-podman
+[116/118] Merging translations for data/org.gnome.Ptyxis.metainfo.xml
+[117/118] Compiling C object src/ptyxis.p/ptyxis-terminal.c.o
+../src/ptyxis-50.1/src/ptyxis-terminal.c: In function ‘ptyxis_terminal_debug’:
+../src/ptyxis-50.1/src/ptyxis-terminal.c:1995:3: warning: function ‘ptyxis_terminal_debug’ might be a candidate for ‘gnu_printf’ format attribute [-Wsuggest-attribute=format]
+ 1995 |   msg = g_strdup_vprintf (fmt, ap);
+      |   ^~~
+[118/118] Linking target src/ptyxis
+== staging into /media/data/develop/erhai/oneplus-erhai-ubuntu/oneplus-erhai-ptyxis/build ==
+== done ==
+  binary   : /media/data/develop/erhai/oneplus-erhai-ubuntu/oneplus-erhai-ptyxis/build/ptyxis
+  install  : /media/data/develop/erhai/oneplus-erhai-ubuntu/oneplus-erhai-ptyxis/install-ptyxis-erhai.sh apply

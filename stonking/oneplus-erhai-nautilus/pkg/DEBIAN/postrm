@@ -1,0 +1,37 @@
+#!/bin/bash
+# oneplus-erhai-nautilus postrm: restore Ubuntu's nautilus + gschema and drop
+# the diversions on remove/purge.  On upgrade the new version keeps them (its
+# postinst has already reinstalled the payload), so nothing is done then.
+set -e
+
+BIN=/usr/bin/nautilus
+SCHEMA=/usr/share/glib-2.0/schemas/org.gnome.nautilus.gschema.xml
+SCHEMA_DIR=/usr/share/glib-2.0/schemas
+PKG=oneplus-erhai-nautilus
+
+if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
+	pkill -x nautilus >/dev/null 2>&1 || true
+	sleep 1
+
+	restore_diverted() {
+		local sys="$1"
+		local bak="$sys.erhai-orig"
+		if [ -f "$bak" ]; then
+			cp -a "$bak" "$sys"
+		fi
+		if dpkg-divert --list "$sys" 2>/dev/null | grep -qF "$sys"; then
+			dpkg-divert --package "$PKG" --remove --no-rename "$sys" >/dev/null 2>&1 || \
+				dpkg-divert --remove --no-rename "$sys" >/dev/null 2>&1 || true
+		fi
+		rm -f "$bak"
+	}
+
+	restore_diverted "$SCHEMA"
+	restore_diverted "$BIN"
+
+	if command -v glib-compile-schemas >/dev/null 2>&1; then
+		glib-compile-schemas "$SCHEMA_DIR" >/dev/null 2>&1 || true
+	fi
+fi
+
+exit 0
