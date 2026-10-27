@@ -278,24 +278,44 @@ function oskDbg(kb, msg) {
  * Primary lookup: the shell's own OSK box lives in that group
  * (layout.js: `inputPanelGroup.add_child(this.keyboardBox)`), so its parent IS
  * the group.  global.compositor.get_input_panel_group() is the documented way
- * and is tried second: on this build it returned nothing (the keyboard stayed
- * in Main.uiGroup, parent=uiGroup in the log), which is exactly the bug. */
+ * and is tried second.  Every step is logged, because 2.32-test-13 lost this
+ * lookup silently and cost a login to notice. */
 function oskInputPanelGroup() {
+    let box = null;
     try {
-        const box = Main.layoutManager.keyboardBox;
-        const parent = box ? box.get_parent() : null;
-        if (parent)
-            return parent;
+        const lm = Main.layoutManager;
+        box = lm ? lm.keyboardBox : null;
+        log(`GJS-OSK: lookup layoutManager=${lm ? 'yes' : 'no'} ` +
+            `keyboardBox=${box ? box.constructor.name : 'no'}`);
     } catch (e) {
+        logError(e, 'GJS-OSK: lookup keyboardBox failed');
+    }
+    if (box) {
+        try {
+            const parent = box.get_parent();
+            log(`GJS-OSK: lookup keyboardBox.parent=` +
+                `${parent ? parent.constructor.name : 'null'} ` +
+                `name=${parent ? (parent.name || '-') : '-'}`);
+            if (parent)
+                return parent;
+        } catch (e) {
+            logError(e, 'GJS-OSK: lookup keyboardBox.get_parent failed');
+        }
     }
     try {
-        if (global.compositor &&
-            typeof global.compositor.get_input_panel_group === 'function') {
-            const group = global.compositor.get_input_panel_group();
+        const compositor = global.compositor;
+        const fn = compositor ? compositor.get_input_panel_group : null;
+        log(`GJS-OSK: lookup compositor=${compositor ? 'yes' : 'no'} ` +
+            `method=${typeof fn}`);
+        if (typeof fn === 'function') {
+            const group = fn.call(compositor);
+            log(`GJS-OSK: lookup panelGroup=` +
+                `${group ? group.constructor.name : 'null'}`);
             if (group)
                 return group;
         }
     } catch (e) {
+        logError(e, 'GJS-OSK: lookup get_input_panel_group failed');
     }
     return null;
 }
@@ -772,7 +792,54 @@ export default class GjsOskExtension extends Extension {
             + "\n" + error.stack);
     }
 
+    /* [erhai] Dev hook: load the highest-numbered ~/.cache/erhai-osk-probe-N.js
+     * on every enable.  Extensions are imported once per shell process, so a
+     * code change normally needs a new login; a *new* module URI imported from
+     * disk does not, which turns every experiment into a disable/enable. */
+    _runProbe() {
+        try {
+            const dir = GLib.build_filenamev([GLib.get_home_dir(), '.cache']);
+            const folder = Gio.File.new_for_path(dir);
+            let best = null;
+            let bestIndex = -1;
+            const enumerator = folder.enumerate_children(
+                'standard::name', Gio.FileQueryInfoFlags.NONE, null);
+            let info;
+            while ((info = enumerator.next_file(null)) !== null) {
+                const name = info.get_name();
+                const m = name.match(/^erhai-osk-probe-(\d+)\.js$/);
+                if (!m)
+                    continue;
+                const index = Number(m[1]);
+                if (index > bestIndex) {
+                    bestIndex = index;
+                    best = name;
+                }
+            }
+            enumerator.close(null);
+            if (!best)
+                return;
+            const path = GLib.build_filenamev([dir, best]);
+            log(`GJS-OSK probe: loading ${best}`);
+            import(`file://${path}`).then(mod => {
+                try {
+                    if (typeof mod.default === 'function')
+                        mod.default();
+                    else
+                        log('GJS-OSK probe: no default export');
+                } catch (e) {
+                    logError(e, 'GJS-OSK probe: threw');
+                }
+            }).catch(e => logError(e, 'GJS-OSK probe: import failed'));
+        } catch (e) {
+            logError(e, 'GJS-OSK probe hook');
+        }
+    }
+
     enable() {
+        this._runProbe();
+        /* [erhai] handle for the dev probe (see _runProbe) */
+        globalThis.__erhaiOsk = this;
         this.settings = this.getSettings();
         if (this.settings == null) {
             return;
@@ -1295,10 +1362,10 @@ export default class GjsOskExtension extends Extension {
                     .create_virtual_device(Clutter.InputDeviceType.POINTER_DEVICE);
                 this._pointerDevice = dev;
                 const t = global.display.get_current_time_roundtrip() * 1000;
-                dev.notify_pointer_motion(t, px, py);
-                dev.notify_pointer_button(t, 1, Clutter.ButtonState.PRESSED);
+                dev.notify_absolute_motion(t, px, py);
+                dev.notify_button(t, 1, Clutter.ButtonState.PRESSED);
                 GLib.timeout_add(GLib.PRIORITY_DEFAULT, 80, () => {
-                    dev.notify_pointer_button(
+                    dev.notify_button(
                         global.display.get_current_time_roundtrip() * 1000,
                         1, Clutter.ButtonState.RELEASED);
                     return GLib.SOURCE_REMOVE;
@@ -1346,6 +1413,7 @@ export default class GjsOskExtension extends Extension {
     }
 
     disable() {
+        globalThis.__erhaiOsk = null;
         this.gnomeKeyboardSettings.disconnect(this.isGnomeKeyboardEnabledHandler)
         this.gnomeKeyboardSettings.set_boolean('screen-keyboard-enabled', this.isGnomeKeyboardEnabled);
 
