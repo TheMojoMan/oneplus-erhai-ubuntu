@@ -456,27 +456,6 @@ function oskFindTextEntry(actor, depth) {
     return null;
 }
 
-/* Is a shell modal dialog (the Wi-Fi secret prompt, GDM's auth prompt, any
- * other ModalDialog) currently up?  Those live in
- * Main.layoutManager.modalDialogGroup; our own actors never do -- the keyboard
- * is parented to the compositor's input panel group (see oskJoinInputPanel()).
- * Used by refresh(): rebuilding the Keyboard while such a dialog owns the
- * scene graph is what took the shell down on 2026-10-27, so the rebuild waits
- * for the keyboard to close in that one case only. */
-function oskShellDialogUp() {
-    try {
-        const group = Main.layoutManager.modalDialogGroup;
-        const kids = (group && group.get_children) ? group.get_children() : [];
-        for (const child of kids) {
-            if (child.visible)
-                return true;
-        }
-    } catch (e) {
-        logError(e, 'GJS-OSK: modal dialog lookup failed');
-    }
-    return false;
-}
-
 /* The text entry of a VISIBLE modal dialog inside the shell -- the Wi-Fi
  * secret prompt (NetworkSecretDialog: ModalDialog + St.PasswordEntry in
  * Main.layoutManager.modalDialogGroup), GDM's auth prompt, any other shell
@@ -689,23 +668,10 @@ export default class GjsOskExtension extends Extension {
             this.Keyboard.close(!instant ? null : true);
             this._setKeyboardVisible(false);
         }
-        /* [erhai 2.35] a rebuild requested while the OSK was open runs only
-         * now, and only after the dialog that closed it is really gone: one
-         * second later, in the main loop, with the keyboard closed. */
-        if (this._refreshWhenClosed && this._refreshTimeout == null) {
-            this._refreshTimeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1500, () => {
-                this._refreshTimeout = null;
-                if (this.Keyboard && this.Keyboard.opened) {
-                    this._refreshWhenClosed = true;
-                    return GLib.SOURCE_REMOVE;
-                }
-                this._refreshWhenClosed = false;
-                log('GJS-OSK: running the deferred refresh');
-                if (typeof this.refresh === 'function')
-                    this.refresh();
-                return GLib.SOURCE_REMOVE;
-            });
-        }
+        /* [erhai 2.35-test-02] No deferred rebuild is scheduled here any more:
+         * a request that arrives while the OSK is open now relayouts its keys
+         * in place (see Keyboard.relayout), so there is nothing left to redo
+         * after the close. */
     }
 
     // [erhai] Every write of the sticky `keyboard-visible` flag that THIS
@@ -998,25 +964,15 @@ export default class GjsOskExtension extends Extension {
                     .slice(1, 3).map(l => l.trim()).join(' <- ');
                 log(`GJS-OSK life refresh ${this._oskRefreshN}: ${where}`);
             }
-            /* [erhai 2.35] Never rebuild under the user's fingers WHILE a shell
-             * modal dialog is up.  A rebuild destroys the Keyboard actor tree,
-             * and doing that during the Wi-Fi password prompt (a settings or
-             * input-source change fires exactly when it opens AND when
-             * "Connect" closes it) is what took the shell down on 2026-10-27.
-             * Everywhere else the rebuild runs live: switching the input
-             * source with the keyboard open must change the key labels
-             * immediately -- an unconditional deferral here left the old
-             * language on screen until the keyboard was closed (owner report
-             * 2026-10-28).  The virtual device is session-wide since 2.35, so
-             * a rebuild no longer churns the seat. */
-            if (this.Keyboard && this.Keyboard.opened && oskShellDialogUp()) {
-                this._oskRefreshDeferred = (this._oskRefreshDeferred || 0) + 1;
-                if (this._oskRefreshDeferred <= 20)
-                    log(`GJS-OSK: refresh deferred, shell dialog up ` +
-                        `(${this._oskRefreshDeferred})`);
-                this._refreshWhenClosed = true;
-                return;
-            }
+            /* [erhai 2.35-test-02] An OPEN keyboard is no longer destroyed on a
+             * refresh: initializeKeyboard() rebuilds only its key widgets in
+             * place (Keyboard.relayout), so the actor, its grab-chrome parent
+             * and the session-wide virtual device all stay alive.  That makes a
+             * language switch take effect immediately -- including behind the
+             * Wi-Fi password dialog -- without the actor teardown that took the
+             * shell down on 2026-10-27.  (2.35 deferred every rebuild until the
+             * keyboard closed; the owner could not change the language from the
+             * panel at all -- report 2026-10-28.) */
             (async () => {
                 // [insert handwriting 2]
                 let rawCustomLayouts = this.settings.get_string("custom-layout") || "[]";
@@ -1184,6 +1140,23 @@ export default class GjsOskExtension extends Extension {
                     }
 
                     keycodes = JSON.parse(contents);
+
+                    /* [erhai 2.35-test-02] Keyboard OPEN: rebuild the keys in
+                     * place.  Destroying and recreating the Keyboard here is
+                     * what made the layout look frozen (2.35 deferred instead
+                     * and never applied it) and what crashed the shell inside
+                     * the Wi-Fi dialog teardown on 2026-10-27.  The key widgets
+                     * carry no grab state, no device and no grab-chrome parent,
+                     * so replacing them is safe at any time -- also while a
+                     * shell modal dialog is up. */
+                    if (this.Keyboard && this.Keyboard.opened) {
+                        this._oskRelayoutN = (this._oskRelayoutN || 0) + 1;
+                        if (this._oskRelayoutN <= 20)
+                            log(`GJS-OSK: relayouting the open keyboard ` +
+                                `(${this._oskRelayoutN}, layout ${layoutId})`);
+                        this.Keyboard.relayout();
+                        return;
+                    }
 
                     if (this.Keyboard) {
                         this.Keyboard.destroy();
@@ -1578,11 +1551,6 @@ export default class GjsOskExtension extends Extension {
         if (this.Keyboard != null)
             this.Keyboard.destroy();
         /* [erhai 2.35] the extension owns the one virtual keyboard device */
-        if (this._refreshTimeout != null) {
-            GLib.source_remove(this._refreshTimeout);
-            this._refreshTimeout = null;
-        }
-        this._refreshWhenClosed = false;
         if (this._oskInputDevice) {
             try {
                 this._oskInputDevice.run_dispose();
@@ -1851,8 +1819,51 @@ class Keyboard extends Dialog {
         }
     }
 
+    /* [erhai 2.35-test-02] Rebuild ONLY the key widgets of a live keyboard.
+     * The Keyboard actor itself, its parent (the compositor's input panel
+     * group = the stage grab chrome), the session-wide virtual device and the
+     * open state all stay untouched.  Used when the input source changes while
+     * the keyboard is up: the new keycodes must show at once, and destroying
+     * the whole actor tree for that is what took the shell down on 2026-10-27. */
+    relayout() {
+        const wasOpen = this.opened;
+        const boxOpacity = this.box.opacity;
+        const [tx, ty, tz] = [this.translation_x, this.translation_y, this.translation_z];
+
+        for (const child of this.box.get_children())
+            child.destroy();
+        if (this.nonDragBlocker) {
+            try {
+                Main.layoutManager.removeChrome(this.nonDragBlocker);
+            } catch (e) {
+                logError(e, 'GJS-OSK: relayout could not remove the drag blocker');
+            }
+            this.nonDragBlocker.destroy();
+        }
+        /* buildUI() destroys/nulls this itself when dragging is enabled, so it
+         * needs a non-null object either way -- _init() does the same. */
+        this.nonDragBlocker = new Clutter.Actor();
+        this.mod = [];
+        this.modBtns = [];
+        this.keys = [];
+        this.shiftButtons = [];
+
+        this.buildUI();
+
+        this.set_translation(tx, ty, tz);
+        this.box.set_opacity(boxOpacity);
+
+        if (wasOpen && !this.settings.get_boolean("enable-drag") &&
+            this.nonDragBlocker !== null) {
+            Main.layoutManager.addChrome(this.nonDragBlocker, {
+                affectsStruts: true,
+                trackFullscreen: true,
+            });
+        }
+        oskLife(this, `relayout() open=${wasOpen} opacity=${boxOpacity}`);
+    }
+
     destroy() {
-        oskSetUnredirect(true);
         if (this._oldMaybeHandleEvent !== undefined)
             Main.keyboard.maybeHandleEvent = this._oldMaybeHandleEvent
         if (this.oldBottomDragAction !== null && this.oldBottomDragAction instanceof Clutter.Action && EdgeDragAction != null) {
