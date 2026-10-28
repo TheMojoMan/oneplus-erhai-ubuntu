@@ -60,7 +60,10 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 . "$HERE/../ppa-common.sh"
 
 KERNEL_REPO="${KERNEL_REPO:-https://github.com/themojoman/oneplus-erhai-linux.git}"
-KERNEL_TREE="${KERNEL_TREE:-$HERE/../oneplus-erhai-linux}"
+# The kernel tree lives at the WORKSPACE root (next to oneplus-erhai-ubuntu/),
+# not next to this builder -- $HERE/.. is the ubuntu repo, whose
+# oneplus-erhai-linux* dirs are the deb payload snapshots.
+KERNEL_TREE="${KERNEL_TREE:-$(dirname "$_PPA_COMMON_DIR")/oneplus-erhai-linux}"
 BRANCH="${BRANCH:-${1:-master}}"
 NO_PULL="${NO_PULL:-1}"
 JOBS="${JOBS:-$(nproc)}"
@@ -325,7 +328,7 @@ dpkg-deb --build --root-owner-group "$SNAP" "$OUT_DEB"
 # to share a kernel.  NO_PPA=1 is kept for old callers and changes nothing.)
 # ppa-guard still runs now, so a package carrying personal data is caught at
 # build time instead of at publish time.
-"$HERE/ppa-guard.sh" "$OUT_DEB" || {
+_ppa_guard "$OUT_DEB" || {
 	echo "ERROR: ppa-guard rejected $OUT_DEB -- do not publish it as is" >&2
 	exit 1
 }
