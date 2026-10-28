@@ -1167,13 +1167,24 @@ export default class GjsOskExtension extends Extension {
                         return;
                     }
 
+                    /* [erhai 2.35-test-03] NOT every method may be wrapped: the
+                     * wrapper is `async`, so a method that RETURNS a value
+                     * hands its caller a Promise -- always truthy.  That broke
+                     * the key colours the moment the keys were rebuilt outside
+                     * the constructor (relayout): `if (this.lightOrDark())`
+                     * became always true and every key got the `inverted`
+                     * (black-on-light) class instead of staying `regular`
+                     * (white on dark) -- owner report 2026-10-28.  Predicates
+                     * keep their synchronous return value. */
+                    const SYNC_METHODS = ['lightOrDark'];
                     function withErrorHandler(TargetClass, handler) {
                         return new Proxy(TargetClass, {
                             construct(Target, args) {
                                 const instance = new Target(...args);
                                 for (const key of Object.getOwnPropertyNames(Target.prototype)) {
                                     const fn = instance[key];
-                                    if (typeof fn === "function" && key !== "constructor") {
+                                    if (typeof fn === "function" && key !== "constructor" &&
+                                        !SYNC_METHODS.includes(key)) {
                                         instance[key] = async (...fnArgs) => {
                                             try {
                                                 return await fn.apply(instance, fnArgs);
@@ -1832,6 +1843,10 @@ class Keyboard extends Dialog {
 
         for (const child of this.box.get_children())
             child.destroy();
+        /* The box survives, so the theme classes buildUI() adds would stack up
+         * (a stale `regular` next to a new `inverted`).  Drop them first. */
+        for (const cls of ['regular', 'inverted', 'boxLay'])
+            this.box.remove_style_class_name(cls);
         if (this.nonDragBlocker) {
             try {
                 Main.layoutManager.removeChrome(this.nonDragBlocker);
