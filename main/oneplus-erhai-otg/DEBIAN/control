@@ -1,16 +1,18 @@
 Package: oneplus-erhai-otg
-Version: 1.3
+Version: 1.3-test-05
 Section: utils
 Priority: optional
 Architecture: all
 Maintainer: TheMojoMan <themojoman@gmx.net>
-Description: ADSP OTG session re-arm for the OnePlus Pad 3 (erhai)
- On every USB-C detach the kernel driver erhai_otg_glink disarms the ADSP
- OTG session to keep the dwc3 island alive; on this ADSP firmware a
- disarmed session after a DP-altmode-capable partner leaves the Type-C CC
- attach detection dead (replugs are invisible until reboot). This package
- ships /usr/local/sbin/erhai-otg-rearm.sh, which re-arms the session over
- pmic_glink via the erhai_otg debugfs cmd knob (USB_OTG_AP_ENABLE=17,
- USB_OTG_SWITCH=18), a oneshot systemd unit, and a udev rule triggering it
- on Type-C port change / partner removal so every detach self-heals.
+Description: ADSP OTG host touch for the OnePlus Pad 3 (erhai)
+ On this ADSP firmware the Type-C CC attach detection stays dead after a
+ USB-C host session ends (replugs are invisible until reboot). The kernel
+ keeps the OTG session armed through detach, so its own self-heal paths are
+ off and a plain re-arm is a no-op. This package ships
+ /usr/local/sbin/erhai-otg-rearm.sh, a oneshot systemd unit and a udev rule
+ set that drive the two steps which actually work (measured 2026-10-28):
+ on the detach edge set the dwc3 data role back to host -- that makes the
+ ADSP announce the next partner again -- and on the typec partner add event
+ turn VBUS on for a sink partner (the kernel's own VBUS write does not
+ take). No polling: everything is udev / systemd triggered.
  Requires the erhai kernel (erhai_otg_glink + debugfs).

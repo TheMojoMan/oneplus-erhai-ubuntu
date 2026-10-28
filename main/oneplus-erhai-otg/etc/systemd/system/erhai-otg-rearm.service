@@ -1,9 +1,11 @@
 [Unit]
-Description=erhai ADSP OTG session re-arm (revive CC attach detection after USB-C detach)
-# Started by udev rule 70-erhai-otg-rearm.rules ONLY when its PROGRAM gate reports a
-# real detach edge (the port emits a phantom "change" every ~4 s, which used to start
-# this unit ~15x/min).  See /usr/local/sbin/erhai-otg-rearm.sh (check|rearm|status).
+Description=erhai ADSP OTG host touch (revive Type-C attach detection after a USB-C detach)
+# Started by udev rule 70-erhai-otg-rearm.rules on a real host-session exit (the xHCI host
+# platform device was removed, or the PROGRAM edge gate on the ~4 s phantom port0 change).
+# The script sets the dwc3 data role back to host, which is what makes the ADSP announce
+# the next partner; VBUS stays OFF (the typec partner add rule turns it on, sink only).
+# See /usr/local/sbin/erhai-otg-rearm.sh (check|host-kick|vbus|restart|status).
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/sbin/erhai-otg-rearm.sh rearm
+ExecStart=/usr/local/sbin/erhai-otg-rearm.sh host-kick

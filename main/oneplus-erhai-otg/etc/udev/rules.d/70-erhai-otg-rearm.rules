@@ -1,15 +1,37 @@
-# erhai (OnePlus Pad 3): re-arm the ADSP OTG session after Type-C detach.
-# After a detach the ADSP CC attach detection can stay dead until the session
-# is re-armed (see /usr/local/sbin/erhai-otg-rearm.sh) -- replugs stay invisible.
+# erhai (OnePlus Pad 3): revive Type-C attach detection after a USB-C host session ends,
+# so the next plug is announced again (see /usr/local/sbin/erhai-otg-rearm.sh).
+# This ADSP forgets how to announce a partner once a host session ends, and the kernel keeps
+# the OTG session armed through detach, so its own self-heal is off.  All udev-driven, no
+# polling:
 #
-# EDGE GATE (2026-10-21): the original rule started the service on EVERY port0
-# "change" uevent, but this line emits a PHANTOM change every ~4.03 s with no
-# partner/role information in the payload, so the service ran ~15x/min and the
-# mechanism was disabled on 2026-09-14.  `PROGRAM=... check` is a cheap edge
-# detector run inside udev (no service spawn); RESULT=="edge" only matches when a
-# partner was seen and then disappeared -- i.e. a REAL detach.
-# NOTE: ACTION=="remove" + SYSTEMD_WANTS never fires (systemd drops the start
-# request for an already-deleted device) - do not rely on remove rules.
+# 1. DETACH EDGE -> data role -> host (VBUS stays off).  That alone makes the ADSP announce
+#    the next partner.  The xHCI host platform device going away IS the end of a host
+#    session; `remove` + SYSTEMD_WANTS never fires (systemd drops the start request for an
+#    already-deleted device), so start the unit with systemctl instead (--no-block).
+#
+# 2. ATTACH -> the ADSP announces the partner as a typec `port0-partner`, or - when it keeps
+#    a stale partner object - only grants the host role.  Either way the attach action turns
+#    VBUS on for a bus-powered device (the kernel's own VBUS write does not take) and binds
+#    the xhci-hcd platform device if a failed probe left it unbound.  The script refuses
+#    VBUS unless we are the source towards a sink.
+#
+# 3. HEARTBEAT EDGE: this line's typec port0 emits a PHANTOM `change` every ~4.03 s (the
+#    ucsi_glink poll, erhai_ucsi_poll_ms) with no partner/role information in the payload,
+#    so the original rule started the service ~15x/min and the mechanism was disabled on
+#    2026-09-14.  `PROGRAM=... check` is a cheap edge detector run inside udev (no service
+#    spawn); RESULT=="edge" only matches when a host session was seen and then disappeared.
+#
+# NOTE: do NOT gate on /sys/class/typec/port0-partner: it flaps, and in the broken state it
+# is absent even with a device plugged in (2026-10-28).
+ACTION=="remove", SUBSYSTEM=="platform", DEVPATH=="*/xhci-hcd.*.auto", \
+  RUN+="/usr/bin/systemctl --no-block start erhai-otg-rearm.service"
+
 ACTION=="change", SUBSYSTEM=="typec", KERNEL=="port0", \
   PROGRAM="/usr/local/sbin/erhai-otg-rearm.sh check", RESULT=="edge", \
   TAG+="systemd", ENV{SYSTEMD_WANTS}="erhai-otg-rearm.service"
+
+ACTION=="add", SUBSYSTEM=="typec", ENV{DEVTYPE}=="typec_partner", KERNEL=="port0-partner", \
+  RUN+="/usr/local/sbin/erhai-otg-rearm.sh attach"
+
+ACTION=="change", SUBSYSTEM=="usb_role", ENV{USB_ROLE_SWITCH}=="a600000.usb-role-switch", \
+  RUN+="/usr/local/sbin/erhai-otg-rearm.sh attach"
