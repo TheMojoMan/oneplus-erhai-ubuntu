@@ -456,6 +456,27 @@ function oskFindTextEntry(actor, depth) {
     return null;
 }
 
+/* Is a shell modal dialog (the Wi-Fi secret prompt, GDM's auth prompt, any
+ * other ModalDialog) currently up?  Those live in
+ * Main.layoutManager.modalDialogGroup; our own actors never do -- the keyboard
+ * is parented to the compositor's input panel group (see oskJoinInputPanel()).
+ * Used by refresh(): rebuilding the Keyboard while such a dialog owns the
+ * scene graph is what took the shell down on 2026-10-27, so the rebuild waits
+ * for the keyboard to close in that one case only. */
+function oskShellDialogUp() {
+    try {
+        const group = Main.layoutManager.modalDialogGroup;
+        const kids = (group && group.get_children) ? group.get_children() : [];
+        for (const child of kids) {
+            if (child.visible)
+                return true;
+        }
+    } catch (e) {
+        logError(e, 'GJS-OSK: modal dialog lookup failed');
+    }
+    return false;
+}
+
 /* The text entry of a VISIBLE modal dialog inside the shell -- the Wi-Fi
  * secret prompt (NetworkSecretDialog: ModalDialog + St.PasswordEntry in
  * Main.layoutManager.modalDialogGroup), GDM's auth prompt, any other shell
@@ -977,16 +998,21 @@ export default class GjsOskExtension extends Extension {
                     .slice(1, 3).map(l => l.trim()).join(' <- ');
                 log(`GJS-OSK life refresh ${this._oskRefreshN}: ${where}`);
             }
-            /* [erhai 2.35] Never rebuild under the user's fingers.  A rebuild
-             * destroys the Keyboard actor tree, and doing that while the OSK is
-             * up on a shell modal dialog (the Wi-Fi password prompt: a settings
-             * or input-source change fires exactly when it opens AND when
+            /* [erhai 2.35] Never rebuild under the user's fingers WHILE a shell
+             * modal dialog is up.  A rebuild destroys the Keyboard actor tree,
+             * and doing that during the Wi-Fi password prompt (a settings or
+             * input-source change fires exactly when it opens AND when
              * "Connect" closes it) is what took the shell down on 2026-10-27.
-             * The rebuild is deferred until the keyboard has closed. */
-            if (this.Keyboard && this.Keyboard.opened) {
+             * Everywhere else the rebuild runs live: switching the input
+             * source with the keyboard open must change the key labels
+             * immediately -- an unconditional deferral here left the old
+             * language on screen until the keyboard was closed (owner report
+             * 2026-10-28).  The virtual device is session-wide since 2.35, so
+             * a rebuild no longer churns the seat. */
+            if (this.Keyboard && this.Keyboard.opened && oskShellDialogUp()) {
                 this._oskRefreshDeferred = (this._oskRefreshDeferred || 0) + 1;
                 if (this._oskRefreshDeferred <= 20)
-                    log(`GJS-OSK: refresh deferred, keyboard open ` +
+                    log(`GJS-OSK: refresh deferred, shell dialog up ` +
                         `(${this._oskRefreshDeferred})`);
                 this._refreshWhenClosed = true;
                 return;
