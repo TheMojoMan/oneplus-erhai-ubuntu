@@ -605,46 +605,23 @@ it from there and re-open `gpu-MEMORY-2026-10-24.md` sections 10/11 first: the
 two defects recorded there (`escalate()` discarding the `lxc-stop` return code,
 and the postinst's reload storm) are still unfixed in the archived copy.
 
-## User-manager lingering (2.36-test-01 / 2.37)
-
-The package ships `usr/lib/systemd/user/erhai-user-linger.service`, enabled for
-all users through `default.target.wants/`.  On every login it runs
-`loginctl enable-linger %u` as that user (self-linger is allowed without
-authentication), so `user@UID.service` is not stopped when the last session
-ends.  This keeps a process that is stuck in kernel `D` state (for example
-WirePlumber in the Qualcomm audio driver) from blocking the next login with
-"Device or resource busy" while GDM starts the user manager again.  No root and
-no per-user setup are required, and `ConditionUser=!root` excludes root.
-
-## Wait for greeter audio before starting PipeWire (2.36-test-02 / 2.37)
-
-GDM keeps its greeter session alive for a few seconds after a login, and the
-greeter's own PipeWire/WirePlumber still holds the Qualcomm ADSP during that
-window.  A new session's PipeWire then opens the same ALSA device while the
-greeter's WirePlumber is still probing, which wedges the DSP: `qcom-apm` GPR
-command timeouts every 5 s, WirePlumber stuck in kernel `D` state and no audio
-for the whole session.
-
-`usr/lib/systemd/user/pipewire.service.d/50-erhai-wait-greeter.conf` runs
-`erhai-wait-greeter-audio.sh` as `ExecStartPre`.  The script waits (at most
-15 s) until no WirePlumber owned by a `gdm-greeter` logind session is left, so
-the greeter's audio stack is gone before the user's PipeWire opens the device.
-No root is needed; the script only reads `/proc` and `loginctl`.
-
-## No audio in the GDM greeter, short audio stop timeout (2.36-test-03 / 2.37)
+## No audio in the GDM greeter (2.36-test-04 / 2.37)
 
 The greeter does not need audio, but its PipeWire/WirePlumber takes the
 Qualcomm ADSP immediately after logout and randomly wedges it (`qcom-apm` GPR
-command timeouts every 5 s, WirePlumber in kernel `D` state).  The next session
-then has no audio, and stopping the wedged greeter daemon blocks for ~23 s.
+command timeouts every 5 s, WirePlumber in kernel `D` state).  The next user
+session then has no audio.
 
 `erhai-audio-greeter-guard.sh` runs as `ExecCondition` in the user units
 `pipewire.service`, `wireplumber.service`, `pipewire-pulse.service` and
-`filter-chain.service`.  It returns 1 (unit skipped) when the current user has a
-`gdm-greeter` logind session, so the greeter never opens the DSP.  The greeter
-is a dynamic user without an `/etc/passwd` entry, so the check uses `loginctl`
-rather than `ConditionUser` (which is not reliable in user units).
+`filter-chain.service`.  It returns 1 (unit skipped) when the current user has
+a `gdm-greeter` logind session, so the greeter never opens the DSP.  The
+greeter is a dynamic user without an `/etc/passwd` entry, so the guard uses
+`loginctl` rather than `ConditionUser` (which is not reliable in user units).
+No root and no per-user setup are required.
 
-The same drop-ins set `TimeoutStopSec=5`: if a daemon is already stuck in `D`
-state, session teardown waits at most 5 s instead of the default (a wedged
-WirePlumber previously took 23 s to stop).
+The user-manager linger unit and the greeter-wait script from earlier test
+builds are gone: `cosmic-desktop` ships its own `cosmic-user-linger.service`,
+and the guard makes waiting for greeter audio unnecessary.  `cosmic-desktop`
+also mirrors GNOME's logout (it restarts the user D-Bus bus), which stops the
+user's audio stack gracefully before the greeter appears.
