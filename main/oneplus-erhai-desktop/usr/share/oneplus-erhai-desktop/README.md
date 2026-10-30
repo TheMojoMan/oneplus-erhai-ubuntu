@@ -604,3 +604,14 @@ the Waydroid evidence and the old 2.28 deb are archived in
 it from there and re-open `gpu-MEMORY-2026-10-24.md` sections 10/11 first: the
 two defects recorded there (`escalate()` discarding the `lxc-stop` return code,
 and the postinst's reload storm) are still unfixed in the archived copy.
+
+## User-manager lingering (2.36-test-01 / 2.37)
+
+The package ships `usr/lib/systemd/user/erhai-user-linger.service`, enabled for
+all users through `default.target.wants/`.  On every login it runs
+`loginctl enable-linger %u` as that user (self-linger is allowed without
+authentication), so `user@UID.service` is not stopped when the last session
+ends.  This keeps a process that is stuck in kernel `D` state (for example
+WirePlumber in the Qualcomm audio driver) from blocking the next login with
+"Device or resource busy" while GDM starts the user manager again.  No root and
+no per-user setup are required, and `ConditionUser=!root` excludes root.

@@ -62,9 +62,12 @@ for f in usr/local/sbin/erhai-user-groups.sh \
 	 usr/share/glib-2.0/schemas/99-erhai-no-gsd-ambient.gschema.override \
 	 usr/local/share/gdm/greeter/wayland-sessions/gnome-greeter.desktop \
 	 usr/share/gdm/dconf/95-erhai-greeter \
-	 etc/dconf/profile/gdm; do
+	 etc/dconf/profile/gdm \
+	 usr/lib/systemd/user/erhai-user-linger.service; do
 	[ -f "$SRC/$f" ] || { echo "missing $f in $SRC" >&2; exit 1; }
 done
+[ -L "$SRC/usr/lib/systemd/user/default.target.wants/erhai-user-linger.service" ] || {
+	echo "missing linger wants symlink in $SRC" >&2; exit 1; }
 
 # --------------------------------------------------------- gjs-osk payload ---
 # The FIXED gjs-osk (folio gate, 2026-09-29) ships in THIS package as a
