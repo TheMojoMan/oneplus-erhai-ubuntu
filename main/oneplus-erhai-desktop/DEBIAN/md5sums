@@ -25,7 +25,11 @@ b7d70ae00a046f13eb2095ab31e86671  etc/systemd/system/erhai-touchscreen.service
 1203acd4aeafd7664865ac415ef77be6  etc/udev/rules.d/81-erhai-pogo-touchpad.rules
 3997d498709d8bea8f366fb236e72ccb  etc/udev/rules.d/99-nvt-touch-calibration.rules
 e40f551217ff43aa6350bc290794e244  usr/lib/systemd/user/erhai-user-linger.service
-17cccb6811a883100f7333292001eaee  usr/lib/systemd/user/pipewire.service.d/50-erhai-wait-greeter.conf
+5f440568967c2d431c1f4e619f644641  usr/lib/systemd/user/filter-chain.service.d/50-erhai-session.conf
+5f440568967c2d431c1f4e619f644641  usr/lib/systemd/user/pipewire-pulse.service.d/50-erhai-session.conf
+4f7eeec4b7d61350b522b9bc1524ca52  usr/lib/systemd/user/pipewire.service.d/50-erhai-wait-greeter.conf
+5f440568967c2d431c1f4e619f644641  usr/lib/systemd/user/wireplumber.service.d/50-erhai-session.conf
+34fdcbfc2f12bc1e9481563c47528665  usr/local/sbin/erhai-audio-greeter-guard.sh
 7401666e206ac897f9345fd884a9b992  usr/local/sbin/erhai-backlight-fixed.sh
 5b4ded6e56b6def9bfc37bdded11142a  usr/local/sbin/erhai-bypass-charge.sh
 b16cc77441fc28eb6023d235f3a31031  usr/local/sbin/erhai-desktop-gl.sh
@@ -109,7 +113,7 @@ a9f1dd524f5b40187a792a41ea976bdc  usr/share/libinput/erhai-pogo.quirks
 50f7f02feca0f4a3c830753de9c28de3  usr/share/oneplus-erhai-desktop/ding-touch/app/desktopGrid.js
 427c22bb38f891d2bbdd86d8daf3b590  usr/share/oneplus-erhai-desktop/ding-touch/app/desktopIconItem.js
 15158a8cb519eca7b03e55e6fe918193  usr/share/oneplus-erhai-desktop/ding-touch/app/desktopManager.js
-3024d469b6b8028125b5ef57fc16663e  usr/share/oneplus-erhai-desktop/README.md
+e2d3274f1ec91658d61f9b94695f93eb  usr/share/oneplus-erhai-desktop/README.md
 f2bc82d6b37a55a8b9800b1c8845dcc3  usr/share/oneplus-erhai-desktop/ubuntu-dock-dash.js
 dc2063252411085a9f66435d3879dd05  usr/share/sounds/erhai/panel-off.wav
 925a6c726b033f75077254f7ea6bf79f  usr/share/sounds/erhai/panel-on.wav

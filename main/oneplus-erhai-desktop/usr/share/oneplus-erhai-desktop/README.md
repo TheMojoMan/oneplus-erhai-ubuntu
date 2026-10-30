@@ -630,3 +630,21 @@ for the whole session.
 15 s) until no WirePlumber owned by a `gdm-greeter` logind session is left, so
 the greeter's audio stack is gone before the user's PipeWire opens the device.
 No root is needed; the script only reads `/proc` and `loginctl`.
+
+## No audio in the GDM greeter, short audio stop timeout (2.36-test-03 / 2.37)
+
+The greeter does not need audio, but its PipeWire/WirePlumber takes the
+Qualcomm ADSP immediately after logout and randomly wedges it (`qcom-apm` GPR
+command timeouts every 5 s, WirePlumber in kernel `D` state).  The next session
+then has no audio, and stopping the wedged greeter daemon blocks for ~23 s.
+
+`erhai-audio-greeter-guard.sh` runs as `ExecCondition` in the user units
+`pipewire.service`, `wireplumber.service`, `pipewire-pulse.service` and
+`filter-chain.service`.  It returns 1 (unit skipped) when the current user has a
+`gdm-greeter` logind session, so the greeter never opens the DSP.  The greeter
+is a dynamic user without an `/etc/passwd` entry, so the check uses `loginctl`
+rather than `ConditionUser` (which is not reliable in user units).
+
+The same drop-ins set `TimeoutStopSec=5`: if a daemon is already stuck in `D`
+state, session teardown waits at most 5 s instead of the default (a wedged
+WirePlumber previously took 23 s to stop).
