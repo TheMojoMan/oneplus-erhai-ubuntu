@@ -1,6 +1,7 @@
 #!/bin/bash
-# Build the OnePlus Pad 3 (erhai) kernel .deb and publish it to the apt repo,
-# plus build the UKI for the dualboot installer's ESP tree.
+# Build the OnePlus Pad 3 (erhai) kernel .deb and publish it to the apt repo.
+# The UKI is written by the deb's postinst into /boot; the old
+# dualboot/EFI/ubuntu copy is gone (deprecated path).
 #
 #   ./build-kernel.sh [branch]
 #
@@ -28,10 +29,6 @@
 #      build stays local until the owner publishes it with
 #      ../update-ppa.sh --mvtomain (which moves every newer .deb from debs/
 #      into main/).
-#   5. A UKI is built with ukify (same recipe as the deb's postinst, but with
-#      root=PARTLABEL=linux -- the SHIPPED image's label) and moved to
-#      ../dualboot/EFI/ubuntu/<kver>-linux.efi, where
-#      ../dualboot/build-installer-zip.sh packs it into the installer zip.
 #
 # Environment: BRANCH (default master or $1), NO_PULL=1 (skip step 2),
 #              JOBS, KERNEL_TREE, DEB_REV, PPA_DEB_DIR (see ppa-common.sh).
@@ -126,7 +123,6 @@ INNER_DEB="$(ls -t "$KERNEL_TREE"/oneplus-erhai-linux-*_arm64.deb 2>/dev/null | 
 INNER_NAME="$(basename "${INNER_DEB%_arm64.deb}")"      # oneplus-erhai-linux-7.3_<ver>+b<N>
 STAGE_DIR="$KERNEL_TREE/${INNER_NAME%%_*}"              # .../oneplus-erhai-linux-7.3
 KVER="${INNER_NAME#*_}"; KVER="${KVER%+b*}"             # kernelrelease
-CLEAN_KVER="${KVER//-sm8750-themojoman/}"               # 7.3.0-rc5
 # The release must stay EXACTLY one of the frozen strings below (stable vermagic,
 # module paths, UKI name).  A -dirty/-gSHA suffix means tracked tree edits were
 # not committed + tagged (git tag -f -a v7.3-rc5 HEAD) -- refuse to ship that.
@@ -250,7 +246,7 @@ DEB_REV="${DEB_REV:-${INNER_NAME##*+b}}"
 # 2026-10-21 (.clinerules): bare "+b<N>" is the RELEASE form.  A PR / TEST /
 # GPU / display / any other LOCAL build uses "<N>-<topic>-<no>", e.g.
 # 28-test-01, 32-gp-01, 33-panel-02, 34-PD-01 -> Version
-# 7.3.0-rc5-sm8750-themojoman+b34-PD-01, UKI 7.3.0-rc5-l1-b34-PD-01.efi.
+# 7.3.0-rc5-sm8750-themojoman+b34-PD-01.
 # N is the CURRENT line number, i.e. REUSED, never advanced: the +b<N> counter
 # belongs to released builds only, so a local build can never be mistaken for a
 # release and the next real build supersedes it.  The topic is FREE FORM
@@ -338,30 +334,7 @@ echo "kernel deb kept local: $OUT_DEB"
 # tree keeps no stale duplicates of a package that was never published.
 rm -f "$INNER_DEB" "$KERNEL_TREE/${INNER_NAME%%_*}.tar"
 
-# --------------------------------------- UKI for the dualboot installer's ESP --
-# Same recipe as the deb's postinst, but with the SHIPPED image's root label
-# (PARTLABEL=linux -- the rootfs build-root.sh creates).  It is written to
-# ../dualboot/EFI/ubuntu/ but is NOT shipped: an erhai image boots the UKI that
-# the deb's postinst writes into its own /boot, and build-installer-zip.sh ships
-# a raw fixed-size ESP image (no tree), which never carries EFI/ubuntu
-# (2026-10-18).  The file is kept as the manual/fallback UKI for an ESP-only
-# install.
-# KEEP THE CMDLINE IN SYNC WITH the kernel tree's postinst!
-ERHAI_CMDLINE="root=PARTLABEL=linux rootwait rw rootfstype=ext4 fw_devlink=off \
-console=tty0 loglevel=4 clk_ignore_unused pd_ignore_unused \
-panic=30 usbcore.autosuspend=-1 log_buf_len=8M"
-UKI_OUT="$HERE/../../dualboot/EFI/ubuntu/${CLEAN_KVER}-b${DEB_REV}.efi"
-mkdir -p "$(dirname "$UKI_OUT")"
-ukify build \
-	--linux "$SNAP/boot/vmlinuz-$KVER" \
-	--devicetree "$SNAP/boot/dtb-$KVER" \
-	--efi-arch aa64 \
-	--cmdline "$ERHAI_CMDLINE" \
-	--output "$UKI_OUT"
-[ -s "$UKI_OUT" ] || { echo "ukify produced no UKI" >&2; exit 1; }
-
 echo
 echo "done: $(basename "$OUT_DEB")  (kernelrelease $KVER)"
-echo "      UKI -> $UKI_OUT"
 echo "next: ../update-ppa.sh (then install from the repo or dpkg -i the deb)"
 echo "      ../dualboot/build-installer-zip.sh (packs ubuntu.img.zst + esp.img.zst; no UKI -- /boot boots)"
