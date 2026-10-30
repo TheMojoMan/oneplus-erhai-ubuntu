@@ -615,3 +615,18 @@ ends.  This keeps a process that is stuck in kernel `D` state (for example
 WirePlumber in the Qualcomm audio driver) from blocking the next login with
 "Device or resource busy" while GDM starts the user manager again.  No root and
 no per-user setup are required, and `ConditionUser=!root` excludes root.
+
+## Wait for greeter audio before starting PipeWire (2.36-test-02 / 2.37)
+
+GDM keeps its greeter session alive for a few seconds after a login, and the
+greeter's own PipeWire/WirePlumber still holds the Qualcomm ADSP during that
+window.  A new session's PipeWire then opens the same ALSA device while the
+greeter's WirePlumber is still probing, which wedges the DSP: `qcom-apm` GPR
+command timeouts every 5 s, WirePlumber stuck in kernel `D` state and no audio
+for the whole session.
+
+`usr/lib/systemd/user/pipewire.service.d/50-erhai-wait-greeter.conf` runs
+`erhai-wait-greeter-audio.sh` as `ExecStartPre`.  The script waits (at most
+15 s) until no WirePlumber owned by a `gdm-greeter` logind session is left, so
+the greeter's audio stack is gone before the user's PipeWire opens the device.
+No root is needed; the script only reads `/proc` and `loginctl`.

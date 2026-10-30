@@ -63,7 +63,9 @@ for f in usr/local/sbin/erhai-user-groups.sh \
 	 usr/local/share/gdm/greeter/wayland-sessions/gnome-greeter.desktop \
 	 usr/share/gdm/dconf/95-erhai-greeter \
 	 etc/dconf/profile/gdm \
-	 usr/lib/systemd/user/erhai-user-linger.service; do
+	 usr/lib/systemd/user/erhai-user-linger.service \
+	 usr/local/sbin/erhai-wait-greeter-audio.sh \
+	 usr/lib/systemd/user/pipewire.service.d/50-erhai-wait-greeter.conf; do
 	[ -f "$SRC/$f" ] || { echo "missing $f in $SRC" >&2; exit 1; }
 done
 [ -L "$SRC/usr/lib/systemd/user/default.target.wants/erhai-user-linger.service" ] || {
