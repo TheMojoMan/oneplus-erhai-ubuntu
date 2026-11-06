@@ -35,7 +35,7 @@ b16cc77441fc28eb6023d235f3a31031  usr/local/sbin/erhai-desktop-gl.sh
 144113cf3e81f2d50b61dafe0a95b570  usr/local/sbin/erhai-desktop-users.sh
 08f62d8d3001193defc210c04d5bd234  usr/local/sbin/erhai-display-toggle.sh
 f7c5e2a2f7c5f72418a2157fb7706a1c  usr/local/sbin/erhai-folio-calibrate
-9fb9be08b136114c8e4146f57e85486c  usr/local/sbin/erhai-folio-fold.py
+2fe6dfa04ab4ea31914d745711f7ca7c  usr/local/sbin/erhai-folio-fold.py
 3cbee38db62c155c777c46b43dac9473  usr/local/sbin/erhai-folio-gate.sh
 e14aefb217dcfbaba57953a598d9c86b  usr/local/sbin/erhai-folio-probe.py
 517739c4e2e2f950b30a625fda8e883c  usr/local/sbin/erhai-folio-unblank.sh

@@ -32,6 +32,13 @@
 #   GRAB_DEVICES=...    comma-separated input device NAMES to suppress while
 #                       folded (default: the touchscreen + the pen node, see
 #                       GRAB_NAMES)
+#   GRAB_KEYBOARD=1     grab the FOLIO's own keyboard and touchpad while folded:
+#                       the keys lie on the glass and every key edge would reach
+#                       the session (that is how Alt+Super+8 switched the a11y
+#                       magnifier on, owner report 2026-11-06).  Compound keys
+#                       are impossible to filter in the input stack, so the
+#                       devices are grabbed instead of the events being decoded.
+#                       (GRAB_KEYBOARD_DEVICES overrides the name list.)
 #   TOGGLE_CMD=/usr/local/sbin/erhai-display-toggle.sh
 #
 # Only the FOLD is ever applied at startup; a start in the open state leaves
@@ -105,6 +112,16 @@ EVIOCGRAB = 0x40044590
 # folio are deliberately NOT grabbed: they are usable in the laptop position
 # and grabbing them would break typing if the fold were ever mis-detected.
 GRAB_NAMES = ("NVTCapacitiveTouchScreen", "NVTCapacitivePen")
+
+# The FOLIO's own input devices.  Folded onto the screen, the keys and the
+# touchpad are pressed by the tablet and by the desk, so every key edge reaches
+# the session: random shortcuts fire and compound ones (Alt+Super+8 = the a11y
+# magnifier) cannot be filtered anywhere above evdev.  They are grabbed ONLY
+# while folded -- in the laptop position the folio must type normally, which is
+# also why a mis-detected fold must never grab them (the magnetometer gate and
+# the 400 ms dwell are what keep that safe).
+KEYBOARD_GRAB_NAMES = ("OnePlus Pad 3 Keyboard", "OnePlus Pad 3 Touchpad")
+
 
 
 def backlight_file(override=None):
@@ -366,6 +383,13 @@ class FoldWatcher:
         extra = (cfg.get("GRAB_DEVICES") or "").strip()
         self.grab_names = tuple(n.strip() for n in extra.split(",") if n.strip()) \
             or GRAB_NAMES
+        # the folio's keyboard/touchpad are grabbed while folded as well (see
+        # KEYBOARD_GRAB_NAMES): the folded keys press the glass and the desk.
+        self.grab_kb = (not self.dry) and \
+            cfg_int(cfg, "GRAB_KEYBOARD", 1) == 1
+        kb_extra = (cfg.get("GRAB_KEYBOARD_DEVICES") or "").strip()
+        self.kb_names = tuple(n.strip() for n in kb_extra.split(",") if n.strip()) \
+            or KEYBOARD_GRAB_NAMES
         self.grabbed = {}            # device name -> (fd, node)
         try:
             self.mtime = os.stat(conf_path).st_mtime
@@ -472,14 +496,23 @@ class FoldWatcher:
     def power_button_holds_blank(self):
         return state_owner(self.state_file) == "power"
 
-    # -- input suppression while folded (ghost-touch/-pen) ------------------
+    # -- input suppression while folded (ghost-touch/-pen, ghost keys) ------
+    def grab_names_all(self):
+        """Every device name to grab while folded (panel input + folio keys)."""
+        names = list(self.grab_names) if self.grab else []
+        if self.grab_kb:
+            names += [n for n in self.kb_names if n not in names]
+        return tuple(names)
+
     def grab_touch(self):
-        if not self.grab or self.grabbed:
+        if self.grabbed:
             return
-        nodes = find_input_nodes(self.grab_names)
+        names = self.grab_names_all()
+        if not names:
+            return
+        nodes = find_input_nodes(names)
         if not nodes:
-            log("input suppression: none of %s present"
-                % ", ".join(self.grab_names))
+            log("input suppression: none of %s present" % ", ".join(names))
             return
         for name, node in sorted(nodes.items()):
             try:
@@ -715,7 +748,7 @@ def main(argv=None):
             f"dwell={int(w.dwell * 1000)}ms "
             f"startup_dwell={int(w.startup_dwell * 1000)}ms "
             f"mag_rate={rate:g}Hz "
-            f"suppress={','.join(w.grab_names) if w.grab else 'off'} "
+            f"suppress={','.join(w.grab_names_all()) if w.grab_names_all() else 'off'} "
             f"toggle={' '.join(w.toggle)}")
         signal.signal(signal.SIGTERM, lambda *_: setattr(w, "stop", True))
         signal.signal(signal.SIGINT, lambda *_: setattr(w, "stop", True))
