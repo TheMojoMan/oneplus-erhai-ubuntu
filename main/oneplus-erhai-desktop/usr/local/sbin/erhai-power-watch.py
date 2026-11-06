@@ -84,7 +84,21 @@ MON_MAX_TRIES = 40                    # give up after this many failed starts
 # reboot instead.  The short press keeps toggling the panel at once; the hold only
 # adds the escape.
 HOLD_REBOOT_DEFAULT_S = 8.0
-REBOOT_CMD = ['systemctl', 'reboot']
+# --ignore-inhibitors, because the escape is the LAST exit (2.37, 2026-11-06):
+# on boot 80cd49b9 three holds in a row were refused with
+# "Call to Reboot failed: Operation denied due to active block inhibitor" - a
+# gnome-session "user session inhibited" block lock (any app that asked for an
+# inhibitor owns it) - and the pad fell through to the PMIC hard reset the
+# escape exists to avoid.  A user who holds the key for 8 s has said what he
+# wants; no session inhibitor may overrule that.
+REBOOT_CMD = ['systemctl', 'reboot', '--ignore-inhibitors']
+
+# A panel transition that takes longer than this was not a normal one: the
+# ScreenSaver.SetActive call has a 10 s timeout and hit it on 2026-11-06
+# (boot 990de33f, 06:18:54), which is how the key backlog below became a
+# problem in the first place.  Worth a forensic line, never a delay.
+SLOW_TOGGLE_S = 1.0
+MAX_REPLAY_PRESSES = 8        # cap: never fork the panel script in a storm
 
 # DISPLAY-PIPELINE ERRORS (2.22).  The kernel can lose the picture while the
 # compositor stays awake, the CRTC reports "enabled" and the backlight is lit -
@@ -541,10 +555,14 @@ class PowerHold:
         driver never emits anything in between;
       * one escape per hold: the release re-arms it (and a release is what the
         driver sends when the key comes up);
+      * the release must actually be READ before the timer is measured: events
+        that queue behind a slow panel transition are drained first
+        (pending_events), or a press/release pair the loop never saw becomes a
+        false "held N s" reboot (2026-11-06, boot 990de33f);
       * the PMIC's own long-press reset (if any) fires LATER than this, so a clean
         shutdown gets its chance to start first;
-      * `systemctl reboot` is logged, never retried - if the shutdown cannot
-        complete, the user still has the hardware reset.
+      * the reboot is logged, never retried - if the shutdown cannot complete,
+        the user still has the hardware reset.
     """
 
     def __init__(self, seconds=None, cmd=None, now=None, runner=None):
@@ -586,6 +604,44 @@ class PowerHold:
             subprocess.run(cmd, timeout=30)
         except Exception as exc:
             log(f'hold reboot failed ({cmd}): {exc}')
+
+
+def pending_events(f, size, fmt):
+    """Every input event already queued on the key node, WITHOUT blocking.
+
+    Why this exists (2026-11-06, boot 990de33f 06:18:44-06:18:54): the
+    press handler runs `erhai-panel-power.sh` INLINE, and its
+    org.gnome.ScreenSaver.SetActive call is a `gdbus` with a 10 s timeout.  That
+    call hit the timeout (gnome-shell did not answer), so the daemon read no
+    input for 10.02 s while the owner pressed the key three times.  Every one of
+    those presses and releases sat in the evdev queue, unread - and
+    PowerHold.check() fired the moment the loop came back ("power key held 8s ->
+    CLEAN REBOOT") because the release that would have re-armed the timer had
+    never been fed to it.
+
+    Reading the backlog before the timer is measured makes that impossible: a
+    key that is REALLY still down has no release in the queue, so the escape
+    still fires exactly as designed.
+    """
+    out = []
+    fd = f.fileno()
+    flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+    fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+    try:
+        while True:
+            try:
+                data = os.read(fd, size)
+            except OSError as exc:
+                if exc.errno in (errno.EAGAIN, errno.EWOULDBLOCK):
+                    break
+                raise
+            if not data or len(data) < size:
+                break
+            _s, _u, etype, code, value = struct.unpack(fmt, data)
+            out.append((etype, code, value))
+    finally:
+        fcntl.fcntl(fd, fcntl.F_SETFL, flags)
+    return out
 
 
 def _session_env(uid, rt):
@@ -758,7 +814,8 @@ def main(argv=None):
     ap.add_argument('--panel-cmd', default=None, metavar='CMD',
                     help='override the panel script (used by tests)')
     ap.add_argument('--reboot-cmd', default=None, metavar='CMD',
-                    help='what the hold escape runs (default: systemctl reboot)')
+                    help='what the hold escape runs (default: systemctl reboot '
+                         '--ignore-inhibitors)')
     ap.add_argument('--hold-seconds', type=float, default=None, metavar='S',
                     help='press-and-hold reboot threshold (0 disables; default '
                          'POWER_HOLD_REBOOT_S or %g s)' % HOLD_REBOOT_DEFAULT_S)
@@ -846,6 +903,60 @@ def main(argv=None):
     mon_tries = 0
     try:
         with open(dev, 'rb', buffering=0) as f:
+            def do_press():
+                """One KEY_POWER press: the panel transition, run INLINE."""
+                print('KEY_POWER press -> toggle', flush=True)
+                survlog_nowait('powerwatch KEY_POWER ts=%d' % int(time.time()))
+                if integrity is not None:
+                    # A press is OUR transition: ignore the detectors
+                    # for its duration (the lit-panel-with-state window
+                    # would otherwise start a re-assert), and protect a
+                    # fresh blank the moment it exists.
+                    integrity.suppress(INTEGRITY_PRESS_SUPPRESS_S)
+                    integrity.last = None
+                t0 = time.monotonic()
+                run_toggle(panel_cmd, guard)
+                return time.monotonic() - t0
+
+            def drain_backlog():
+                """Feed the events that queued behind a slow toggle.
+
+                Returns the number of presses still owing their own toggle:
+                erhai-panel-power.sh is a TOGGLE, so replaying them ends in the
+                same panel state a live read would have produced.
+                """
+                n = 0
+                for etype, code, value in pending_events(f, size, fmt):
+                    hold.feed(etype, code, value)
+                    if etype == EV_KEY and code == KEY_POWER and value == 1:
+                        n += 1
+                return n
+
+            def press_with_backlog():
+                """A press, then its backlog, THEN the hold check - order matters.
+
+                The backlog must be consumed before PowerHold.check() is asked:
+                a release sitting in the queue has to disarm the timer first,
+                or short presses become a "held 8 s" reboot (2026-11-06).
+                """
+                took = do_press()
+                if took >= SLOW_TOGGLE_S:
+                    log('panel path blocked %.1fs -> draining the key backlog'
+                        % took)
+                    survlog_nowait('powerwatch SLOW-TOGGLE %.1fs' % took)
+                replay = drain_backlog()
+                hold.check()
+                replays = 0
+                while replay and replays < MAX_REPLAY_PRESSES:
+                    replays += 1
+                    do_press()
+                    replay = drain_backlog()
+                    hold.check()
+                if replay:
+                    log('KEY_POWER: %d queued presses dropped (key stuck?)'
+                        % replay)
+                return replays
+
             while not stop:
                 if integrity is not None and mon is None and time.monotonic() >= next_mon:
                     # This service starts around multi-user.target, i.e. possibly
@@ -886,17 +997,7 @@ def main(argv=None):
                         _s, _u, etype, code, value = struct.unpack(fmt, data)
                         hold.feed(etype, code, value)
                         if etype == EV_KEY and code == KEY_POWER and value == 1:
-                            print('KEY_POWER press -> toggle', flush=True)
-                            survlog_nowait('powerwatch KEY_POWER ts=%d'
-                                           % int(time.time()))
-                            if integrity is not None:
-                                # A press is OUR transition: ignore the detectors
-                                # for its duration (the lit-panel-with-state window
-                                # would otherwise start a re-assert), and protect a
-                                # fresh blank the moment it exists.
-                                integrity.suppress(INTEGRITY_PRESS_SUPPRESS_S)
-                                integrity.last = None
-                            run_toggle(panel_cmd, guard)
+                            press_with_backlog()
                     elif kmsg_fd is not None and r == kmsg_fd:
                         try:
                             chunk = os.read(kmsg_fd, 65536)

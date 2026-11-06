@@ -49,7 +49,7 @@ c01ca798c86aa860863e0b5d0742af57  usr/local/sbin/erhai-panel-power.sh
 94814a5165a6a1cb2fa0034be7a96c01  usr/local/sbin/erhai-panel-state-migrate.sh
 67ce8778d280768ed97078a7852b366a  usr/local/sbin/erhai-pogo-activate.sh
 de6e899429cb709ba3d5c3828db2f9a1  usr/local/sbin/erhai-pogo-osk.py
-93499275dd4308b4188e6085b1707fc1  usr/local/sbin/erhai-power-watch.py
+9e2bbee2283abafa1ccfc1c0d3fdcf39  usr/local/sbin/erhai-power-watch.py
 b60c6831263f6164fa46fc842d14931a  usr/local/sbin/erhai-rtc-sync.py
 17b29ffc5594c9bf8c5ad859fe97b8b1  usr/local/sbin/erhai-suspend-gnome.sh
 690145e982c31634279be7ef18caab15  usr/local/sbin/erhai-suspend-s2idle.sh
