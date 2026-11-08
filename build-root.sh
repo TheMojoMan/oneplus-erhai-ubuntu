@@ -360,11 +360,13 @@ fi
 #
 # FOLIO GATE (2026-09-29): pogoGate.js + the [erhai] blocks in extension.js
 # keep the OSK from coming up by itself while the pogo folio keyboard is
-# attached (no touch/tap auto-show, no bottom-edge swipe, no restore at
-# login), retract an automatically opened keyboard on attach, and make the
-# on-screen CLOSE key clear the sticky `keyboard-visible` flag -- which is
-# why the SEED below must ship `keyboard-visible=false`: a `true` inherited
-# from a live session made every login pop an OSK nobody had asked for.
+# attached (no touch/tap auto-show, no restore at login), retract an
+# automatically opened keyboard on attach, and make the on-screen CLOSE key
+# clear the sticky `keyboard-visible` flag -- which is why the SEED below must
+# ship `keyboard-visible=false`: a `true` inherited from a live session made
+# every login pop an OSK nobody had asked for.  The EXPLICIT bottom-edge swipe
+# is NOT gated (2026-11-08): the folio still reports "attached" when folded
+# behind the tablet, and then the swipe is the only way to bring the OSK up.
 GJSOSK="$ROOTDIR/usr/share/gnome-shell/extensions/gjsosk@vishram1123.com"
 for f in metadata.json extension.js pogoGate.js prefs.js physicalLayouts.json \
 	 keycodes.tar.xz schemas/gschemas.compiled \

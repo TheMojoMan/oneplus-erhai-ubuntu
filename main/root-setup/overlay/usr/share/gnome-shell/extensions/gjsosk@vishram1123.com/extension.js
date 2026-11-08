@@ -1752,12 +1752,13 @@ class Keyboard extends Dialog {
             let oskEdgeDragAction;
             if (EdgeDragAction != null) {
                 oskEdgeDragAction = new EdgeDragAction.EdgeDragAction(side, mode);
+                /* [erhai 2026-11-08] The bottom-edge swipe is an EXPLICIT
+                 * request for the keyboard and ignores the folio gate: the
+                 * folio stays "attached" even when it is folded behind the
+                 * tablet, and then the swipe was the only way to get the OSK
+                 * (the owner reported that it stopped working).  Only the
+                 * implicit auto-show paths stay gated. */
                 oskEdgeDragAction.connect('activated', () => {
-                    if (pogoKeyboardAttached()) {   // [erhai] folio gate
-                        this.extensionObject?._folioGateNote('bottom-edge swipe');
-                        this.gestureInProgress = false;
-                        return;
-                    }
                     this.open(true);
                     this.openedFromButton = true;
                     this.closedFromButton = false;
@@ -1773,10 +1774,6 @@ class Keyboard extends Dialog {
                     return Clutter.EVENT_PROPAGATE;
                 });
                 oskEdgeDragAction.connect('progress', (_action, progress) => {
-                    if (pogoKeyboardAttached()) {   // [erhai] folio gate
-                        this.extensionObject?._folioGateNote('bottom-edge swipe');
-                        return;
-                    }
                     if (!this.gestureInProgress)
                         this.open(false)
                     this.setOpenState(Math.min(Math.max(0, (progress / (side % 2 == 0 ? this.box.height : this.box.width)) * 100), 100))
@@ -1791,19 +1788,14 @@ class Keyboard extends Dialog {
                     name: 'GJS-OSK Edge Drag Action',
                     side
                 })
+                /* [erhai 2026-11-08] See the EdgeDragAction branch above: the
+                 * deliberate bottom-edge swipe is not gated by the folio
+                 * keyboard, otherwise waving the OSK up while the folio is
+                 * folded behind the tablet does nothing. */
                 oskEdgeDragAction.connect('may-recognize', () => {
-                    if (pogoKeyboardAttached()) {   // [erhai] folio gate: no swipe
-                        this.extensionObject?._folioGateNote('bottom-edge swipe');
-                        return 0;
-                    }
                     return Shell.ActionMode.ALL & ~Shell.ActionMode.LOCK_SCREEN & Main.actionMode;
                 })
                 oskEdgeDragAction.connect('end', () => {
-                    if (pogoKeyboardAttached()) {   // [erhai] folio gate
-                        this.extensionObject?._folioGateNote('bottom-edge swipe');
-                        this.gestureInProgress = false;
-                        return;
-                    }
                     this.open(true);
                     this.openedFromButton = true;
                     this.closedFromButton = false;
@@ -1819,10 +1811,6 @@ class Keyboard extends Dialog {
                     return Clutter.EVENT_PROPAGATE;
                 });
                 oskEdgeDragAction.connect('progress', (_action, progress) => {
-                    if (pogoKeyboardAttached()) {   // [erhai] folio gate
-                        this.extensionObject?._folioGateNote('bottom-edge swipe');
-                        return;
-                    }
                     if (!this.gestureInProgress)
                         this.open(false)
                     this.setOpenState(Math.min(Math.max(0, (progress / (side % 2 == 0 ? this.box.height : this.box.width)) * 100), 100))
