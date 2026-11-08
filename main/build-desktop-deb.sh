@@ -120,6 +120,58 @@ grep -q '"uuid": *"gjsosk@vishram1123.com"' "$GJSOSK_DST/metadata.json" || {
 echo "==> gjs-osk payload: $(find "$GJSOSK_SRC" -type f | wc -l) files," \
 	"copied from $(realpath --relative-to="$HERE" "$GJSOSK_SRC")"
 
+# --------------------------------- workspace-islands extension payload (2.38) ---
+# Independent per-monitor workspaces (owner decision 2026-11-08).  GNOME 50 has
+# exactly ONE workspace set -- mutter keeps a single `active_workspace` and a
+# window belongs to one workspace -- so a 3-finger swipe always moves every
+# display; there is no per-monitor workspace to switch, and adding one is a
+# compositor feature (per-monitor active workspace + per-monitor visibility),
+# not a setting.  This extension provides the behaviour with the tools GNOME
+# has: keep `workspaces-only-on-primary=true` so mutter marks secondary-monitor
+# windows as on-all-workspaces (sticky), give every SECONDARY monitor its own
+# set of virtual workspaces and hide the parked ones by MINIMIZING them.  The
+# primary keeps stock GNOME workspaces untouched; the 3-finger touchpad swipe
+# switches the monitor under the pointer.  On a single monitor it is inert.
+#
+# Third-party GPL code, shipped VERBATIM as released: danielbernalo/
+# gnome-workspace-islands v0.1.2, release zip sha256
+# 0f4da32de0da7f556387b159158950301fb6e503a5f6dd08a64ffd126b5a705b (LICENSE
+# included), so an upstream update is a plain re-copy of this tree.  Same rule
+# as gjs-osk: the overlay is the single source of truth and the deb copies from
+# it on every build; a USER-level copy of the uuid shadows the system one.
+# The seeded `enabled-extensions` (both series) and the mutter key are part of
+# the same change -- without `workspaces-only-on-primary=true` the extension
+# refuses to run and notifies the user.
+WI_UUID="workspace-islands@danielbernalo.github.io"
+WI_SRC="$SETUP/overlay/usr/share/gnome-shell/extensions/$WI_UUID"
+WI_DST="$SRC/usr/share/gnome-shell/extensions/$WI_UUID"
+[ -f "$WI_SRC/metadata.json" ] || {
+	echo "missing $WI_SRC/metadata.json" >&2; exit 1; }
+if [ -e "$WI_DST" ]; then
+	case "$WI_DST" in
+		"$SRC"/usr/share/gnome-shell/extensions/*)
+			find "$WI_DST" -mindepth 1 -delete ;;
+		*) echo "refusing to clean $WI_DST" >&2; exit 1 ;;
+	esac
+fi
+mkdir -p "$WI_DST"
+cp -a "$WI_SRC/." "$WI_DST/"
+find "$WI_DST" -type d -exec chmod 755 {} +
+find "$WI_DST" -type f -exec chmod 644 {} +
+for f in metadata.json extension.js prefs.js visibility.js monitorState.js \
+	 schemas/gschemas.compiled LICENSE; do
+	[ -f "$WI_DST/$f" ] || {
+		echo "missing $f in the workspace-islands payload" >&2; exit 1; }
+done
+grep -q "\"uuid\": *\"$WI_UUID\"" "$WI_DST/metadata.json" || {
+	echo "workspace-islands metadata.json does not declare $WI_UUID" >&2
+	exit 1; }
+grep -q '"shell-version"' "$WI_DST/metadata.json" || {
+	echo "workspace-islands metadata.json declares no shell-version" >&2
+	exit 1; }
+echo "==> workspace-islands payload: $(find "$WI_SRC" -type f | wc -l) files," \
+	"copied from $(realpath --relative-to="$HERE" "$WI_SRC")"
+
 # ------------------------------------------- UBUNTU DOCK touch-scroll patch ---
 # Finger-drag scrolling for the Ubuntu Dock (project dir oneplus-erhai-dock).
 # ubuntu-dock@ubuntu.com is a SESSION-MODE extension (it is listed in

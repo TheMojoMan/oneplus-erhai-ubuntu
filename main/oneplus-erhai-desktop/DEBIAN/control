@@ -1,5 +1,5 @@
 Package: oneplus-erhai-desktop
-Version: 2.37
+Version: 2.38
 Section: utils
 Priority: optional
 Architecture: all
@@ -451,3 +451,17 @@ Description: Desktop glue for the OnePlus Pad 3 (erhai)
  real rebuild while the OSK is open until 1.5 s after it closes; the two state
  keys (keyboard-visible, opened) never rebuild the keyboard.  Nothing new is
  needed on 26.04: keycodes stay the rule there.
+ 2.38 ships WORKSPACE ISLANDS: every SECONDARY monitor rotates its own
+ workspaces, so a 3-finger touchpad swipe now changes the display under the
+ pointer instead of all of them at once.  GNOME 50 has exactly one workspace
+ set (mutter's active_workspace is global and a window belongs to one
+ workspace), so independent per-monitor workspaces cannot be a setting; with
+ workspaces-only-on-primary=true mutter marks secondary windows as
+ on-all-workspaces, and the extension groups those windows into virtual
+ workspaces and hides the parked ones by minimizing them (dash markers are
+ expected).  The primary keeps stock GNOME workspaces and Super+1..4, and the
+ extension is inert on a single display.  Third-party GPL code shipped
+ verbatim: danielbernalo/gnome-workspace-islands 0.1.2 (LICENSE included,
+ release zip sha256 0f4da32d...705b), no local patches.  The seed enables it
+ and sets workspaces-only-on-primary=true; a user-level copy of the same uuid
+ shadows the system one.
