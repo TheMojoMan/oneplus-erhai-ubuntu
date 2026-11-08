@@ -1,8 +1,8 @@
 # oneplus-erhai-mutter — the erhai patched Mutter library set
 
-Two source fixes in the compositor library, both in
+Three source fixes in the compositor library, in
 `src/backends/native/meta-cursor-renderer-native.c` /
-`src/wayland/meta-wayland-touch.c`:
+`src/wayland/meta-wayland-touch.c` / `src/backends/meta-*.c`:
 
 1. **A NULL dereference in Mutter's Wayland touch code** that **crashed the whole
 compositor** and looked like a "logout":
@@ -35,6 +35,17 @@ compositor** and looked like a "logout":
    scaled with the rest of the desktop and is correct on both outputs.  With only
    the built-in panel active the hardware cursor is kept, so pointer motion does
    not wake the GPU (owner decision 2026-11-07).
+
+3. **The old primary flag is never cleared when the primary display changes**
+   (`mutter-primary-flag-reset.patch`).  `MetaLogicalMonitor.is_primary` is set
+   by `meta_logical_monitor_make_primary()` but a logical monitor object reused
+   by `meta_logical_monitor_update()` keeps it, so after switching the primary
+   display BOTH logical monitors are flagged primary.  `GetCurrentState()`
+   exports that state verbatim; gnome-control-center fills its **Primary
+   Display** combo from it and selects the last flagged monitor, so Settings
+   showed the wrong display as primary after one switch.  Mainline's fix is
+   backported: add `meta_logical_monitor_clear_primary()` and clear every
+   logical monitor before marking the new primary.
 
 ## What ships
 
@@ -70,12 +81,13 @@ So the recipe is surgical: take Ubuntu's own deb, drop in the patched library,
 bump the `Version`, regenerate md5sums, repack — the Depends list stays
 byte-identical to Ubuntu's and no shlibdeps run is needed.  The patched, stripped
 library is therefore stored here as `libmutter-18.so.0.0.0.patched`
-(md5 **`6bd05928f69af786f2dc65769b394280`**, 3 119 424 B); `build-mutter-deb.sh`
+(md5 **`df62d04160042122d2c7d17643c3fbb8`**, 3 119 424 B); `build-mutter-deb.sh`
 verifies that md5 before packaging and refuses a library with a `/usr/local`
 path baked in (the prefix bug of `mirror-MEMORY-2026-11-07.md` §12).
 
 To rebuild it from source: `apt-get source mutter`, apply
-`touch-drag-null-guard.patch` and `mutter-hw-cursor-external-monitor.patch`, then
+`touch-drag-null-guard.patch`, `mutter-hw-cursor-external-monitor.patch` and
+`mutter-primary-flag-reset.patch`, then
 build with the user environment cleaned (`env -u PKG_CONFIG_PATH -u
 LD_LIBRARY_PATH`) and these options -- the prefix is NOT optional, meson's
 default `/usr/local` pointed the X11 frames helper at a path that does not exist:

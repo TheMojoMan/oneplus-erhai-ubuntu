@@ -8,9 +8,11 @@
 #
 # all at <base>+erhai1 (default base 50.1-0ubuntu2.5).  See
 # oneplus-erhai-mutter/README.md, and nautilus-MEMORY-2026-10-15.md §5-§7.
-# The library carries two source patches: touch-drag-null-guard.patch and
+# The library carries three source patches: touch-drag-null-guard.patch,
 # mutter-hw-cursor-external-monitor.patch (composited cursor while an external
-# monitor is active, see mirror-MEMORY-2026-11-07.md §19).
+# monitor is active, see mirror-MEMORY-2026-11-07.md §19) and
+# mutter-primary-flag-reset.patch (GetCurrentState must report one primary, so
+# Settings -> Displays -> Primary Display shows the real one).
 #
 #   ./build-mutter-deb.sh                       -> publish to the PPA suite
 #   NO_PPA=1 ./build-mutter-deb.sh              -> build locally only
@@ -29,7 +31,7 @@ BASE=${BASE:-50.1-0ubuntu2.5}
 SUFFIX=${ERHAI_SUFFIX:-+erhai1}
 VERSION="$BASE$SUFFIX"
 PORTS_MIRROR=${PORTS_MIRROR:-http://ports.ubuntu.com/ubuntu-ports}
-EXPECT_LIB_MD5=${EXPECT_LIB_MD5:-6bd05928f69af786f2dc65769b394280}
+EXPECT_LIB_MD5=${EXPECT_LIB_MD5:-df62d04160042122d2c7d17643c3fbb8}
 LIBREL="/usr/lib/aarch64-linux-gnu"
 WORK="$PROJ/build"
 PATHS="$WORK/built-paths.txt"
@@ -91,9 +93,10 @@ assert re.search(r'^Version: %s$' % re.escape(ver), c, re.M), 'unexpected Versio
 c = re.sub(r'^Version: %s$' % re.escape(ver),
            'Version: %s%s' % (ver, suffix), c, count=1, flags=re.M)
 note = """Locally rebuilt package: Ubuntu's %s with the oneplus-erhai patched
-libmutter-18.so.0.0.0 (compositor touch-drag NULL-deref guard, and the composited
-cursor while an external monitor is active).  Depends, Breaks and Symbols are
-Ubuntu's, unchanged.""" % ver
+libmutter-18.so.0.0.0 (compositor touch-drag NULL-deref guard, the composited
+cursor while an external monitor is active, and one-primary reporting for the
+Primary Display setting).  Depends, Breaks and Symbols are Ubuntu's,
+unchanged.""" % ver
 note = '\n'.join((' ' + l) if l.strip() else ' .' for l in note.splitlines())
 open(path, 'w').write(c.rstrip('\n') + '\n .\n' + note + '\n')
 PY

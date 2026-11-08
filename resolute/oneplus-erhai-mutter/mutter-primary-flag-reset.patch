@@ -1,0 +1,53 @@
+# erhai: clear the old primary flag when the primary logical monitor changes
+#
+# MetaLogicalMonitor.is_primary is set by meta_logical_monitor_make_primary()
+# but never cleared on a monitor object that is REUSED by
+# meta_logical_monitor_update() (same number/rect/scale/monitors).  Switching
+# the primary display therefore leaves BOTH logical monitors flagged as primary,
+# and GetCurrentState() exports primary=true for both.  gnome-control-center
+# builds its "Primary Display" combo from that state and selects the last one,
+# so after one switch the Settings panel shows the WRONG display as primary
+# even though MetaMonitorManager.primaryLogicalMonitor (and the panel) is right.
+#
+# Mainline fixed this by adding meta_logical_monitor_clear_primary() and
+# clearing every logical monitor before marking the new one.  Backport it.
+#
+# Applies to Ubuntu's mutter 50.1-0ubuntu2.5 source (debian/ patches applied).
+# Apply with:  patch -p1 < mutter-primary-flag-reset.patch
+--- a/src/backends/meta-logical-monitor-private.h
++++ b/src/backends/meta-logical-monitor-private.h
+@@ -65,6 +65,8 @@ gboolean meta_logical_monitor_is_primary (MetaLogicalMonitor *logical_monitor);
+ 
+ void meta_logical_monitor_make_primary (MetaLogicalMonitor *logical_monitor);
+ 
++void meta_logical_monitor_clear_primary (MetaLogicalMonitor *logical_monitor);
++
+ META_EXPORT_TEST
+ float meta_logical_monitor_get_scale (MetaLogicalMonitor *logical_monitor);
+ 
+--- a/src/backends/meta-logical-monitor.c
++++ b/src/backends/meta-logical-monitor.c
+@@ -178,6 +178,12 @@ meta_logical_monitor_make_primary (MetaLogicalMonitor *logical_monitor)
+   logical_monitor->is_primary = TRUE;
+ }
+ 
++void
++meta_logical_monitor_clear_primary (MetaLogicalMonitor *logical_monitor)
++{
++  logical_monitor->is_primary = FALSE;
++}
++
+ float
+ meta_logical_monitor_get_scale (MetaLogicalMonitor *logical_monitor)
+ {
+--- a/src/backends/meta-monitor-manager.c
++++ b/src/backends/meta-monitor-manager.c
+@@ -178,6 +178,8 @@ meta_monitor_manager_set_primary_logical_monitor (MetaMonitorManager *manager,
+                                                   MetaLogicalMonitor *logical_monitor)
+ {
+   manager->primary_logical_monitor = logical_monitor;
++  g_list_foreach (manager->logical_monitors,
++                  (GFunc) meta_logical_monitor_clear_primary, NULL);
+   if (logical_monitor)
+     meta_logical_monitor_make_primary (logical_monitor);
+ }
