@@ -1,0 +1,107 @@
+# erhai: do not use a hardware cursor while an external monitor is active
+#
+# The XN242 panel is mirrored to an external output by running the DP CRTC on a
+# virtual 3392x2400 mode and letting the DPU scale the whole desktop down to the
+# sink's own timing (dpu_plane_rescale_state() in drm/msm).  The DPU cursor pipe
+# is a DMA pipe without a scaler, so the hardware cursor is written 1:1 into the
+# sink while the desktop around it is shrunk (~0.45x for a 2560x1080 sink): the
+# pointer shows up about twice its intended size.
+#
+# Mutter's fallback is all-or-nothing -- the composited cursor overlay is only
+# painted when NO view has a hardware cursor (cursor_hw_managed in
+# update_cursor()), and the usable cursor planes are enumerated once at startup
+# -- so the driver cannot turn the hardware cursor off for the rescaled CRTC
+# alone.  Treat an ACTIVE external monitor like a hardware-cursor inhibitor:
+# the compositor cursor is then scaled together with the desktop and is correct
+# on both outputs.  With only the built-in panel active the hardware cursor is
+# kept, so ordinary pointer motion does not wake the GPU.
+#
+# Owner decision 2026-11-07: "drop HW cursor but only when monitor is attached.
+# I do not want more GPU per pointer move in normal operation without external
+# monitor."  Applies to Ubuntu's mutter 50.1-0ubuntu2.5 source with
+# touch-drag-null-guard.patch already applied.
+# Apply with:  patch -p1 < mutter-hw-cursor-external-monitor.patch
+#
+--- a/src/backends/native/meta-cursor-renderer-native.c
++++ b/src/backends/native/meta-cursor-renderer-native.c
+@@ -318,6 +318,51 @@
+   return TRUE;
+ }
+ 
++/*
++ * [erhai] With an external monitor attached, do not use a hardware cursor.
++ *
++ * The built-in XN242 panel can be mirrored to an external output while the
++ * display driver keeps the panel's native 3392x2400 timing and lets the DPU
++ * scale the desktop down to the sink's own mode (a "virtual" DP mode, see
++ * dpu_plane_rescale_state() in drm/msm).  The DPU cursor pipe is a DMA pipe
++ * without a scaler, so a hardware cursor on such an output is written 1:1 into
++ * the sink and appears ~2.2x too large next to the scaled desktop, while the
++ * composited (OpenGL) cursor is scaled together with everything else.
++ *
++ * Mutter's cursor fallback is all-or-nothing: the cursor overlay is painted
++ * only when NO view has a hardware cursor (the cursor_hw_managed gate in
++ * update_cursor()), and the set of usable cursor planes is read once at
++ * startup, so a driver cannot disable it for just the rescaled CRTC.  Treat
++ * "an external monitor is active" like a hardware-cursor inhibitor: the
++ * compositor cursor is then correct on the panel and on the monitor.  Without
++ * an external monitor (plain tablet use) the hardware cursor is kept, so
++ * pointer motion does not have to wake the GPU.
++ */
++static gboolean
++has_active_external_monitor (MetaBackend *backend)
++{
++  MetaMonitorManager *monitor_manager;
++  MetaMonitor *builtin_monitor;
++  GList *monitors;
++  GList *l;
++
++  monitor_manager = meta_backend_get_monitor_manager (backend);
++  if (!monitor_manager)
++    return FALSE;
++
++  builtin_monitor = meta_monitor_manager_get_builtin_monitor (monitor_manager);
++  monitors = meta_monitor_manager_get_monitors (monitor_manager);
++  for (l = monitors; l; l = l->next)
++    {
++      MetaMonitor *monitor = l->data;
++
++      if (monitor != builtin_monitor && meta_monitor_is_active (monitor))
++        return TRUE;
++    }
++
++  return FALSE;
++}
++
+ static void
+ query_cursor_position_in_kms_impl (float    *x,
+                                    float    *y,
+@@ -372,6 +417,7 @@
+   MetaKms *kms = meta_backend_native_get_kms (backend_native);
+   MetaKmsCursorManager *kms_cursor_manager = meta_kms_get_cursor_manager (kms);
+   gboolean cursor_changed, cursor_hw_managed = FALSE;
++  gboolean hw_cursor_inhibited;
+   GList *views;
+   GList *l;
+ 
+@@ -392,6 +438,11 @@
+ 
+   cursor_changed = priv->current_cursor != cursor;
+ 
++  /* [erhai] see has_active_external_monitor() */
++  hw_cursor_inhibited =
++    meta_backend_is_hw_cursors_inhibited (backend) ||
++    has_active_external_monitor (backend);
++
+   views = meta_renderer_get_views (renderer);
+   g_list_foreach (views, (GFunc) ensure_cursor_stage_view, NULL);
+ 
+@@ -417,7 +468,7 @@
+           cursor_stage_view->is_hw_cursor_valid = TRUE;
+           has_hw_cursor = FALSE;
+         }
+-      else if (cursor && !meta_backend_is_hw_cursors_inhibited (backend))
++      else if (cursor && !hw_cursor_inhibited)
+         {
+           clutter_cursor_realize_texture (cursor);
+ 

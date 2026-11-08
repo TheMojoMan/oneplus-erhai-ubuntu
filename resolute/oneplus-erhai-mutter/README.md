@@ -1,6 +1,10 @@
 # oneplus-erhai-mutter — the erhai patched Mutter library set
 
-Fixes a NULL dereference in Mutter's Wayland touch code that **crashed the whole
+Two source fixes in the compositor library, both in
+`src/backends/native/meta-cursor-renderer-native.c` /
+`src/wayland/meta-wayland-touch.c`:
+
+1. **A NULL dereference in Mutter's Wayland touch code** that **crashed the whole
 compositor** and looked like a "logout":
 
 * `touch_can_grab_surface()` (`src/wayland/meta-wayland-touch.c`) was the only use
@@ -18,10 +22,24 @@ compositor** and looked like a "logout":
   (`touch-drag-null-guard.patch`, applies cleanly to Ubuntu's
   `mutter 50.1-0ubuntu2.4` source with `patch -p1`).
 
+2. **The hardware cursor is disabled while an external monitor is active**
+   (`mutter-hw-cursor-external-monitor.patch`).  With the mirror design of
+   `mirror-MEMORY-2026-11-07.md` §18 the panel keeps its native 3392x2400 timing
+   and the DPU scales the desktop down to the sink, but its cursor pipe is a DMA
+   pipe without a scaler: the pointer is written 1:1 into the sink and showed up
+   ~2.2x too large (owner test 7).  Mutter's fallback is all-or-nothing (the
+   composited cursor is only painted when NO view has a hardware cursor, and the
+   cursor planes are enumerated at startup), so the driver cannot switch it off
+   for the rescaled CRTC alone.  The patch treats an **active** non-builtin
+   monitor like a hardware-cursor inhibitor: the compositor cursor is then
+   scaled with the rest of the desktop and is correct on both outputs.  With only
+   the built-in panel active the hardware cursor is kept, so pointer motion does
+   not wake the GPU (owner decision 2026-11-07).
+
 ## What ships
 
-Ubuntu-named packages, like the mesa `/usr` replacement — all at
-`<base>+erhai1` (currently `50.1-0ubuntu2.4+erhai1`):
+Ubuntu-named packages, like the mesa `/usr` replacement — released at
+`<base>+erhai1` (`50.1-0ubuntu2.5+erhai1`), test builds at `<base>+erhai2-test-NN`:
 
 | package | contents |
 |---|---|
@@ -52,13 +70,19 @@ So the recipe is surgical: take Ubuntu's own deb, drop in the patched library,
 bump the `Version`, regenerate md5sums, repack — the Depends list stays
 byte-identical to Ubuntu's and no shlibdeps run is needed.  The patched, stripped
 library is therefore stored here as `libmutter-18.so.0.0.0.patched`
-(md5 **`fcb8a6c21a8d9820fc68b83b28dd2040`**); `build-mutter-deb.sh` verifies that
-md5 before packaging and also reports whether the guard instruction
-`cbz x2, 0x18d2c0` is at offset `0x18d208`.
+(md5 **`6bd05928f69af786f2dc65769b394280`**, 3 119 424 B); `build-mutter-deb.sh`
+verifies that md5 before packaging and refuses a library with a `/usr/local`
+path baked in (the prefix bug of `mirror-MEMORY-2026-11-07.md` §12).
 
 To rebuild it from source: `apt-get source mutter`, apply
-`touch-drag-null-guard.patch`, build with the env above, then
+`touch-drag-null-guard.patch` and `mutter-hw-cursor-external-monitor.patch`, then
+build with the user environment cleaned (`env -u PKG_CONFIG_PATH -u
+LD_LIBRARY_PATH`) and these options -- the prefix is NOT optional, meson's
+default `/usr/local` pointed the X11 frames helper at a path that does not exist:
 
+    meson setup build -Dprefix=/usr -Dsysconfdir=/etc -Dlocalstatedir=/var \
+                      -Dtests=disabled -Dprofiler=false --buildtype=plain
+    ninja -C build
     objcopy --only-keep-debug src/libmutter-18.so.0.0.0 libmutter-18.debug
     strip --strip-unneeded   src/libmutter-18.so.0.0.0
 
@@ -69,13 +93,20 @@ match the patched library (its `Build-Ids:` are the unpatched build's).
 
 ## Build / publish
 
-    ./build-mutter-deb.sh                        # build + publish to the TESTING suite
+    ./build-mutter-deb.sh                        # build + publish into the resolute suite
     NO_PPA=1 ./build-mutter-deb.sh               # build locally only
     PPA_DEB_DIR="$PPA_MAIN_DEB_DIR" ./build-mutter-deb.sh    # straight to the public MAIN suite
     BASE=50.1-0ubuntu2.5 ./build-mutter-deb.sh   # after a new Ubuntu mutter update
 
 The pristine Ubuntu debs it packages are fetched from the archive (sha256-checked
 against the apt metadata) and kept in `rollback/` for offline rollback.
+
+Versioning: the released line is `+erhai1`; a test build keeps the released line
+and adds `-test-NN` (`ERHAI_SUFFIX=+erhai2-test-01 ./build-mutter-deb.sh`), and
+only the released build increments the number.  `+erhai2` was published and
+withdrawn on 2026-11-07 (mirror-MEMORY-2026-11-07.md §11), so the next release
+is **`+erhai3`** -- test builds must therefore be `+erhai2-test-NN` (they sort
+above `+erhai2`), never `+erhai1-test-NN`.
 
 ## Rollback
 

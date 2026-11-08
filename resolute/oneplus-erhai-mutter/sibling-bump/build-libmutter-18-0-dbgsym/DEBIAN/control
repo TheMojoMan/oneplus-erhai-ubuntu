@@ -1,11 +1,11 @@
 Package: libmutter-18-0-dbgsym
 Source: mutter
-Version: 50.1-0ubuntu2.5+erhai1
+Version: 50.1-0ubuntu2.5+erhai2-test-01
 Auto-Built-Package: debug-symbols
 Architecture: arm64
 Maintainer: Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>
 Installed-Size: 12821
-Depends: libmutter-18-0 (= 50.1-0ubuntu2.5+erhai1)
+Depends: libmutter-18-0 (= 50.1-0ubuntu2.5+erhai2-test-01)
 Section: debug
 Priority: optional
 Multi-Arch: same
@@ -14,7 +14,7 @@ Build-Ids: 09edffa1125f19b7881c47b2d75a675c9bb22271 2808a6ea5958bceeac02e45abc8c
 Original-Maintainer: Debian GNOME Maintainers <pkg-gnome-maintainers@lists.alioth.debian.org>
  .
  Locally rebuilt package: only the version and the exact dependency on libmutter-18-0
- are bumped to 50.1-0ubuntu2.5+erhai1.  The debug symbols inside are those of the UNPATCHED
+ are bumped to 50.1-0ubuntu2.5+erhai2-test-01.  The debug symbols inside are those of the UNPATCHED
  50.1-0ubuntu2.5 build (see Build-Ids) and do NOT match the patched library's build-id; the
  patched library's own symbols live in
  /usr/lib/debug/.build-id/0d/5a3252c52375a05265f5f175064253309ef4f8.debug.

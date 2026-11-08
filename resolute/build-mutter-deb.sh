@@ -8,6 +8,9 @@
 #
 # all at <base>+erhai1 (default base 50.1-0ubuntu2.5).  See
 # oneplus-erhai-mutter/README.md, and nautilus-MEMORY-2026-10-15.md §5-§7.
+# The library carries two source patches: touch-drag-null-guard.patch and
+# mutter-hw-cursor-external-monitor.patch (composited cursor while an external
+# monitor is active, see mirror-MEMORY-2026-11-07.md §19).
 #
 #   ./build-mutter-deb.sh                       -> publish to the PPA suite
 #   NO_PPA=1 ./build-mutter-deb.sh              -> build locally only
@@ -26,7 +29,7 @@ BASE=${BASE:-50.1-0ubuntu2.5}
 SUFFIX=${ERHAI_SUFFIX:-+erhai1}
 VERSION="$BASE$SUFFIX"
 PORTS_MIRROR=${PORTS_MIRROR:-http://ports.ubuntu.com/ubuntu-ports}
-EXPECT_LIB_MD5=${EXPECT_LIB_MD5:-fcb8a6c21a8d9820fc68b83b28dd2040}
+EXPECT_LIB_MD5=${EXPECT_LIB_MD5:-6bd05928f69af786f2dc65769b394280}
 LIBREL="/usr/lib/aarch64-linux-gnu"
 WORK="$PROJ/build"
 PATHS="$WORK/built-paths.txt"
@@ -40,12 +43,14 @@ LIB="$PROJ/libmutter-18.so.0.0.0.patched"
 lib_md5=$(md5of "$LIB")
 [ "$lib_md5" = "$EXPECT_LIB_MD5" ] || die "patched library md5 $lib_md5 != $EXPECT_LIB_MD5"
 echo "patched library: md5 OK ($lib_md5)"
-if objdump -d "$LIB" --start-address=0x18d200 --stop-address=0x18d214 2>/dev/null |
-     grep -qE 'cbz[[:space:]]+x2, ?0?x?18d2c0'; then
-  echo "guard present: 'cbz x2, 0x18d2c0' at 0x18d208"
-else
-  echo "NOTE: guard instruction not found at 0x18d200 -- the md5 above is authoritative"
+# The +erhai2 library must not carry this machine's build prefix: a -Dprefix
+# default of /usr/local once pointed the X11 frames helper at
+# /usr/local/libexec and every first X11 client took the compositor down
+# (mirror-MEMORY-2026-11-07.md §12).  Fail closed.
+if strings -a "$LIB" | grep -q '/usr/local'; then
+  die "$LIB contains a /usr/local path -- rebuild with -Dprefix=/usr"
 fi
+echo "no /usr/local path baked in: OK"
 
 mkdir -p "$WORK" "$PROJ/rollback"
 : > "$PATHS"
@@ -86,8 +91,9 @@ assert re.search(r'^Version: %s$' % re.escape(ver), c, re.M), 'unexpected Versio
 c = re.sub(r'^Version: %s$' % re.escape(ver),
            'Version: %s%s' % (ver, suffix), c, count=1, flags=re.M)
 note = """Locally rebuilt package: Ubuntu's %s with the oneplus-erhai patched
-libmutter-18.so.0.0.0 (compositor touch-drag NULL-deref guard).  Depends, Breaks
-and Symbols are Ubuntu's, unchanged.""" % ver
+libmutter-18.so.0.0.0 (compositor touch-drag NULL-deref guard, and the composited
+cursor while an external monitor is active).  Depends, Breaks and Symbols are
+Ubuntu's, unchanged.""" % ver
 note = '\n'.join((' ' + l) if l.strip() else ' .' for l in note.splitlines())
 open(path, 'w').write(c.rstrip('\n') + '\n .\n' + note + '\n')
 PY
