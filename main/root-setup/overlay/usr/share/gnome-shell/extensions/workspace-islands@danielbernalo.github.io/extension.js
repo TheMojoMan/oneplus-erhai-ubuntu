@@ -11,6 +11,7 @@
 
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
+import Shell from 'gi://Shell';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { Extension, gettext as _ } from 'resource:///org/gnome/shell/extensions/extension.js';
@@ -38,6 +39,26 @@ const PAPERWM_UUID = 'paperwm@paperwm.github.com';
  * greyed out in prefs), so this is the count to bind up to instead.
  */
 const MAX_DIRECT_SWITCH_KEYS = 8;
+
+/**
+ * [erhai] Stock GNOME workspace-switch shortcuts and the direction each moves.
+ *
+ * GNOME binds these itself (`switch-to-workspace-*`, by default
+ * `Super+Alt+Arrow` and `Super+Page_Up/Down`) and the extension's own
+ * `switch-next`/`switch-prev` defaults use the same accelerators, so ONE press
+ * reaches both handlers.  Left alone, GNOME's handler switches the primary's
+ * (global) workspace while ours would switch the secondary's — the "both
+ * displays move" behaviour this extension exists to remove.  While enabled the
+ * handler is therefore replaced with a dispatcher that follows the pointer,
+ * exactly like the touchpad gesture; over the primary it calls GNOME's own
+ * handler, so nothing about the primary changes.
+ */
+const POINTER_SWITCH_KEYS = {
+    'switch-to-workspace-left': -1,
+    'switch-to-workspace-right': 1,
+    'switch-to-workspace-up': -1,
+    'switch-to-workspace-down': 1,
+};
 
 /**
  * How long to wait for the monitor layout to stop moving.
@@ -98,6 +119,7 @@ export default class WorkspaceIslands extends Extension {
 
         this._connectSignals();
         this._bindKeys();
+        this._interceptStockSwitches();
 
         // Takes over the panel's own workspace dots rather than adding a second
         // indicator beside them. See indicator.js.
@@ -194,6 +216,8 @@ export default class WorkspaceIslands extends Extension {
         // Restoration is unconditional. A window left hidden after unload is
         // invisible and unreachable — nothing else here matters more.
         this._registry?.restoreAll();
+
+        this._restoreStockSwitches();
 
         this._keys?.removeAll();
         this._keys = null;
@@ -593,22 +617,100 @@ export default class WorkspaceIslands extends Extension {
                 this._keys.add(name, () => this._switchTo(i - 1));
         }
 
-        this._keys.add('switch-next', () => this._switchRelative(1));
-        this._keys.add('switch-prev', () => this._switchRelative(-1));
+        // [erhai] `switch-next`/`switch-prev` default to Super+Alt+Arrow, the
+        // same accelerators as GNOME's own switch-to-workspace-left/right.
+        // Those are taken over by _interceptStockSwitches() (which follows the
+        // pointer); registering our binding as well would step the workspace
+        // twice per press. A rebind that does not collide still works.
+        const stock = this._stockSwitchAccels();
+        for (const [name, delta] of [['switch-next', 1], ['switch-prev', -1]]) {
+            if (this._settings.get_strv(name).some(accel => stock.has(accel))) {
+                this._log(`${name}: accelerator is a stock workspace switch, ` +
+                    'handled by the pointer-aware override');
+                continue;
+            }
+            this._keys.add(name, () => this._switchRelative(delta));
+        }
+
         this._keys.add('move-window-to-next', () => this._moveFocused(1));
         this._keys.add('move-window-to-prev', () => this._moveFocused(-1));
     }
 
+    /** Accelerators GNOME already uses for switching the native workspaces. */
+    _stockSwitchAccels() {
+        const wmKeys = new Gio.Settings({
+            schema_id: 'org.gnome.desktop.wm.keybindings',
+        });
+        const accels = new Set();
+        for (const name of Object.keys(POINTER_SWITCH_KEYS)) {
+            for (const accel of wmKeys.get_strv(name))
+                accels.add(accel);
+        }
+        return accels;
+    }
+
     /**
-     * Acts on the monitor that has focus. On the primary monitor there is
-     * nothing to do — GNOME's native workspaces already handle it — so the
-     * shortcut is simply a no-op there rather than doing something surprising.
+     * [erhai] Make the stock workspace shortcuts follow the pointer.
+     *
+     * Same rule as the touchpad gesture: the monitor under the pointer is the
+     * one that rotates. Over the primary there is nothing to do here, so the
+     * shell's untouched handler runs and the primary switches exactly as
+     * before. `_showWorkspaceSwitcher` is the handler gnome-shell installed
+     * for these bindings at startup; holding on to it is what makes both the
+     * primary path and the restore in disable() exact.
+     */
+    _interceptStockSwitches() {
+        const wm = Main.wm;
+        if (typeof wm._showWorkspaceSwitcher !== 'function') {
+            console.warn('workspace-islands: no _showWorkspaceSwitcher seam; ' +
+                'the stock workspace shortcuts stay focus-based');
+            return;
+        }
+
+        const modes = Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW;
+        const stock = wm._showWorkspaceSwitcher.bind(wm);
+        this._stockSwitchKeys = Object.keys(POINTER_SWITCH_KEYS);
+
+        for (const [name, delta] of Object.entries(POINTER_SWITCH_KEYS)) {
+            // Called by mutter as (display, window, event, binding, user_data);
+            // the primary path forwards all of it to the shell's own handler.
+            wm.setCustomKeybindingHandler(name, modes,
+                (display, window, event, ...rest) => {
+                    if (this._registry?.forPointerMonitor()) {
+                        this._switchRelative(delta);
+                        return;
+                    }
+                    stock(display, window, event, ...rest);
+                });
+        }
+    }
+
+    /** Put the shell's own handlers back, however this extension ends. */
+    _restoreStockSwitches() {
+        const keys = this._stockSwitchKeys;
+        this._stockSwitchKeys = null;
+        if (!keys || typeof Main.wm._showWorkspaceSwitcher !== 'function')
+            return;
+
+        const modes = Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW;
+        const stock = Main.wm._showWorkspaceSwitcher.bind(Main.wm);
+        for (const name of keys)
+            Main.wm.setCustomKeybindingHandler(name, modes, stock);
+    }
+
+    /**
+     * Acts on the monitor under the POINTER, like the touchpad gesture: with
+     * the pointer over a secondary monitor the shortcut rotates that monitor's
+     * virtual workspaces. Over the primary monitor there is nothing to do —
+     * GNOME's native workspaces already handle it (the dispatcher in
+     * _interceptStockSwitches forwards to GNOME's own handler there) — so the
+     * shortcut is a no-op on this path rather than doing something surprising.
      */
     _switchTo(index, forward) {
-        const state = this._registry.forFocusedMonitor();
+        const state = this._registry.forPointerMonitor();
         if (!state) {
             // Say so. A shortcut that quietly does nothing is undebuggable.
-            this._log(`no-op: ${this._registry.describeFocusTarget()}`);
+            this._log(`no-op: ${this._registry.describePointerTarget()}`);
             return;
         }
 
@@ -672,10 +774,14 @@ export default class WorkspaceIslands extends Extension {
         this._log(message);
     }
 
+    /**
+     * [erhai] Pointer-based, like {@link _switchTo}: the shortcut belongs to
+     * the monitor the user is pointing at, not the one holding focus.
+     */
     _switchRelative(delta) {
-        const state = this._registry.forFocusedMonitor();
+        const state = this._registry.forPointerMonitor();
         if (!state) {
-            this._log(`no-op: ${this._registry.describeFocusTarget()}`);
+            this._log(`no-op: ${this._registry.describePointerTarget()}`);
             return;
         }
 

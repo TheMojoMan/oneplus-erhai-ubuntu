@@ -715,6 +715,15 @@ export class Registry {
     }
 
     /** Human-readable resolution trace, for diagnosing "nothing happened". */
+    describePointerTarget() {
+        const index = global.display.get_current_monitor();
+        const primary = Main.layoutManager.primaryIndex;
+
+        return `pointer -> monitor ${index}` +
+            (index === primary ? ' (PRIMARY — shortcut is a no-op here)' : '');
+    }
+
+    /** Human-readable resolution trace, for diagnosing "nothing happened". */
     describeFocusTarget() {
         const focused = global.display.focus_window;
         const index = focusedMonitorIndex();

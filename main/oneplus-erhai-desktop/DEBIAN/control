@@ -460,8 +460,13 @@ Description: Desktop glue for the OnePlus Pad 3 (erhai)
  on-all-workspaces, and the extension groups those windows into virtual
  workspaces and hides the parked ones by minimizing them (dash markers are
  expected).  The primary keeps stock GNOME workspaces and Super+1..4, and the
- extension is inert on a single display.  Third-party GPL code shipped
- verbatim: danielbernalo/gnome-workspace-islands 0.1.2 (LICENSE included,
- release zip sha256 0f4da32d...705b), no local patches.  The seed enables it
- and sets workspaces-only-on-primary=true; a user-level copy of the same uuid
- shadows the system one.
+ extension is inert on a single display.  Third-party GPL code: danielbernalo/
+ gnome-workspace-islands 0.1.2 (LICENSE included, release zip sha256
+ 0f4da32d...705b) with one local patch
+ (workspace-islands-pointer-shortcuts.patch): the workspace-switch shortcuts
+ (Super+Alt+Arrow, Super+Page_Up/Down) rotate the monitor under the POINTER like
+ the 3-finger gesture, and GNOME's own handler is suppressed for that press so
+ the primary does not switch too; with the pointer on the primary the stock
+ behaviour is unchanged.  The seed enables it and sets
+ workspaces-only-on-primary=true; a user-level copy of the same uuid shadows the
+ system one.

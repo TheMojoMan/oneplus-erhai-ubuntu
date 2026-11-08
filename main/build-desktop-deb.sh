@@ -133,10 +133,15 @@ echo "==> gjs-osk payload: $(find "$GJSOSK_SRC" -type f | wc -l) files," \
 # primary keeps stock GNOME workspaces untouched; the 3-finger touchpad swipe
 # switches the monitor under the pointer.  On a single monitor it is inert.
 #
-# Third-party GPL code, shipped VERBATIM as released: danielbernalo/
-# gnome-workspace-islands v0.1.2, release zip sha256
+# Third-party GPL code, shipped as released apart from ONE local patch:
+# danielbernalo/gnome-workspace-islands v0.1.2, release zip sha256
 # 0f4da32de0da7f556387b159158950301fb6e503a5f6dd08a64ffd126b5a705b (LICENSE
-# included), so an upstream update is a plain re-copy of this tree.  Same rule
+# included).  The patch (`main/workspace-islands-pointer-shortcuts.patch`,
+# every hunk tagged [erhai]) makes the workspace-SWITCH shortcuts follow the
+# pointer like the touchpad gesture, instead of following the focused window
+# and leaving GNOME's own switch-to-workspace handler to move the primary as
+# well.  Re-applying it after an upstream re-copy is the only manual step.
+# Same rule
 # as gjs-osk: the overlay is the single source of truth and the deb copies from
 # it on every build; a USER-level copy of the uuid shadows the system one.
 # The seeded `enabled-extensions` (both series) and the mutter key are part of

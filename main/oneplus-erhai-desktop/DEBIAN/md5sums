@@ -108,12 +108,12 @@ a5782239dd11eda3b0100dcc448a5685  usr/share/gnome-shell/extensions/gjsosk@vishra
 2ac8df33c0c5e5bda65fabd86ab55ee4  usr/share/gnome-shell/extensions/gjsosk@vishram1123.com/ui/icons/hicolor/scalable/actions/up-dark.svg
 8aacc2aec6eb29caeee0c22abb43cb29  usr/share/gnome-shell/extensions/gjsosk@vishram1123.com/ui/icons/hicolor/scalable/actions/up.svg
 61564d9b57b0555e5a89b7f90c8098e7  usr/share/gnome-shell/extensions/workspace-islands@danielbernalo.github.io/altTab.js
-9fc0121c7f38436f4d35c1fe469383f0  usr/share/gnome-shell/extensions/workspace-islands@danielbernalo.github.io/extension.js
+9189614fb2b49d75ea4750aeb58823e5  usr/share/gnome-shell/extensions/workspace-islands@danielbernalo.github.io/extension.js
 9b1e71a95f0a844cd201beba6cf724ba  usr/share/gnome-shell/extensions/workspace-islands@danielbernalo.github.io/indicator.js
 1488372c37854f0d25ee88b8cfdc4e2f  usr/share/gnome-shell/extensions/workspace-islands@danielbernalo.github.io/keybindings.js
 570a9b3749dd0463a1778803b12a6dce  usr/share/gnome-shell/extensions/workspace-islands@danielbernalo.github.io/LICENSE
 18046dc50a64dc4a71249d42de4b76d7  usr/share/gnome-shell/extensions/workspace-islands@danielbernalo.github.io/metadata.json
-62b18908c45c21b22ffe6d91838fb45a  usr/share/gnome-shell/extensions/workspace-islands@danielbernalo.github.io/monitorState.js
+0fd46ade9cb30f45d09d2ce7e1dd567a  usr/share/gnome-shell/extensions/workspace-islands@danielbernalo.github.io/monitorState.js
 539cf4e62eb0ee40d9aa4ca5b2890605  usr/share/gnome-shell/extensions/workspace-islands@danielbernalo.github.io/overview.js
 9e3bb3d2a9ce6b1d7df15589b2439ae2  usr/share/gnome-shell/extensions/workspace-islands@danielbernalo.github.io/persistence.js
 90bd10ee962cb3ade97a674cf22173fa  usr/share/gnome-shell/extensions/workspace-islands@danielbernalo.github.io/placement.js
@@ -130,7 +130,7 @@ a9f1dd524f5b40187a792a41ea976bdc  usr/share/libinput/erhai-pogo.quirks
 50f7f02feca0f4a3c830753de9c28de3  usr/share/oneplus-erhai-desktop/ding-touch/app/desktopGrid.js
 427c22bb38f891d2bbdd86d8daf3b590  usr/share/oneplus-erhai-desktop/ding-touch/app/desktopIconItem.js
 15158a8cb519eca7b03e55e6fe918193  usr/share/oneplus-erhai-desktop/ding-touch/app/desktopManager.js
-bcf159c4d2ab5265d2fddf1707d7af26  usr/share/oneplus-erhai-desktop/README.md
+7a647bc83512c34e05d96b0dc1b9ee9e  usr/share/oneplus-erhai-desktop/README.md
 f2bc82d6b37a55a8b9800b1c8845dcc3  usr/share/oneplus-erhai-desktop/ubuntu-dock-dash.js
 dc2063252411085a9f66435d3879dd05  usr/share/sounds/erhai/panel-off.wav
 925a6c726b033f75077254f7ea6bf79f  usr/share/sounds/erhai/panel-on.wav

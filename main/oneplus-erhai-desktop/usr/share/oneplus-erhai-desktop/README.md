@@ -634,9 +634,13 @@ moves every display at once.  "Workspaces on primary only" is the other stock
 mode and freezes the secondary displays instead.  Neither is per-display.
 
 This package ships **Workspace Islands** (danielbernalo/gnome-workspace-islands
-0.1.2, GPL, unmodified — see `LICENSE` in the extension directory) as a
+0.1.2, GPL — see `LICENSE` in the extension directory) as a
 system-wide extension at
 `/usr/share/gnome-shell/extensions/workspace-islands@danielbernalo.github.io/`.
+It carries one local patch (`main/workspace-islands-pointer-shortcuts.patch`,
+every hunk tagged `[erhai]`): the workspace **switch shortcuts** follow the
+pointer like the touchpad gesture, and GNOME's own switch handler is suppressed
+for that keypress so the primary does not switch along with it.
 It keeps `org.gnome.mutter workspaces-only-on-primary=true` (mutter then marks
 windows on secondary monitors as on-all-workspaces, i.e. sticky), gives every
 **secondary** monitor its own set of virtual workspaces and hides the ones that
@@ -646,14 +650,18 @@ dash, and an app on a parked workspace sees its window as minimized.
 
 What that means in practice:
 
-| Display | Workspaces | 3-finger swipe |
-|---------|-----------|----------------|
+| Display | Workspaces | 3-finger swipe / `Super+Alt+Arrow` |
+|---------|-----------|-------------------------------------|
 | primary (the internal panel by default) | stock GNOME, `Super+1..4` | switches the primary |
 | secondary (external) | its own, 4 by default | switches the monitor under the pointer |
 
-`Super+Alt+←/→` and `Super+Alt+1..4` switch the secondary too, and the panel's
-workspace dots follow the monitor you are working on.  On a single-monitor
-device the extension is inert and the primary behaves exactly as before.
+`Super+Alt+←/→` and `Super+Page_Up/Down` follow the **pointer**: over the
+external monitor they rotate its virtual workspaces and leave the primary alone
+(GNOME's own handler is suppressed for that keypress), over the primary they
+switch the primary exactly as stock GNOME does.  `Super+Alt+1..4` switches the
+external by number, and the panel's workspace dots follow the monitor holding
+the focused window.  On a single-monitor device the extension is inert and the
+primary behaves exactly as before.
 Preferences: Extensions app → Workspace Islands (virtual workspace count,
 dynamic growth, the touchpad gesture, the slide animation, debug logging).
 
