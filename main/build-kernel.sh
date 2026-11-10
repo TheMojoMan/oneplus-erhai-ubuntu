@@ -30,7 +30,7 @@
 #      ../update-ppa.sh --mvtomain (which moves every newer .deb from debs/
 #      into main/).
 #
-# Environment: BRANCH (default master or $1), NO_PULL=1 (skip step 2),
+# Environment: BRANCH (default erhai/7.3.4 or $1), NO_PULL=1 (skip step 2),
 #              JOBS, KERNEL_TREE, DEB_REV, PPA_DEB_DIR (see ppa-common.sh).
 #              NO_PPA is accepted but does nothing any more (the kernel deb is
 #              never published automatically).
@@ -61,7 +61,7 @@ KERNEL_REPO="${KERNEL_REPO:-https://github.com/themojoman/oneplus-erhai-linux.gi
 # not next to this builder -- $HERE/.. is the ubuntu repo, whose
 # oneplus-erhai-linux* dirs are the deb payload snapshots.
 KERNEL_TREE="${KERNEL_TREE:-$(dirname "$_PPA_COMMON_DIR")/oneplus-erhai-linux}"
-BRANCH="${BRANCH:-${1:-master}}"
+BRANCH="${BRANCH:-${1:-erhai/7.3.4}}"
 NO_PULL="${NO_PULL:-1}"
 JOBS="${JOBS:-$(nproc)}"
 
