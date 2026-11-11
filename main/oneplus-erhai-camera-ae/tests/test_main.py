@@ -56,7 +56,8 @@ class Main(unittest.TestCase):
         r = Runner(h).start()
         r.popen.write(DUMP)
         r.wait_session()
-        h.samplers[0].deliver()                       # running at a long frame
+        h.samplers[0].deliver()
+        h.long_frame(6248, 6256)                      # running at a long frame
         h.xfers['front'].log.clear()
         h.samplers[0].die()                           # children die with us
         r.handlers[signal.SIGTERM](signal.SIGTERM, None)
@@ -88,6 +89,7 @@ class Main(unittest.TestCase):
         r.popen.write(DUMP)
         r.wait_session()
         h.samplers[0].deliver()
+        h.long_frame(6248, 6256)
         h.xfers['front'].log.clear()
         r.popen.write(b'[]\n')
         end = time.monotonic() + 5

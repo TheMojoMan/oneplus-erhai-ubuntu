@@ -141,11 +141,13 @@ class Session:
             # stale (another client's last values -- seen: exposure 1), so
             # never start from them: the last settled values for this sensor,
             # else ErhaiCam's own start, the exposure ceiling at the base frame.
-            exp, vts = self.e.remembered.get(
-                self.kind, (ae_max(lim, lim.vts_default), lim.vts_default))
-            if not (lim.vts_default <= vts <= lim.vts_max
-                    and 0 < exp <= max_lines(vts)):
-                exp, vts = ae_max(lim, lim.vts_default), lim.vts_default
+            # Like ErhaiCam's stream start, the frame is always the base
+            # length: a remembered long frame would keep a new session at
+            # low fps, and the ladder re-escalates by itself if still dark.
+            top = ae_max(lim, lim.vts_default)
+            exp = self.e.remembered.get(self.kind, (top, None))[0]
+            exp = min(exp, top) if exp > 0 else top
+            vts = lim.vts_default
             self._write_frame(vts, exp)
             self.sensor.write_gain_4x()
         except SensorError as err:

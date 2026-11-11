@@ -52,10 +52,28 @@ class AfEngine(unittest.TestCase):
         self.assertTrue(h.lines('af: locked at 576'))
         self.assertEqual(h.session(REAR_ID).phase, 'running')
 
-    def test_af_sweep_resets_long_frame(self):
-        h = af_harness(rear=(12800, 12808), seed=True)
+    def test_af_start_is_at_base_frame(self):
+        h = af_harness(rear=(12800, 12808), seed=True)  # remembered long frame
         start_rear(h)
-        self.assertEqual(h.writes('rear')[-2:], [EXP(6396), VTS(6404)])
+        st = h.session(REAR_ID).state
+        self.assertEqual((st.exposure, st.vts), (4800, 6404))
+        self.assertEqual(h.writes('rear')[:2], [EXP(4800), VTS(6404)])
+        self.assertFalse(h.lines('for the sweep'))      # nothing to reset
+
+    def test_af_refocus_resets_long_frame(self):
+        h = af_harness()
+        s = start_rear(h)
+        s.deliver(sharp=sharp_at(h.lens), n=SWEEP)
+        self.assertEqual(h.session(REAR_ID).af.mode, 'monitor')
+        h.long_frame(12800, 12808, REAR_ID)             # the ladder went up
+        h.xfers['rear'].log.clear()
+        h.clock.advance(6.0)                            # past the lock hold
+        for _ in range(400):                            # detail is gone
+            s.deliver(sharp=lambda: 1e-4)
+            if h.session(REAR_ID).af.mode == 'sweep':
+                break
+        self.assertEqual(h.session(REAR_ID).af.mode, 'sweep')
+        self.assertEqual(h.writes('rear')[:2], [EXP(6396), VTS(6404)])
         st = h.session(REAR_ID).state
         self.assertEqual((st.exposure, st.vts), (6396, 6404))
         self.assertTrue(h.lines('base frame 6404 lines for the sweep'))

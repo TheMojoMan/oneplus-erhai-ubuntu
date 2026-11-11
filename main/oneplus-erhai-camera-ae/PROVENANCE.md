@@ -1,8 +1,9 @@
 # oneplus-erhai-camera-ae: provenance
 
 Vendored from https://github.com/nadelacruz-00/erhai-camera-ae at commit
-`d90806f8b5b32492bb5fcc339039062353195c3d` (2026-11-08). The upstream
-README there has the full design notes, the device verification, and the
+`a18016f50324bb3129781589330f751f48878863` (2026-11-11: every stream starts
+at the base frame length, like ErhaiCam). The upstream README there has the
+full design notes, the device verification, and the
 after-a-libcamera-upgrade checklist.
 
 Maintainers: nadelacruz-00 (engine), TheMojoMan (signs and publishes the .deb).

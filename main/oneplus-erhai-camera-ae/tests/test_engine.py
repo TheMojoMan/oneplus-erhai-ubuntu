@@ -3,6 +3,8 @@ import select
 import threading
 import unittest
 
+from dataclasses import replace
+
 from camera_ae.controller import State
 from camera_ae.engine import Engine
 from camera_ae.graph import CameraNode
@@ -72,6 +74,14 @@ class Harness:
     def session(self, nid=FRONT_ID):
         return self.engine.sessions.get(nid)
 
+    def long_frame(self, exp, vts, nid=FRONT_ID):
+        """Put a running session in a long frame, as the ladder writes it.
+        Sessions always start at the base frame, so tests that need a
+        long frame set it up here, after the start."""
+        sess = self.session(nid)
+        sess._write_frame(vts, exp)
+        sess.state = replace(sess.state, exposure=exp, vts=vts)
+
     def writes(self, kind='front'):
         return self.xfers[kind].writes()
 
@@ -110,6 +120,20 @@ class Start(unittest.TestCase):
         h.xfers['front'].log.clear()
         h.start_front()
         self.assertEqual(h.writes(), [EXP(converged), GAIN_FRONT])
+
+    def test_start_resets_remembered_long_frame(self):
+        # ErhaiCam (erhai-cam.cpp stream start): the frame goes back to the
+        # base length; the ladder re-escalates by itself if still dark.  A
+        # remembered long frame must not carry over (Zen at ~6 fps).
+        h = Harness(front=(3133, 12512))
+        h.engine.remembered = {'front': (2735, 12512)}
+        h.start_front()
+        self.assertEqual(h.session().state, State(2735, 3128))
+        self.assertEqual(h.writes(), [EXP(2735), VTS(3128), GAIN_FRONT])
+        h2 = Harness(front=(3133, 12512))
+        h2.engine.remembered = {'front': (9000, 12512)}   # clamped to ae_max
+        h2.start_front()
+        self.assertEqual(h2.session().state, State(3120, 3128))
 
     def test_start_nak_retries(self):
         h = Harness()
@@ -314,6 +338,7 @@ class Running(unittest.TestCase):
         self.assertEqual(h.writes(), [VTS(6256), EXP(6248)])
         h = Harness(front=(1000, 6256), seed=True)
         s = h.start_front()
+        h.long_frame(1000, 6256)
         h.xfers['front'].log.clear()
         h.analyse(s, 0.9)
         self.assertEqual(h.writes(), [EXP(841), VTS(3128)])
@@ -346,6 +371,7 @@ class Running(unittest.TestCase):
     def test_node_removed_ends_session(self):
         h = Harness(front=(6248, 6256), seed=True)
         h.start_front()
+        h.long_frame(6248, 6256)
         h.xfers['front'].log.clear()
         h.eval(front_present=False)
         self.assertIsNone(h.session())
@@ -354,11 +380,13 @@ class Running(unittest.TestCase):
     def test_stop_restores_frame_length(self):
         h = Harness(front=(6248, 6256), seed=True)
         h.start_front()
+        h.long_frame(6248, 6256)
         h.xfers['front'].log.clear()
         h.engine.shutdown()
         self.assertEqual(h.writes(), [EXP(3120), VTS(3128)])
         h = Harness(front=(6248, 6256), seed=True)
         h.start_front()
+        h.long_frame(6248, 6256)
         h.xfers['front'].log.clear()
         h.eval(front=False)
         self.assertEqual(h.xfers['front'].log, [])
@@ -366,6 +394,7 @@ class Running(unittest.TestCase):
     def test_stop_restore_only_vts_when_exposure_fits(self):
         h = Harness(front=(1000, 6256), seed=True)
         h.start_front()
+        h.long_frame(1000, 6256)
         h.xfers['front'].log.clear()
         h.engine.shutdown()
         self.assertEqual(h.writes(), [VTS(3128)])
@@ -375,6 +404,8 @@ class Running(unittest.TestCase):
         h.eval(front=True, rear=True)
         for s in h.samplers:
             s.deliver()
+        h.long_frame(6248, 6256)
+        h.long_frame(12800, 12808, REAR_ID)
         h.xfers['front'].nak_writes(5)
         h.xfers['rear'].log.clear()
         h.engine.shutdown()
