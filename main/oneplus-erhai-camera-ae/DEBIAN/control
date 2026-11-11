@@ -1,0 +1,23 @@
+Package: oneplus-erhai-camera-ae
+Version: 1.0
+Section: utils
+Priority: optional
+Architecture: all
+Maintainer: nadelacruz-00 <323917690+nadelacruz-00@users.noreply.github.com>
+Uploaders: TheMojoMan <themojoman@gmx.net>
+Depends: python3 (>= 3.10), pipewire-bin, gstreamer1.0-tools, gstreamer1.0-pipewire, gstreamer1.0-plugins-base, oneplus-erhai-camera (>= 1.4)
+Description: ErhaiCam auto-exposure and rear autofocus for PipeWire camera apps (erhai)
+ Gives browsers (Zen, Firefox, Chromium) and GNOME Snapshot the same
+ brightness behaviour as ErhaiCam on the OnePlus Pad 3.  A libcamera tuning
+ override (BlackLevel + Awb only, no Agc/Adjust) is put in front of the
+ PipeWire daemons through user-unit drop-ins, so libcamera's soft-ISP AGC
+ stops writing exposure.  The erhai-camera-ae.service user unit then runs
+ ErhaiCam's AE controller (ported 1:1 from erhai-cam.cpp: target luma 0.45,
+ log-domain steps, highlight guard, low-light frame-length ladder) while an
+ app streams a camera node, and writes exposure, VTS and gain over the CCI
+ I2C adapter.  The rear cn3927 lens gets ErhaiCam's Tenengrad contrast AF.
+ ErhaiCam itself is not changed: it runs its own libcamera outside PipeWire.
+ Takes effect at the next login (pipewire must restart with the override).
+ Without the running engine, PipeWire camera exposure stays frozen; switch
+ it off per user with Environment=CAMERA_AE=off, or remove the package.
+ Check the setup: python3 -I /usr/lib/oneplus-erhai-camera-ae/camera-ae.py doctor

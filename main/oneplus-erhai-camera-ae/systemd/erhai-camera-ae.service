@@ -1,0 +1,17 @@
+[Unit]
+Description=ErhaiCam auto-exposure and rear autofocus for PipeWire camera apps (oneplus-erhai-camera-ae)
+Documentation=file:///usr/share/doc/oneplus-erhai-camera-ae/PROVENANCE.md
+After=wireplumber.service pipewire.service
+PartOf=pipewire.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -I /usr/lib/oneplus-erhai-camera-ae/camera-ae.py
+KillMode=mixed
+TimeoutStopSec=10
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=pipewire.service
