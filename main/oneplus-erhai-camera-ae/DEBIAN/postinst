@@ -1,0 +1,38 @@
+#!/bin/sh
+set -e
+
+LIB=/usr/lib/oneplus-erhai-camera-ae
+STATE=/var/lib/oneplus-erhai-camera-ae
+UNIT=erhai-camera-ae.service
+
+case "$1" in
+configure)
+	# libcamera fingerprint for the engine's "libcamera changed since install"
+	# warning (doctor.current_record: package versions + system tuning sha256).
+	install -d -m755 "$STATE"
+	if python3 -I -c 'import sys; sys.path.insert(0, sys.argv[1])
+from camera_ae.doctor import current_record
+sys.stdout.write(current_record())' "$LIB" > "$STATE/installed.txt.tmp" 2>/dev/null; then
+		mv -f "$STATE/installed.txt.tmp" "$STATE/installed.txt"
+	else
+		rm -f "$STATE/installed.txt.tmp"
+	fi
+
+	# Enable the user unit for every user (works in an image chroot too).
+	systemctl --global enable "$UNIT" >/dev/null 2>&1 || true
+
+	# A per-user install from the erhai-camera-ae repo (./install.sh) would run
+	# a second engine and its own tuning drop-ins next to this package.
+	for home in /root /home/*; do
+		[ -f "$home/.config/systemd/user/camera-gamma.service" ] || continue
+		grep -q erhai-camera-ae "$home/.config/systemd/user/camera-gamma.service" || continue
+		echo "oneplus-erhai-camera-ae: $home has a per-user erhai-camera-ae install;"
+		echo "  run its ./install.sh --uninstall as that user, so only this package's engine runs."
+	done
+
+	echo "oneplus-erhai-camera-ae: log out and back in (or reboot) to activate the"
+	echo "  tuning override; pipewire loads it at its next start."
+	;;
+esac
+
+exit 0
