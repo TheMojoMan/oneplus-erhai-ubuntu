@@ -2,14 +2,15 @@
 # =============================================================================
 # ppa-guard.sh — refuse to ship PERSONAL DATA inside a .deb
 #
-#   ppa-guard.sh [--quiet] [--no-warn] <file.deb> ...
+#   ppa-guard.sh [--quiet] [--no-warn] <file.deb|file.pkg.tar.zst> ...
 #   ppa-guard.sh --print-lists        # show the categories, never the values
 #
 # Every package that is about to be published (builders call ppa_copy/ppa_mv,
-# update-ppa.sh --mvtomain moves testing/ -> main/) is scanned payload-first:
-# the .deb is streamed through `dpkg-deb --fsys-tarfile | tar --to-command`,
-# so a 800 MB kernel package is never unpacked to disk, and the CONTROL area +
-# the member NAMES are checked as well.
+# update-ppa.sh --mvtomain moves testing/ -> main/, omarchy-build/publish-repo.sh
+# builds the Arch repository) is scanned payload-first: a .deb is streamed
+# through `dpkg-deb --fsys-tarfile | tar --to-command`, a pacman package through
+# `zstd -dc | tar --to-command`, so a 800 MB kernel package is never unpacked to
+# disk. The CONTROL area + the member NAMES are checked as well.
 #
 # HARD findings (exit 1, publish must stop):
 #   * a known SECRET — the content of /etc/erhai/*.pass, any credential found in
@@ -276,15 +277,66 @@ scan_deb() {
 	return 1
 }
 
+# A pacman package is the same idea as a .deb: a gzipped/zstd tar with metadata
+# members (.PKGINFO, .INSTALL) and the payload. zstd + GNU tar stream it, so a
+# 45 MB kernel package is never unpacked to disk either. Metadata is scanned in
+# the same pass as the payload -- unlike a .deb there is no separate control
+# area to keep out of the WARN noise.
+scan_pkg() {
+	local pkg=$1 fails=0 hits member nwarn=0
+	[ -f "$pkg" ] || { say_err "ppa-guard: no such file: $pkg"; return 2; }
+	say "ppa-guard: $(basename "$pkg")"
+
+	# 1. member NAMES (fast, from the listing)
+	while IFS= read -r member; do
+		member="${member#./}"
+		[ -n "$member" ] || continue
+		while IFS= read -r glob; do
+			[ -n "$glob" ] || continue
+			case "$member" in
+			$glob) say_err "  HARD  member name $member matches '$glob'"; fails=1 ;;
+			esac
+		done <"$P_NAMES"
+	done < <(zstd -dc -- "$pkg" 2>/dev/null | tar -tf - 2>/dev/null)
+
+	# 2. payload, streamed (never unpacked)
+	hits=$(zstd -dc -- "$pkg" 2>/dev/null |
+		tar -x -f - --ignore-command-error --to-command="$MEMBER_SCANNER" 2>/dev/null)
+	if [ -n "$hits" ]; then
+		printf '%s\n' "$hits" | while IFS="$(printf '\t')" read -r kind member; do
+			case "$kind" in
+			SECRET) say_err "  HARD  $member contains a known secret (value not shown)" ;;
+			HARD)   say_err "  HARD  $member contains personal/machine data" ;;
+			WARN)   say_err "  warn  $member mentions the user/e-mail/local IP" ;;
+			esac
+		done
+		nwarn=$(printf '%s\n' "$hits" | grep -c '^WARN')
+		[ "$nwarn" -gt 8 ] && say_err "        ($nwarn warnings in total)"
+		case "$hits" in *SECRET*|*HARD*) fails=1 ;; esac
+	fi
+
+	if [ "$fails" = 0 ]; then
+		say "  clean"
+		return 0
+	fi
+	return 1
+}
+
 fail=0
 for target in "${ARGS[@]}"; do
 	if [ -d "$target" ]; then
-		for d in "$target"/*.deb; do
+		for d in "$target"/*.deb "$target"/*.pkg.tar.zst; do
 			[ -f "$d" ] || continue
-			scan_deb "$d" || fail=1
+			case "$d" in
+			*.pkg.tar.zst) scan_pkg "$d" || fail=1 ;;
+			*)             scan_deb "$d" || fail=1 ;;
+			esac
 		done
 	else
-		scan_deb "$target" || fail=1
+		case "$target" in
+		*.pkg.tar.zst) scan_pkg "$target" || fail=1 ;;
+		*)             scan_deb "$target" || fail=1 ;;
+		esac
 	fi
 done
 
