@@ -67,12 +67,33 @@ image_mounted() {
     # The image is loop-mounted while a session runs (the patcher refuses it).
     # Ask the mount table, NOT a waydroid process: a stray/unrelated process
     # must not block a patch that is perfectly safe.
-    local img=$1
+    #
+    # waydroid mounts `vendor.img` with a plain `mount <file> <dir>`, so
+    # /proc/mounts shows the LOOP DEVICE as the source (/dev/loop3p1 when the
+    # image has a partition table) and never the image path: follow the loop
+    # device's backing file.  Before 2026-11-14 this compared the mount POINT
+    # with the image path, which never matched, so the guard did nothing.
+    local img src dst base back
+    img=$(readlink -f "$1") || return 1
     [ -r /proc/mounts ] || return 1
-    awk -v want="$(readlink -f "$img")" '
-        { m = $2; gsub(/\\040/, " ", m) }
-        m == want { found = 1; exit }
-        END { exit !found }' /proc/mounts
+    while read -r src dst _rest; do
+        src=${src//\\040/ }
+        dst=${dst//\\040/ }
+        [ "$(readlink -f "$dst" 2>/dev/null)" = "$img" ] && return 0
+        case "${src##*/}" in
+            loop[0-9]*)
+                # loop3p1 (partitioned image) -> loop3; "loop" itself has a p,
+                # so the digits decide, never a plain ${x%%p*}
+                base=${src##*/}
+                base=${base#loop}
+                base=loop${base%%[!0-9]*}
+                back=$(cat "/sys/block/$base/loop/backing_file" 2>/dev/null) || continue
+                back=${back//\\x20/ }
+                [ "$(readlink -f "$back" 2>/dev/null)" = "$img" ] && return 0
+                ;;
+        esac
+    done </proc/mounts
+    return 1
 }
 
 patch_image() {

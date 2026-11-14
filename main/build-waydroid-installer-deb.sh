@@ -24,7 +24,9 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 . "$HERE/../ppa-common.sh"
 SRC="$HERE/oneplus-erhai-waydroid-installer"
-PATCHER_DIR="${PATCHER_DIR:-$HERE/../tmp/waydroid-patcher}"
+# The patcher project lives in the WORKSPACE tmp/ (one level above the repo),
+# not in oneplus-erhai-ubuntu/tmp.
+PATCHER_DIR="${PATCHER_DIR:-$HERE/../../tmp/waydroid-patcher}"
 
 PKG=$(awk '/^Package:/ {print $2}' "$SRC/DEBIAN/control")
 VER=$(awk '/^Version:/ {print $2}' "$SRC/DEBIAN/control")
