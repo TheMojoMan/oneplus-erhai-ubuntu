@@ -145,7 +145,12 @@ fi
 # 3. Root partition label, so the cmdline follows whichever partition this kernel
 #    is installed for instead of a hard-coded /dev/sdaN (UFS enumeration order is
 #    not fixed).  Sources, in order: an explicit ERHAI_ROOT_LABEL (test/seam), the
-#    cmdline we were booted with, then the partition backing /.
+#    partition backing /, then the cmdline we were booted with.
+#
+#    The DEVICE comes first on purpose (2026-11-14): a partition renamed under a
+#    running system still shows the OLD name in /proc/cmdline, and that is exactly
+#    the case where the new UKI must carry the new one.  findmnt's SOURCE may end
+#    in "[/subvol]" (btrfs), so that suffix is stripped before asking lsblk.
 #
 #    On a LIVE system the label MUST resolve: `linux1` while installed on the
 #    development partition, `linux` on the shipped one.  Guessing is not allowed
@@ -154,10 +159,14 @@ fi
 if [ "$IN_CHROOT" = true ]; then
     ROOT_LABEL="${ERHAI_ROOT_LABEL:-}"
 else
-    ROOT_LABEL="${ERHAI_ROOT_LABEL:-$(tr ' ' '\n' < /proc/cmdline 2>/dev/null \
-                     | sed -n 's/^root=PARTLABEL=//p' | head -n1)}"
+    ROOT_LABEL="${ERHAI_ROOT_LABEL:-}"
     if [ -z "$ROOT_LABEL" ]; then
-        ROOT_LABEL="$(lsblk -no PARTLABEL "$(findmnt -no SOURCE /)" 2>/dev/null | head -n1)"
+        _root_src="$(findmnt -no SOURCE / 2>/dev/null)"
+        ROOT_LABEL="$(lsblk -no PARTLABEL "${_root_src%%\[*}" 2>/dev/null | head -n1)"
+    fi
+    if [ -z "$ROOT_LABEL" ]; then
+        ROOT_LABEL="$(tr ' ' '\n' < /proc/cmdline 2>/dev/null \
+                      | sed -n 's/^root=PARTLABEL=//p' | head -n1)"
     fi
 fi
 
@@ -184,13 +193,18 @@ fi
 
 # 4. EFI filename and kernel command line.
 #
-#    The name carries the root partition as well as the build revision, so the
-#    rEFInd menu is unambiguous when several kernels sit in one /boot (the `-l1`
-#    tag marks a UKI that was installed from the development partition):
+#    The name carries the Debian revision and the partition this kernel is
+#    installed on, so the rEFInd menu is unambiguous when several kernels or
+#    several installs share one /boot.  The label is dropped for the default
+#    `linux` partition:
 #
-#      installed from the linux1 partition (development)  -> <kver>-l1-b<N>.efi
 #      installed from the linux  partition (shipped image) -> <kver>-b<N>.efi
+#      installed from any other partition (e.g. linux1)    -> <kver>-b<N>-<label>.efi
 #      no +b<N> revision (base image build)                -> <kver>-<root label>.efi
+#
+#    Since 2026-11-14 the label sits AFTER the revision (owner order, matching the
+#    pacman package); before, linux1 installs were spelled <kver>-l1-b<N>.efi and
+#    that file is renamed to the new spelling below, not left behind.
 #
 #    The postrm rebuilds this EXACTLY (it must, or removal cannot find the file),
 #    so any change here has to be mirrored there.
@@ -221,16 +235,25 @@ fi
 #    (0.000118 s), so the efifb bootconsole never printed anything tty0 did not
 #    already own. consoleblank=0 was dropped too -- it already defaults to 0 in
 #    this kernel (drivers/tty/vt/vt.c), so the token was a no-op.
-if [ "$ROOT_LABEL" = "linux1" ]; then
-    ROOT_TAG="-l1"
+if [ -n "$ROOT_LABEL" ] && [ "$ROOT_LABEL" != "linux" ]; then
+    ROOT_TAG="-${ROOT_LABEL}"
 else
     ROOT_TAG=""
 fi
 
 if [ -n "$DEB_REV" ]; then
-    OUTPUT_EFI="${CLEAN_KVER}${ROOT_TAG}-b${DEB_REV}.efi"
+    OUTPUT_EFI="${CLEAN_KVER}-b${DEB_REV}${ROOT_TAG}.efi"
 else
     OUTPUT_EFI="${CLEAN_KVER}-${ROOT_LABEL}.efi"
+fi
+
+# The retired -l1 spelling of this very revision (a linux1 install from before
+# 2026-11-14) is the same build under another name: rename it instead of leaving
+# a second rEFInd entry that boots the same kernel, and instead of breaking the
+# "an install never deletes an .efi" rule -- no file is added or lost.
+if [ -n "$DEB_REV" ] && [ -f "/boot/${CLEAN_KVER}-l1-b${DEB_REV}.efi" ] \
+   && [ ! -f "/boot/$OUTPUT_EFI" ]; then
+    mv -f "/boot/${CLEAN_KVER}-l1-b${DEB_REV}.efi" "/boot/$OUTPUT_EFI"
 fi
 CMDLINE="root=PARTLABEL=$ROOT_LABEL rootwait rw rootfstype=ext4 fw_devlink=off \
 console=tty0 loglevel=4 clk_ignore_unused pd_ignore_unused \

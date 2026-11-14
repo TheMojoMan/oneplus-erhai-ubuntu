@@ -121,17 +121,21 @@ if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
     KVER="${FULLVER%%+b*}"
 
     # 4. Root partition label, same derivation as postinst (a chroot is always
-    #    `linux`; otherwise the booted cmdline first, then the partition backing
-    #    /).  It decides the "-l1" tag below, so it must come from the same
-    #    sources postinst used -- a mismatch only ever costs a no-op delete, never
-    #    a wrong file.
+    #    `linux`; otherwise the partition backing /, then the booted cmdline).  It
+    #    decides the label suffix below, so it must come from the same sources
+    #    postinst used -- a mismatch only ever costs a no-op delete, never a wrong
+    #    file.
     if [ "$IN_CHROOT" = true ]; then
         ROOT_LABEL="${ERHAI_ROOT_LABEL:-linux}"
     else
-        ROOT_LABEL="${ERHAI_ROOT_LABEL:-$(tr ' ' '\n' < /proc/cmdline 2>/dev/null \
-                         | sed -n 's/^root=PARTLABEL=//p' | head -n1)}"
+        ROOT_LABEL="${ERHAI_ROOT_LABEL:-}"
         if [ -z "$ROOT_LABEL" ]; then
-            ROOT_LABEL=$(lsblk -no PARTLABEL "$(findmnt -no SOURCE /)" 2>/dev/null | head -n1)
+            _root_src="$(findmnt -no SOURCE / 2>/dev/null || true)"
+            ROOT_LABEL=$(lsblk -no PARTLABEL "${_root_src%%\[*}" 2>/dev/null | head -n1)
+        fi
+        if [ -z "$ROOT_LABEL" ]; then
+            ROOT_LABEL="$(tr ' ' '\n' < /proc/cmdline 2>/dev/null \
+                             | sed -n 's/^root=PARTLABEL=//p' | head -n1)"
         fi
         if [ -z "$ROOT_LABEL" ]; then
             ROOT_LABEL="linux"
@@ -143,23 +147,24 @@ if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
     fi
 
     # 5. Rebuild the filename postinst used. The "+b<N>" Debian revision (when
-    #    present) is part of the EFI filename (<release>[-l1]-b<N>.efi); postinst
-    #    falls back to <release>-<root partlabel>.efi only without it. Mirror
-    #    that exactly so removal finds the file postinst wrote.
+    #    present) is part of the EFI filename (<kver>-b<N>[-<label>].efi, the label
+    #    dropped for the `linux` partition); postinst falls back to
+    #    <kver>-<root partlabel>.efi only without it. Mirror that exactly so
+    #    removal finds the file postinst wrote.
     CLEAN_KVER="${KVER//-sm8750-themojoman/}"
     DEB_REV="${FULLVER##*+b}"
     if [ "$DEB_REV" = "$FULLVER" ]; then
         DEB_REV=""
     fi
 
-    if [ "$ROOT_LABEL" = "linux1" ]; then
-        ROOT_TAG="-l1"
+    if [ -n "$ROOT_LABEL" ] && [ "$ROOT_LABEL" != "linux" ]; then
+        ROOT_TAG="-${ROOT_LABEL}"
     else
         ROOT_TAG=""
     fi
 
     if [ -n "$DEB_REV" ]; then
-        TARGET_EFI="${CLEAN_KVER}${ROOT_TAG}-b${DEB_REV}.efi"
+        TARGET_EFI="${CLEAN_KVER}-b${DEB_REV}${ROOT_TAG}.efi"
     else
         TARGET_EFI="${CLEAN_KVER}-${ROOT_LABEL}.efi"
     fi
