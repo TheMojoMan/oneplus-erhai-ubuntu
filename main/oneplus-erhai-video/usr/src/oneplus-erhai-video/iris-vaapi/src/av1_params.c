@@ -22,6 +22,11 @@
 #include "av1_bits.h"
 #include "av1_params.h"
 
+/* VA-API orders loop-restoration types like the DXVA/Vulkan enum:
+ * 0 none, 1 wiener, 2 sgrproj, 3 switchable.  The AV1 bitstream orders
+ * them 0 none, 1 switchable, 2 wiener, 3 sgrproj. */
+static const uint8_t va_lr_to_av1[4] = { 0, 2, 3, 1 };
+
 /* Specification constants. */
 #define AV1_MAX_TILE_WIDTH	4096
 #define AV1_MAX_TILE_AREA	(4096 * 2304)
@@ -127,19 +132,17 @@ av1_seq_from_pic(const VADecPictureParameterBufferAV1 *pic,
 	cfg->enable_order_hint = (seq >> 7) & 1;
 	cfg->enable_jnt_comp = (seq >> 8) & 1;
 	cfg->enable_cdef = (seq >> 9) & 1;
-	/* enable_superres and enable_restoration are not part of VA's sequence
-	 * information, and separate_uv_delta_q is not carried either.  Derive
-	 * all three from the picture instead of always signalling them as
-	 * present: a stream that uses none of them then produces exactly the
-	 * encoder's sequence header, and one that does still gets the extra
-	 * syntax it needs. */
-	cfg->enable_superres = !!pic->pic_info_fields.bits.use_superres;
-	cfg->enable_restoration =
-		(pic->loop_restoration_fields.bits.yframe_restoration_type |
-		 pic->loop_restoration_fields.bits.cbframe_restoration_type |
-		 pic->loop_restoration_fields.bits.crframe_restoration_type) != 0;
-	cfg->separate_uv_delta_q = pic->u_dc_delta_q != pic->v_dc_delta_q ||
-		pic->u_ac_delta_q != pic->v_ac_delta_q;
+	/* enable_superres, enable_restoration and separate_uv_delta_q are not
+	 * part of VA's sequence information.  Signal all three as available,
+	 * always: deriving them from the current picture makes the sequence
+	 * header change mid-stream when a later picture starts using loop
+	 * restoration, and re-emitting the sequence header resets the reference
+	 * buffers (dav1d then rejects every picture until the next key frame).
+	 * Enabling a tool only adds trailing syntax; a picture that does not use
+	 * it codes use_superres = 0 / RESTORE_NONE, so decoding is unchanged. */
+	cfg->enable_superres = 1;
+	cfg->enable_restoration = 1;
+	cfg->separate_uv_delta_q = 1;
 	cfg->order_hint_bits = pic->order_hint_bits_minus_1 + 1;
 	cfg->max_width = width;
 	cfg->max_height = height;
@@ -1127,7 +1130,7 @@ write_uncompressed_header(struct av1_bw *bw, struct av1_writer *w,
 				type = pic->loop_restoration_fields.bits.cbframe_restoration_type;
 			else
 				type = pic->loop_restoration_fields.bits.crframe_restoration_type;
-			type &= 3;
+			type = va_lr_to_av1[type & 3];
 			av1_bw_bits(bw, type, 2);
 			if (type) {
 				uses_lr = 1;

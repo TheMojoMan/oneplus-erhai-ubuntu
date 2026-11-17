@@ -1,5 +1,5 @@
 Package: oneplus-erhai-video
-Version: 1.7
+Version: 1.8
 Section: video
 Priority: optional
 Architecture: arm64
@@ -58,3 +58,9 @@ Description: Hardware video decoding for the OnePlus Pad 3 (erhai, SM8750)
  patched libva was built with that driverdir; libva-av1fix now uses the distro
  directory, so the second copy (and the Conflicts on the old test package) is
  gone and a plain apt upgrade is enough.
+ 1.8 (2026-11-17): the driver source is the tree that was measured on the pad,
+ not the later variant that ran AV1 one frame behind and derived the sequence
+ header per picture.  With 1.7 the browsers decoded AV1 on the VPU but presented
+ black frames: a Brave report showed VaapiVideoDecoder at ~52 pictures/s while
+ the compositor received empty pictures.  Same source as the /usr/local build of
+ 2026-11-15 17:48 that renders correctly.
