@@ -39,7 +39,7 @@ A working installation satisfies all of the following conditions:
 | H.264 | Constrained Baseline, Main, High; NV12 output |
 | HEVC | Main 8-bit/NV12; experimental Main10/P010 |
 | VP9 | Profile 0/NV12; experimental Profile 2/P010 |
-| Not supported yet | AV1 |
+| AV1 | Main profile, 8-bit 4:2:0, NV12; opt-in (`IRIS_VAAPI_AV1=1`) |
 
 The kernel and userspace driver must be used together:
 
@@ -430,3 +430,138 @@ After the first complete deployment works, use this order for later updates:
 
 Following the layers in this order makes it clear whether a failure belongs to the
 firmware, kernel V4L2 driver, VA-API driver, or browser integration.
+
+## 9. AV1 decoding
+
+`VAProfileAV1Profile0` (Main, 8-bit 4:2:0) is implemented but opt-in:
+
+```sh
+IRIS_VAAPI_AV1=1 LIBVA_DRIVER_NAME=iris vainfo   # lists VAProfileAV1Profile0
+```
+
+Without `IRIS_VAAPI_AV1=1` the profile is not advertised at all, so no client can
+reach the new code path and the established codecs are unaffected.
+
+### 9.1 Why the driver rebuilds the bitstream
+
+VA-API hands AV1 over as parsed picture parameters plus one CABAC payload per
+tile, but the Iris firmware parses a complete OBU stream. `src/av1_params.c`
+therefore synthesizes the sequence header, the uncompressed frame header and the
+tile group from the VA picture parameter buffer, and passes the tile payloads
+through untouched. `src/av1_bits.c` is the bit writer for the specification's
+`f(n)`/`su(n)`/`ns(n)` descriptors.
+
+The synthesis has to be exact: the tile payload is entropy coded *against* those
+headers, so every field that selects a CABAC context must be reproduced. The
+regression harness `test/../validate_va.py` (in the development tree) runs the
+driver with `IRIS_AV1_DUMP_ONLY=1`, so the access units are produced without
+touching the VPU, and decodes them with dav1d. Against dav1d every reference
+frame of the sample matrix comes out bit-exact (720p and 3840x2160, low-delay
+and altref, single- and multi-tile, SVT-AV1/libaom/rav1e).
+
+### 9.2 The reference picture list is the driver's own
+
+Two pieces of an AV1 frame header are missing from the VA API: the reference
+slots' indices (`ref_frame_idx`) and the refresh set.  Both are recovered by
+keeping the driver's own DPB:
+
+- each of the seven references is pointed at whichever of the driver's slots
+  currently holds the surface the client asked for, which makes the encoder's
+  slot numbering irrelevant — the decoder resolves order hints, skip-mode
+  decisions and CDF references from that slot, so the tile payload decodes
+  identically;
+- the refresh set then becomes the driver's own choice: a slot no reference of
+  the current picture needs, preferring one whose picture the client has already
+  dropped, then a duplicated surface, then the least recently referenced.  This
+  also avoids the two things this firmware rejects — refreshing a slot the
+  current picture still references, and decoding one access unit twice.
+
+Submission therefore stays synchronous: no added latency, no guessed header
+fields, no replay.  A shown key frame still refreshes the whole DPB (0xff is
+inferred by the specification, nothing is coded).
+
+### 9.3 Status of the hardware path
+
+The synthesized bitstream is bit-exact against a software decoder everywhere it
+has been measured (see 9.1).  On the VPU, decoding through
+`ffmpeg -hwaccel vaapi` reproduces **every frame of seven of the nine validation
+samples bit-exactly, in order**:
+
+| Sample | Result |
+|---|---|
+| SVT-AV1 720p: 30-, 60-frame, low-delay, `-g 10`, `-g 1000` | every frame |
+| rav1e 720p | every frame |
+| SVT-AV1 3840x2160 | 16/16 |
+| libaom 720p with altref | 30/60 |
+| libaom 720p, 2x2 tiles | 29/40 |
+
+The driver keeps its own DPB: each reference is pointed at whichever of its slots
+holds the same surface (`ref_frame_idx` is rewritten accordingly), so the
+encoder's slot numbering does not matter and the refresh set becomes the driver's
+own choice.  That keeps submission synchronous — no one-frame delay, no guessed
+refresh bits, no access-unit replay.
+
+The two libaom samples fail at exactly the frames where a software decoder fails
+on the *same synthesized stream*, i.e. only one limitation is left: a picture has
+to be evicted from the eight-slot DPB every frame, and when the client's DPB holds
+eight distinct surfaces the encoder's choice of which reference is dead cannot be
+derived from the VA API.  Those streams should stay on software decoding;
+`IRIS_VAAPI_AV1` is opt-in for exactly this reason.
+
+### 9.4 Validated behaviour beyond one-shot decoding
+
+Seeking, looped playback (EOS drain plus session reopen), the exported-surface
+path (`-hwaccel_output_format vaapi` + `hwdownload`), two decoders running at once
+at different resolutions, twenty sequential decodes, odd geometries (176x144,
+portrait 720x1280) and 3840x2160 all decode bit-exactly against a software
+decoder.
+
+### 9.5 Browser results
+
+Measured 2026-11-15 with silent looped clips, each browser on its own profile,
+CPU as percent of one core:
+
+| browser | 720p AV1 hardware | 720p software | 4K AV1 hardware | 4K software |
+|---|---|---|---|---|
+| Chromium 156 | 14.1 % | 51.1 % | 30.7 % | 166.5 % |
+| Brave 157 | 17.4 % | — | 27.4 % | — |
+| Firefox 160 | 18.6 % | — | fails, see below | — |
+
+Firefox reports `IsHardwareAccelerated=true` and decodes 720p cleanly, but a 4K
+AV1 stream makes it abort with `NS_ERROR_DOM_MEDIA_FATAL_ERR` after ~140
+pictures, so AV1 should stay off in Firefox for 4K content until that is fixed.
+
+### 9.6 Restrictions
+
+- 8-bit 4:2:0 only.  Note that AV1 *Profile 0* covers 10-bit 4:2:0 as well, so a
+  10-bit stream reaches this driver; it is rejected explicitly (the client sees a
+  decode error and can fall back to software) rather than decoded as 8-bit.
+  Profile 1/2 are not advertised at all.
+- Large-scale-tile streams are not supported (`VAConfigAttribDecAV1Features`
+  reports 0).
+- `show_frame` is always signalled as 1: the firmware returns an empty
+  `V4L2_BUF_FLAG_ERROR` capture for hidden frames. A hidden key frame is
+  reported as an intra-only frame for the same reason, so the decoder does not
+  reset its reference state behind the encoder's back.
+- `color_description_present_flag` is 0 in the synthesized sequence header: VA
+  only carries `matrix_coefficients`, so the container's colour information is
+  the authoritative one and browsers use it.
+- AV1 CAPTURE frames carry no usable timestamps, so capture frames are matched
+  to surfaces in decode order (the same FIFO the HEVC path uses), and
+  `vaEndPicture` waits for the held picture because clients release hidden
+  frames as soon as they drop them.
+
+### 9.7 Debugging
+
+| Variable | Effect |
+|---|---|
+| `IRIS_VAAPI_AV1=1` | advertise `VAProfileAV1Profile0` |
+| `IRIS_AV1_DUMP_ONLY=1` | build and dump access units, never touch the VPU |
+| `IRIS_VAAPI_AV1_DUMP=<path>` | append access units to `<path>.<context>` |
+| `IRIS_AV1_MARK=1` | log the bit position of every frame-header section |
+| `IRIS_AV1_TILE_GROUP=strip` | treat slice data as a raw tile group |
+| `IRIS_VAAPI_DEBUG=1` | per-picture and per-capture tracing |
+
+Always validate a header change with `IRIS_AV1_DUMP_ONLY=1` plus a software
+decoder first: a malformed access unit can wedge the VPU (Iris watchdog, which
+takes the whole system down).

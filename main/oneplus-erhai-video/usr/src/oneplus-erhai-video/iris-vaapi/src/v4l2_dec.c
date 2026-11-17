@@ -24,6 +24,9 @@
 
 #define OUT_BUFFERS	16
 #define CAP_BUFFERS	20
+/* AV1 reference setups go deeper than H.264/HEVC: 20 buffers stall
+ * altref-heavy streams, 32 complete them with no corrupt frames. */
+#define AV1_CAP_BUFFERS	32
 
 static unsigned int
 out_sizeimage(unsigned int width, unsigned int height)
@@ -280,7 +283,8 @@ static int v4l2_dec_setup_capture(struct v4l2_dec *d)
 	d->height = fmt.fmt.pix_mp.height;
 
 	memset(&req, 0, sizeof(req));
-	req.count = d->cap_dmabuf_count ? d->cap_dmabuf_count : CAP_BUFFERS;
+	req.count = d->cap_dmabuf_count ? d->cap_dmabuf_count :
+		(d->cap_request ? d->cap_request : CAP_BUFFERS);
 	req.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
 	req.memory = memory;
 	if (xioctl(d->fd, VIDIOC_REQBUFS, &req) < 0) {
@@ -398,6 +402,25 @@ int v4l2_dec_open(struct v4l2_dec *d, const char *dev,
 	d->width = width;
 	d->height = height;
 	d->cap_pixfmt = cap_pixelformat;
+	d->cap_request = pixelformat == V4L2_PIX_FMT_AV1 ? AV1_CAP_BUFFERS :
+		CAP_BUFFERS;
+
+	/* AV1 Main is the only profile the firmware accepts; the level/tier
+	 * menu defaults already match it, but set both explicitly so a stale
+	 * module-level default cannot leak into this session. */
+	if (pixelformat == V4L2_PIX_FMT_AV1) {
+		struct v4l2_control ctrl = {
+			.id = V4L2_CID_MPEG_VIDEO_AV1_PROFILE,
+			.value = V4L2_MPEG_VIDEO_AV1_PROFILE_MAIN,
+		};
+
+		if (xioctl(d->fd, VIDIOC_S_CTRL, &ctrl) < 0)
+			perror("S_CTRL av1_profile");
+		ctrl.id = V4L2_CID_MPEG_VIDEO_AV1_LEVEL;
+		ctrl.value = V4L2_MPEG_VIDEO_AV1_LEVEL_6_1;
+		if (xioctl(d->fd, VIDIOC_S_CTRL, &ctrl) < 0)
+			perror("S_CTRL av1_level");
+	}
 
 	/* ---- OUTPUT (bitstream) ---- */
 	memset(&d->out_fmt, 0, sizeof(d->out_fmt));

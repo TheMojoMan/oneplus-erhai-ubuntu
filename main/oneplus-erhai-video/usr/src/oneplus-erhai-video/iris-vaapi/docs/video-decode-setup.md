@@ -38,7 +38,7 @@ SM8150 Iris1 / Venus 固件
 | H.264 | Constrained Baseline、Main、High，NV12 |
 | HEVC | Main 8-bit/NV12；Main10/P010（实验） |
 | VP9 | Profile 0/NV12；Profile 2/P010（实验） |
-| 暂不支持 | AV1 |
+| AV1 | Main profile, 8-bit 4:2:0, EN: see section 9 of video-decode-setup.en.md (opt-in) |
 
 内核和用户态驱动必须配套：
 

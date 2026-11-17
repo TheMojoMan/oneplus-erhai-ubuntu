@@ -1,0 +1,26 @@
+--- a/libavcodec/vaapi_av1.c
++++ b/libavcodec/vaapi_av1.c
+@@ -122,7 +122,6 @@
+     int8_t bit_depth_idx;
+     int err = 0;
+     int apply_grain = !(avctx->export_side_data & AV_CODEC_EXPORT_DATA_FILM_GRAIN) && film_grain->apply_grain;
+-    uint8_t remap_lr_type[4] = {AV1_RESTORE_NONE, AV1_RESTORE_SWITCHABLE, AV1_RESTORE_WIENER, AV1_RESTORE_SGRPROJ};
+     uint8_t segmentation_feature_signed[AV1_SEG_LVL_MAX] = {1, 1, 1, 1, 1, 0, 0, 0};
+     uint8_t segmentation_feature_max[AV1_SEG_LVL_MAX] = {255, AV1_MAX_LOOP_FILTER,
+         AV1_MAX_LOOP_FILTER, AV1_MAX_LOOP_FILTER, AV1_MAX_LOOP_FILTER, 7 , 0 , 0 };
+@@ -254,9 +253,12 @@
+             .skip_mode_present     = frame_header->skip_mode_present,
+         },
+         .loop_restoration_fields.bits = {
+-            .yframe_restoration_type  = remap_lr_type[frame_header->lr_type[0]],
+-            .cbframe_restoration_type = remap_lr_type[frame_header->lr_type[1]],
+-            .crframe_restoration_type = remap_lr_type[frame_header->lr_type[2]],
++            /* VA-API uses the AV1 syntax values (0 none, 1 switchable,
++             * 2 wiener, 3 sgrproj).  Do not remap through FFmpeg's
++             * AV1_RESTORE_* enum: that enum numbers wiener as 1. */
++            .yframe_restoration_type  = frame_header->lr_type[0],
++            .cbframe_restoration_type = frame_header->lr_type[1],
++            .crframe_restoration_type = frame_header->lr_type[2],
+             .lr_unit_shift            = frame_header->lr_unit_shift,
+             .lr_uv_shift              = frame_header->lr_uv_shift,
+         },

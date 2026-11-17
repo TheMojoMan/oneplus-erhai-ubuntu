@@ -1,0 +1,11 @@
+--- a/libavcodec/vaapi_av1.c
++++ b/libavcodec/vaapi_av1.c
+@@ -161,6 +161,8 @@
+         .frame_height_minus1        = frame_header->frame_height_minus_1,
+         .primary_ref_frame          = frame_header->primary_ref_frame,
+         .order_hint                 = frame_header->order_hint,
++        .refresh_frame_flags        = frame_header->refresh_frame_flags,
++        .refresh_frame_flags_valid  = 1,
+         .tile_cols                  = frame_header->tile_cols,
+         .tile_rows                  = frame_header->tile_rows,
+         .context_update_tile_id     = frame_header->context_update_tile_id,

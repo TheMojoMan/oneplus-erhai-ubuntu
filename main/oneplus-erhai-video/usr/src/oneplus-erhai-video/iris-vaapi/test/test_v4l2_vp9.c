@@ -8,6 +8,7 @@
 #include <time.h>
 
 #include "v4l2_dec.h"
+#include "dma_heap.h"
 
 struct frame { const unsigned char *data; size_t len; };
 
@@ -29,7 +30,15 @@ int main(int argc, char **argv)
 	struct v4l2_dec dec;
 	struct v4l2_dec_frame decoded;
 	struct timespec t0, t1;
+	unsigned long long ts_step = 1000000000ULL;
+	{
+		const char *tss = getenv("IRIS_TS_STEP_NS");
+
+		if (tss)
+			ts_step = strtoull(tss, NULL, 0);
+	}
 	unsigned int count = 0, fed = 0, recycled = 0, done = 0, corrupt = 0;
+	int epipe = 0;
 	FILE *fp;
 	long size;
 	int ret, changed;
@@ -59,38 +68,79 @@ int main(int argc, char **argv)
 	if (!count) return 1;
 	printf("IVF frames found: %u\n", count);
 
-	ret = v4l2_dec_open(&dec, "/dev/video0", width, height,
+	ret = v4l2_dec_open(&dec, NULL, width, height,
 			    V4L2_PIX_FMT_VP9, cap_pixfmt);
 	if (ret) { fprintf(stderr, "open %d\n", ret); return 1; }
+	if (getenv("IRIS_CAP_DMABUF")) {
+		int fds[20];
+		size_t sizes[20];
+		size_t bufsz = (size_t)width * height * 3 + (1u << 20);
+		unsigned int i;
+
+		if (dma_heap_alloc(bufsz, 20, fds)) {
+			fprintf(stderr, "dma-heap alloc failed\n");
+			return 1;
+		}
+		for (i = 0; i < 20; i++) sizes[i] = bufsz;
+		ret = v4l2_dec_set_capture_dmabufs(&dec, fds, sizes, 20);
+		if (ret) { fprintf(stderr, "set_capture_dmabufs %d\n", ret); return 1; }
+		printf("CAPTURE import: 20 dmabufs of %zu bytes\n", bufsz);
+	}
 	ret = v4l2_dec_feed(&dec, frames[0].data, frames[0].len,
-			    1000ULL * 1000000000ULL);
+			    1000ULL * ts_step);
 	if (ret) { fprintf(stderr, "feed 0 %d\n", ret); return 1; }
 	fed = 1;
 	ret = v4l2_dec_start(&dec);
 	if (ret) { fprintf(stderr, "start %d\n", ret); return 1; }
 	clock_gettime(CLOCK_MONOTONIC, &t0);
 
+	{ unsigned int since = 0;
 	while (fed < count || recycled < fed) {
 		while (fed < count && fed - recycled < 8) {
 			ret = v4l2_dec_feed(&dec, frames[fed].data, frames[fed].len,
-					    (fed + 1000ULL) * 1000000000ULL);
-			if (ret) break;
+					    (fed + 1000ULL) * ts_step);
+			if (ret) {
+				fprintf(stderr,
+					"feed %u failed rc=%d errno=%d (recycled=%u done=%u)\n",
+					fed, ret, errno, recycled, done);
+				break;
+			}
 			fed++;
 		}
+		if (fed - since >= 100) {
+			printf("progress: fed=%u recycled=%u done=%u\n",
+			       fed, recycled, done);
+			fflush(stdout);
+			since = fed;
+		}
 		ret = v4l2_dec_poll(&dec, 3000);
-		if (ret <= 0) { fprintf(stderr, "poll %d errno=%d\n", ret, errno); break; }
+		if (ret <= 0) { fprintf(stderr, "poll %d errno=%d at fed=%u done=%u\n", ret, errno, fed, done); break; }
 		while (v4l2_dec_dqout(&dec) == 0) recycled++;
 		ret = v4l2_dec_handle_events(&dec, &changed);
-		if (ret) break;
+		if (ret) { fprintf(stderr, "handle_events %d at fed=%u done=%u\n", ret, fed, done); break; }
 		for (;;) {
 			ret = v4l2_dec_dqcap(&dec, &decoded);
-			if (ret < 0) break;
+			if (ret < 0) {
+				if (ret == -EPIPE) {
+					fprintf(stderr,
+						"EPIPE at fed=%u recycled=%u done=%u\n",
+						fed, recycled, done);
+					epipe = 1;
+				}
+				break;
+			}
+			if (decoded.flags & V4L2_BUF_FLAG_LAST)
+				printf("FLAG_LAST on capture buf (bytesused=%u) at fed=%u done=%u\n",
+				       decoded.bytesused, fed, done);
 			if (decoded.bytesused) {
 				done++;
 				if (decoded.flags & V4L2_BUF_FLAG_ERROR) corrupt++;
 				v4l2_dec_qcap(&dec, &decoded);
 			}
 		}
+		if (epipe)
+			break;
+	}
 	}
 	if (!v4l2_dec_flush(&dec)) {
 		for (;;) {
@@ -98,10 +148,15 @@ int main(int argc, char **argv)
 			if (ret <= 0) break;
 			ret = v4l2_dec_dqcap(&dec, &decoded);
 			if (ret == -EAGAIN) continue;
-			if (ret < 0) break;
+			if (ret < 0)
+				break;
+			if (decoded.flags & V4L2_BUF_FLAG_LAST)
+				printf("FLAG_LAST (drain, bytesused=%u) at done=%u\n",
+				       decoded.bytesused, done);
 			if (decoded.bytesused) {
 				done++;
-				if (decoded.flags & V4L2_BUF_FLAG_ERROR) corrupt++;
+				if (decoded.flags & V4L2_BUF_FLAG_ERROR)
+					corrupt++;
 				v4l2_dec_qcap(&dec, &decoded);
 			}
 			if (ret == 1) break;
@@ -117,5 +172,5 @@ int main(int argc, char **argv)
 	v4l2_dec_close(&dec);
 	free(frames);
 	free(stream);
-	return done && !corrupt ? 0 : 1;
+	return done && !corrupt && !epipe ? 0 : 1;
 }

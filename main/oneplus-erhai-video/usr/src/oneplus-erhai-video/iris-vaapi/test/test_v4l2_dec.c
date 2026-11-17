@@ -190,7 +190,7 @@ int main(int argc, char **argv)
 
 	printf("access units found: %u\n", n_aus);
 
-	ret = v4l2_dec_open(&dec, "/dev/video0", width, height,
+	ret = v4l2_dec_open(&dec, NULL, width, height,
 			    V4L2_PIX_FMT_H264, V4L2_PIX_FMT_NV12);
 	if (ret) { fprintf(stderr, "open failed ret=%d\n", ret); return 1; }
 

@@ -6,6 +6,8 @@
 
 #include <stdio.h>
 #include <errno.h>
+#include <time.h>
+#include <unistd.h>
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,6 +15,16 @@
 #include <va/va.h>
 #include <va/va_backend.h>
 #include <va/va_drmcommon.h>
+#include <va/va_dec_av1.h>
+
+static uint64_t
+now_us(void)
+{
+	struct timespec ts;
+
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (uint64_t)ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
+}
 
 #ifndef ALIGN
 #define ALIGN(x, a) (((x) + (a) - 1) & ~((a) - 1))
@@ -109,8 +121,16 @@ struct iris_drv_data {
 
 	/* Derived images (vaDeriveImage) map a VABufferID to a CAPTURE buffer. */
 	VABufferID derived_ids[256];
+	VASurfaceID derived_surfs[256];
 	void *derived_mem[256];
 	int derived_n;
+
+	/* Handles handed out by vaAcquireBufferHandle (VLC 3 still uses this
+	 * legacy interface to probe dmabuf display support).  The fd is dup()ed
+	 * and closed again in vaReleaseBufferHandle. */
+	VABufferID acq_ids[64];
+	int acq_fds[64];
+	int acq_n;
 
 	/* vaCreateImage/vaGetImage CPU transfer buffers. */
 	VABufferID img_ids[64];
@@ -130,8 +150,26 @@ static const VAProfile iris_profiles[] = {
 	VAProfileHEVCMain10,
 	VAProfileVP9Profile0,
 	VAProfileVP9Profile2,
+	VAProfileAV1Profile0,
 };
 #define NUM_IRIS_PROFILES (sizeof(iris_profiles) / sizeof(iris_profiles[0]))
+
+/* AV1 Main (8-bit 4:2:0) only.  The header synthesis is validated bit-exactly
+ * against dav1d on the sample matrix, but the hardware path is still opt-in:
+ * IRIS_VAAPI_AV1=1 advertises the profile, anything else hides it so no client
+ * can reach the new path by accident. */
+static int
+iris_av1_enabled(void)
+{
+	static int enabled = -1;
+
+	if (enabled < 0) {
+		const char *env = getenv("IRIS_VAAPI_AV1");
+
+		enabled = env && *env && atoi(env) != 0;
+	}
+	return enabled;
+}
 
 static const VAEntrypoint iris_entrypoints[] = {
 	VAEntrypointVLD,
@@ -177,6 +215,8 @@ iris_profile_supported(VAProfile profile)
 {
 	unsigned int i;
 
+	if (profile == VAProfileAV1Profile0 && !iris_av1_enabled())
+		return 0;
 	for (i = 0; i < NUM_IRIS_PROFILES; i++)
 		if (iris_profiles[i] == profile)
 			return 1;
@@ -255,6 +295,9 @@ iris_vaQueryConfigProfiles(VADriverContextP ctx, VAProfile *profile_list,
 		return VA_STATUS_ERROR_ALLOCATION_FAILED;
 
 	for (i = 0; i < NUM_IRIS_PROFILES; i++) {
+		if (iris_profiles[i] == VAProfileAV1Profile0 &&
+		    !iris_av1_enabled())
+			continue;
 		if (iris_profile_is_10bit(iris_profiles[i]) &&
 		    !dd->p010_supported)
 			continue;
@@ -279,6 +322,10 @@ iris_vaQueryConfigEntrypoints(VADriverContextP ctx, VAProfile profile,
 	if (!dd)
 		return VA_STATUS_ERROR_ALLOCATION_FAILED;
 	if (iris_profile_is_10bit(profile) && !dd->p010_supported) {
+		*num_entrypoints = 0;
+		return VA_STATUS_SUCCESS;
+	}
+	if (!iris_profile_supported(profile)) {
 		*num_entrypoints = 0;
 		return VA_STATUS_SUCCESS;
 	}
@@ -331,6 +378,10 @@ iris_vaGetConfigAttributes(VADriverContextP ctx, VAProfile profile,
 		case VAConfigAttribMaxPictureWidth:
 		case VAConfigAttribMaxPictureHeight:
 			attrib_list[i].value = 4096;
+			break;
+		case VAConfigAttribDecAV1Features:
+			/* Large-scale-tile mode is not synthesized. */
+			attrib_list[i].value = 0;
 			break;
 		default:
 			attrib_list[i].value = VA_ATTRIB_NOT_SUPPORTED;
@@ -484,6 +535,22 @@ iris_vaCreateContext(VADriverContextP ctx, VAConfigID config_id, int picture_wid
 	 * and a codec switch would feed the wrong pixfmt into a live OUTPUT
 	 * queue; either way decoding breaks and Chrome falls back to
 	 * software. */
+	/* Only the 8-bit AV1 path exists; refuse a pool that already asks for
+	 * 10-bit surfaces so the client picks software decoding up front. */
+	if (cfg->profile == VAProfileAV1Profile0 && render_targets &&
+	    num_render_targets > 0) {
+		int i;
+
+		for (i = 0; i < num_render_targets; i++) {
+			void *mem;
+			unsigned int pitch, size, w, h, fourcc;
+
+			if (iris_surfs_buffer(t, render_targets[i], &mem, &pitch,
+					      &size, &w, &h, &fourcc) == 0 &&
+			    fourcc == VA_FOURCC_P010)
+				return VA_STATUS_ERROR_UNSUPPORTED_RT_FORMAT;
+		}
+	}
 	eng = iris_decode_create();
 	if (!eng)
 		return VA_STATUS_ERROR_ALLOCATION_FAILED;
@@ -810,6 +877,14 @@ iris_vaRenderPicture(VADriverContextP ctx, VAContextID context_id,
 			    profile == VAProfileVP9Profile2 ||
 			    profile == VAProfileVP9Profile3)
 				break;
+			if (profile == VAProfileAV1Profile0) {
+				if (dd->buf_sizes[idx] <
+				    sizeof(VADecPictureParameterBufferAV1))
+					return VA_STATUS_ERROR_INVALID_BUFFER;
+				if (iris_decode_av1_picture(eng, data))
+					return VA_STATUS_ERROR_INVALID_BUFFER;
+				break;
+			}
 			if (profile == VAProfileHEVCMain ||
 			    profile == VAProfileHEVCMain10) {
 				if (dd->buf_sizes[idx] <
@@ -830,6 +905,17 @@ iris_vaRenderPicture(VADriverContextP ctx, VAContextID context_id,
 			    profile == VAProfileVP9Profile2 ||
 			    profile == VAProfileVP9Profile3)
 				break;
+			if (profile == VAProfileAV1Profile0) {
+				if (dd->buf_sizes[idx] <
+				    sizeof(VASliceParameterBufferAV1) *
+				    dd->buf_num_elements[idx])
+					return VA_STATUS_ERROR_INVALID_BUFFER;
+				for (unsigned int j = 0; j < dd->buf_num_elements[idx]; j++)
+					if (iris_decode_av1_slice_params(eng,
+						(const VASliceParameterBufferAV1 *)data + j))
+						return VA_STATUS_ERROR_INVALID_BUFFER;
+				break;
+			}
 			if (profile == VAProfileHEVCMain ||
 			    profile == VAProfileHEVCMain10) {
 				if (dd->buf_sizes[idx] <
@@ -886,8 +972,12 @@ iris_vaEndPicture(VADriverContextP ctx, VAContextID context_id)
 	eng = iris_context_engine(dd, context_id);
 	if (!eng)
 		return VA_STATUS_ERROR_INVALID_CONTEXT;
-	return iris_decode_end(eng) ?
-		VA_STATUS_ERROR_DECODING_ERROR : VA_STATUS_SUCCESS;
+	uint64_t t0 = now_us();
+	int r = iris_decode_end(eng);
+
+	DBG("[endpic] -> %d (%llu us)\n", r,
+	    (unsigned long long)(now_us() - t0));
+	return r ? VA_STATUS_ERROR_DECODING_ERROR : VA_STATUS_SUCCESS;
 }
 
 static VAStatus
@@ -899,13 +989,15 @@ iris_vaSyncSurface(VADriverContextP ctx, VASurfaceID render_target)
 		return VA_STATUS_ERROR_INVALID_SURFACE;
 	if (!dd->surfs || !iris_surfs_valid(dd->surfs, render_target))
 		return VA_STATUS_ERROR_INVALID_SURFACE;
+	uint64_t t0 = now_us();
 	/* Route through the registry: the picture being synced may belong to
 	 * any live engine, and never-queued pool surfaces succeed without
 	 * draining anything. */
 	{
 		int r = iris_surfs_sync(dd->surfs, render_target);
 
-		DBG("[sync] surf=%u -> r=%d\n", render_target, r);
+		DBG("[sync] surf=%u -> r=%d (%llu us)\n", render_target, r,
+		    (unsigned long long)(now_us() - t0));
 		if (!r)
 			return VA_STATUS_SUCCESS;
 		return r == -ETIMEDOUT ? VA_STATUS_ERROR_TIMEDOUT :
@@ -1095,6 +1187,7 @@ iris_vaDeriveImage(VADriverContextP ctx, VASurfaceID surface, VAImage *image)
 
 	bid = ++dd->buffer_id;
 	dd->derived_ids[dd->derived_n] = bid;
+	dd->derived_surfs[dd->derived_n] = surface;
 	dd->derived_mem[dd->derived_n] = mem;
 	dd->derived_n++;
 
@@ -1127,6 +1220,7 @@ iris_vaDestroyImage(VADriverContextP ctx, VAImageID image)
 		if (dd->derived_ids[i] != image)
 			continue;
 		dd->derived_ids[i] = dd->derived_ids[dd->derived_n - 1];
+		dd->derived_surfs[i] = dd->derived_surfs[dd->derived_n - 1];
 		dd->derived_mem[i] = dd->derived_mem[dd->derived_n - 1];
 		dd->derived_n--;
 		return VA_STATUS_SUCCESS;
@@ -1300,6 +1394,75 @@ iris_vaSetDisplayAttributes(VADriverContextP ctx, VADisplayAttribute *attr_list,
 	return VA_STATUS_SUCCESS;
 }
 
+/* Legacy DMA-BUF handoff (VLC 3's OpenGL interop probes it before it will use
+ * vaExportSurfaceHandle at all).  The caller gets a dup'ed dma-buf fd of the
+ * surface that backs the image/buffer; it stays valid until
+ * vaReleaseBufferHandle(). */
+static VAStatus
+iris_vaAcquireBufferHandle(VADriverContextP ctx, VABufferID buf_id,
+			   VABufferInfo *info)
+{
+	struct iris_drv_data *dd = ctx->pDriverData;
+	VASurfaceID surface = VA_INVALID_SURFACE;
+	unsigned int pitch, size, w, h, fourcc;
+	int i, fd;
+
+	if (!dd || !dd->surfs || !info)
+		return VA_STATUS_ERROR_INVALID_PARAMETER;
+	if (info->mem_type != 0 &&
+	    info->mem_type != VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME &&
+	    info->mem_type != VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2)
+		return VA_STATUS_ERROR_UNSUPPORTED_MEMORY_TYPE;
+
+	for (i = 0; i < dd->derived_n; i++)
+		if (dd->derived_ids[i] == buf_id) {
+			surface = dd->derived_surfs[i];
+			break;
+		}
+	if (surface == VA_INVALID_SURFACE)
+		surface = buf_id;	/* a surface id was passed directly */
+	if (iris_surfs_sync(dd->surfs, surface) != 0)
+		return VA_STATUS_ERROR_INVALID_BUFFER;
+	if (iris_surfs_export(dd->surfs, surface, &fd, &pitch, &size,
+			      &w, &h, &fourcc))
+		return VA_STATUS_ERROR_INVALID_BUFFER;
+	if (dd->acq_n >= 64) {
+		close(fd);
+		return VA_STATUS_ERROR_MAX_NUM_EXCEEDED;
+	}
+	dd->acq_ids[dd->acq_n] = buf_id;
+	dd->acq_fds[dd->acq_n] = fd;
+	dd->acq_n++;
+
+	DBG("[acquire] buf=%u surface=%u fd=%d size=%u\n", buf_id, surface,
+	    fd, size);
+	info->handle = (uintptr_t)fd;
+	info->type = VAImageBufferType;
+	info->mem_type = VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME;
+	info->mem_size = size;
+	return VA_STATUS_SUCCESS;
+}
+
+static VAStatus
+iris_vaReleaseBufferHandle(VADriverContextP ctx, VABufferID buf_id)
+{
+	struct iris_drv_data *dd = ctx->pDriverData;
+	int i;
+
+	if (!dd)
+		return VA_STATUS_ERROR_INVALID_PARAMETER;
+	for (i = 0; i < dd->acq_n; i++)
+		if (dd->acq_ids[i] == buf_id) {
+			DBG("[release] buf=%u fd=%d\n", buf_id, dd->acq_fds[i]);
+			close(dd->acq_fds[i]);
+			dd->acq_ids[i] = dd->acq_ids[dd->acq_n - 1];
+			dd->acq_fds[i] = dd->acq_fds[dd->acq_n - 1];
+			dd->acq_n--;
+			return VA_STATUS_SUCCESS;
+		}
+	return VA_STATUS_ERROR_INVALID_BUFFER;
+}
+
 static VAStatus
 iris_vaExportSurfaceHandle(VADriverContextP ctx, VASurfaceID surface_id,
 			   uint32_t mem_type, uint32_t flags, void *descriptor)
@@ -1322,11 +1485,15 @@ iris_vaExportSurfaceHandle(VADriverContextP ctx, VASurfaceID surface_id,
 	    layer_flags != VA_EXPORT_SURFACE_COMPOSED_LAYERS)
 		return VA_STATUS_ERROR_INVALID_PARAMETER;
 
-	DBG("[export] surf=%u type=%u flags=0x%x\n", surface_id,
-	    mem_type, flags);
+	uint64_t t0 = now_us();
 	if (iris_surfs_export(dd->surfs, surface_id, &fd, &pitch, &size,
-			      &w, &h, &fourcc))
+			      &w, &h, &fourcc)) {
+		DBG("[export] surf=%u FAILED (%llu us)\n", surface_id,
+		    (unsigned long long)(now_us() - t0));
 		return VA_STATUS_ERROR_INVALID_SURFACE;
+	}
+	DBG("[export] surf=%u type=%u flags=0x%x (%llu us)\n", surface_id,
+	    mem_type, flags, (unsigned long long)(now_us() - t0));
 
 	memset(d, 0, sizeof(*d));
 	d->fourcc = fourcc;
@@ -1409,6 +1576,8 @@ static const struct VADriverVTable iris_vtable_template = {
 	.vaBufferInfo = iris_vaBufferInfo,
 	.vaCreateSurfaces2 = iris_vaCreateSurfaces2,
 	.vaQuerySurfaceAttributes = iris_vaQuerySurfaceAttributes,
+	.vaAcquireBufferHandle = iris_vaAcquireBufferHandle,
+	.vaReleaseBufferHandle = iris_vaReleaseBufferHandle,
 	.vaExportSurfaceHandle = iris_vaExportSurfaceHandle,
 };
 

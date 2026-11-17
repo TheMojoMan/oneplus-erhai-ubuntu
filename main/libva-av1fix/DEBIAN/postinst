@@ -1,0 +1,8 @@
+#!/bin/sh
+# libva is a drop-in for the distro library under /usr/local, so the dynamic
+# linker has to learn about it once.
+set -e
+if command -v ldconfig >/dev/null 2>&1; then
+	ldconfig
+fi
+exit 0

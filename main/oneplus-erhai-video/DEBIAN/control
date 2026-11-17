@@ -1,10 +1,11 @@
 Package: oneplus-erhai-video
-Version: 1.4
+Version: 1.5
 Section: video
 Priority: optional
 Architecture: arm64
 Maintainer: TheMojoMan <themojoman@gmx.net>
-Depends: libva2
+Depends: libva2, libva-av1fix (>= 2.23.0+av1fix2)
+Recommends: ffmpeg-av1fix
 Description: Hardware video decoding for the OnePlus Pad 3 (erhai, SM8750)
  Userspace stack for the Qualcomm Iris hardware video decoder (the Venus
  lineage, "Iris Decoder" V4L2 node, qcom_iris kernel module) of the OnePlus
@@ -19,15 +20,17 @@ Description: Hardware video decoding for the OnePlus Pad 3 (erhai, SM8750)
    (chromium's V4L2VideoDecoder drives the iris node directly, no VA-API)
  . - /etc/brave/policies/managed/erhai-hwvideo.json: HardwareAccelerationMode
  . - udev rule giving the video group access to /dev/dma_heap/system
- Codecs: H.264, HEVC Main/Main10, VP9 Profile 0/2 (no AV1). Chromium
+ Codecs: H.264, HEVC Main/Main10, VP9 Profile 0/2, AV1 Main (8-bit). Chromium
  (xtradeb) decodes H.264/VP9 via V4L2; Firefox and Brave decode H.264/HEVC
  Main (and Main10/VP9 P2 where the firmware exposes P010) via VA-API.
  Needs an erhai kernel with the iris decode-order output property (the 7.2
  line from +b10 on, or any 7.3-rc* line) for Firefox/Brave; the full erhai
- image ships it. The package declares NO Recommends on purpose: the kernel,
- the browsers and libva are provided by the image (or by the user), so
- installing it drags nothing else in. After installing on a running desktop,
- log out and back in once.
+ image ships it. Installing it pulls in libva-av1fix, the one library the AV1
+ path needs on the client side (it carries the per-picture refresh set to the
+ driver); ffmpeg-av1fix is only a Recommends because it fixes the same thing in
+ the players (mpv, VLC), while the browsers bring their own code. The kernel
+ and the browsers are the image's job, so nothing else is dragged in. After
+ installing on a running desktop, log out and back in once.
  .
  The iris-vaapi source tree ships in /usr/src/oneplus-erhai-video/iris-vaapi.
  .
@@ -36,3 +39,17 @@ Description: Hardware video decoding for the OnePlus Pad 3 (erhai, SM8750)
  author's identity -- because that build still ran from a tree carrying the clone
  metadata.  No code changed (the driver is rebuilt from the same source, byte for
  byte); the tree is clean and build-video-deb.sh now REFUSES to pack a nested .git.
+ 1.5 (2026-11-17): AV1 hardware decoding.  The driver builds the AV1 frame
+ headers itself (the V4L2 firmware wants them as raw bitstream, the VA-API
+ client gets them as structures) and it kept getting three things wrong on real
+ streams: the tile offsets had to be absolute inside the temporal unit, the
+ sequence header was re-emitted in the middle of playback whenever a later
+ frame flipped a superres/restoration/delta-q flag, and the DPB was rebuilt
+ from a reference map it could not fully recover.  The driver now keeps its own
+ DPB, honours the refresh set the client passes (libva, ffmpeg and chromium were
+ extended to carry it), detects seeks by order hint and survives a lost
+ reference, and refuses 10-bit AV1 instead of decoding it as 8-bit.  Verified on
+ 1080p and 4K AV1: Chromium/Brave (V4L2), mpv and VLC 4 (vaapi) decode on the
+ VPU with no software fallback.  It also implements the legacy
+ vaAcquireBufferHandle/vaReleaseBufferHandle pair, which VLC 3.x probes before
+ it will display a VA-API surface at all.

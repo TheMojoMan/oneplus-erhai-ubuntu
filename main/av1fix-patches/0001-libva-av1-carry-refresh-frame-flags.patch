@@ -1,0 +1,46 @@
+--- a/va/va_dec_av1.h
++++ b/va/va_dec_av1.h
+@@ -418,8 +418,8 @@
+              *  2:     INTRA_ONLY_FRAME;
+              *  3:     SWITCH_FRAME
+              *  For SWITCH_FRAME, application shall set error_resilient_mode = 1,
+-             *  refresh_frame_flags, etc. appropriately. And driver will convert it
+-             *  to INTER_FRAME.
++             *  \ref refresh_frame_flags, etc. appropriately. And driver will
++             *  convert it to INTER_FRAME.
+              */
+             uint32_t        frame_type                                  : 2;
+             uint32_t        show_frame                                  : 1;
+@@ -621,10 +621,31 @@
+      */
+     VAWarpedMotionParamsAV1 wm[7];
+ 
++    /** \brief Refresh frame flags
++     *
++     * The refresh_frame_flags syntax element of the frame header: bit i set
++     * means that reference frame slot i is updated with this frame.  A value
++     * of zero means that no slot is updated.  This is 0xff for a key frame.
++     *
++     * Only meaningful when \ref refresh_frame_flags_valid is 1.  Clients that
++     * do not fill in this field shall set refresh_frame_flags_valid to 0, and
++     * drivers shall then fall back to deriving the refresh set themselves.
++     */
++    uint8_t                 refresh_frame_flags;
++
++    /** \brief refresh_frame_flags is valid
++     *
++     * Set to 1 if the client supplied \ref refresh_frame_flags.
++     */
++    uint8_t                 refresh_frame_flags_valid;
++
++    /** \brief Reserved bytes for future use, must be zero */
++    uint16_t                av1_reserved1;
++
+     /**@}*/
+ 
+     /** \brief Reserved bytes for future use, must be zero */
+-    uint32_t                va_reserved[VA_PADDING_MEDIUM];
++    uint32_t                va_reserved[VA_PADDING_MEDIUM - 1];
+ } VADecPictureParameterBufferAV1;
+ 
+ 

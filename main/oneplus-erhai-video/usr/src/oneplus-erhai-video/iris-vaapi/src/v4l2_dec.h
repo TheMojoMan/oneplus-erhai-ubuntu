@@ -53,6 +53,7 @@ struct v4l2_dec {
 	int streaming_cap;		/* CAPTURE queue streamed */
 	int cap_changed;		/* renegotiated since last check */
 	int eos;
+	unsigned int cap_request;	/* CAPTURE buffers to request */
 };
 
 /* Return non-zero when @dev advertises @pixelformat on its CAPTURE queue. */

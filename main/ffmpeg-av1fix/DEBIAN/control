@@ -1,0 +1,22 @@
+Package: ffmpeg-av1fix
+Version: 8.0.1+av1fix2
+Section: video
+Priority: optional
+Architecture: arm64
+Maintainer: TheMojoMan <themojoman@gmx.net>
+Depends: libva-av1fix (>= 2.23.0+av1fix1), libc6
+Description: ffmpeg 8.0.1 with the AV1 VA-API refresh-frame fixes (erhai)
+ Upstream ffmpeg 8.0.1 plus av1fix-patches/0002 and /0006: the VA-API AV1
+ decoder passes refresh_frame_flags to the driver, and the loop-restoration
+ frame type is mapped the way VA-API expects it.
+ .
+ iris-vaapi keeps its own DPB for AV1 and needs the refresh set the stream
+ really uses; guessing it from ref_frame_map[] loses references on real
+ 1080p/4K streams.  The header fields come from libva-av1fix, which this
+ package therefore depends on.
+ .
+ Installed as a /usr/local drop-in (binary, headers and libav* with the
+ distro sonames), so Ubuntu's ffmpeg and its library packages stay in place
+ and keep receiving security updates; the AV1 playback path of mpv and VLC
+ resolves these libraries first.  Built with VA-API enabled and the native
+ codec set, i.e. no Ubuntu codec is lost.

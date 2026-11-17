@@ -17,6 +17,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <va/va.h>
+#include <va/va_dec_av1.h>
 
 struct iris_decode_ctx;
 struct iris_surfs;
@@ -91,6 +92,11 @@ int iris_decode_hevc_iq_matrix(struct iris_decode_ctx *ctx,
 			       const VAIQMatrixBufferHEVC *iq);
 int iris_decode_hevc_slice_params(struct iris_decode_ctx *ctx,
 				  const VASliceParameterBufferHEVC *sp);
+/* AV1: VA delivers parsed picture params plus one CABAC payload per tile. */
+int iris_decode_av1_picture(struct iris_decode_ctx *ctx,
+			    const VADecPictureParameterBufferAV1 *pic);
+int iris_decode_av1_slice_params(struct iris_decode_ctx *ctx,
+				 const VASliceParameterBufferAV1 *sp);
 int iris_decode_slice(struct iris_decode_ctx *ctx, const void *data,
 		      size_t len);
 

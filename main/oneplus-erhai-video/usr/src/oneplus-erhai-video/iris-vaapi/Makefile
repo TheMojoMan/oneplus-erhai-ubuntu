@@ -16,6 +16,8 @@ V4L2_OBJ = $(BUILD)/v4l2_dec.o
 H264_OBJ = $(BUILD)/h264_params.o
 HEVC_OBJ = $(BUILD)/hevc_params.o
 HEVC_REWRITE_OBJ = $(BUILD)/hevc_slice_rewrite.o
+AV1_OBJ = $(BUILD)/av1_params.o
+AV1BITS_OBJ = $(BUILD)/av1_bits.o
 VK_COPY_OBJ = $(BUILD)/vk_copy.o
 TEST_VA = $(BUILD)/test_va
 TEST_V4L2 = $(BUILD)/test_v4l2_dec
@@ -28,6 +30,7 @@ TEST_HEVC_PARAMS = $(BUILD)/test_hevc_params
 TEST_HEVC_REWRITE = $(BUILD)/test_hevc_slice_rewrite
 TEST_VA_STRESS = $(BUILD)/test_va_stress
 TEST_SURFACE_FENCE = $(BUILD)/test_surface_fence
+TEST_AV1_BITS = $(BUILD)/test_av1_bits
 
 .PHONY: all check clean install uninstall
 
@@ -36,17 +39,29 @@ DESTDIR ?=
 
 all: $(DRIVER) $(TEST_VA) $(TEST_V4L2) $(TEST_H264) $(TEST_VADEC) \
 	$(TEST_VP9) $(TEST_V4L2_VP9) $(TEST_HEVC) $(TEST_HEVC_PARAMS) $(TEST_HEVC_REWRITE) \
-	$(TEST_VA_STRESS) $(TEST_SURFACE_FENCE)
+	$(TEST_VA_STRESS) $(TEST_SURFACE_FENCE) $(TEST_AV1_BITS)
 
 DECODE_OBJ = $(BUILD)/decode.o
 
-$(DRIVER): src/iris_vaapi.c $(BUILD)/decode.o $(BUILD)/v4l2_dec.o $(BUILD)/h264_params.o $(BUILD)/hevc_params.o $(HEVC_REWRITE_OBJ) $(VK_COPY_OBJ)
+$(DRIVER): src/iris_vaapi.c $(BUILD)/decode.o $(BUILD)/v4l2_dec.o $(BUILD)/h264_params.o $(BUILD)/hevc_params.o $(HEVC_REWRITE_OBJ) $(VK_COPY_OBJ) $(AV1_OBJ) $(AV1BITS_OBJ)
 	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -g -fPIC -shared $(CPPFLAGS) -Isrc -o $@ $< $(DECODE_OBJ) $(V4L2_OBJ) $(H264_OBJ) $(HEVC_OBJ) $(HEVC_REWRITE_OBJ) $(VK_COPY_OBJ) $(LDFLAGS) $(LDLIBS)
+	$(CC) $(CFLAGS) -g -fPIC -shared $(CPPFLAGS) -Isrc -o $@ $< $(DECODE_OBJ) $(V4L2_OBJ) $(H264_OBJ) $(HEVC_OBJ) $(HEVC_REWRITE_OBJ) $(VK_COPY_OBJ) $(AV1_OBJ) $(AV1BITS_OBJ) $(LDFLAGS) $(LDLIBS)
 
-$(DECODE_OBJ): src/decode.c src/decode.h src/v4l2_dec.h src/h264_params.h src/hevc_params.h src/hevc_slice_rewrite.h src/vk_copy.h
+$(DECODE_OBJ): src/decode.c src/decode.h src/v4l2_dec.h src/h264_params.h src/hevc_params.h src/hevc_slice_rewrite.h src/vk_copy.h src/av1_params.h src/av1_bits.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -g $(CPPFLAGS) -Isrc -c -o $@ src/decode.c
+
+$(AV1_OBJ): src/av1_params.c src/av1_params.h src/av1_bits.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) -g -fPIC $(CPPFLAGS) -Isrc -c -o $@ $<
+
+$(AV1BITS_OBJ): src/av1_bits.c src/av1_bits.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) -g -fPIC $(CPPFLAGS) -Isrc -c -o $@ $<
+
+$(TEST_AV1_BITS): test/test_av1_bits.c $(AV1_OBJ) $(AV1BITS_OBJ) src/av1_params.h src/av1_bits.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -Isrc -o $@ test/test_av1_bits.c $(AV1_OBJ) $(AV1BITS_OBJ)
 
 $(VK_COPY_OBJ): src/vk_copy.c src/vk_copy.h
 	@mkdir -p $(BUILD)
@@ -115,10 +130,11 @@ $(TEST_SURFACE_FENCE): test/test_surface_fence.c src/iris_surface_fence.h
 clean:
 	rm -rf $(BUILD)
 
-check: $(TEST_H264) $(TEST_HEVC_PARAMS) $(TEST_HEVC_REWRITE)
+check: $(TEST_H264) $(TEST_HEVC_PARAMS) $(TEST_HEVC_REWRITE) $(TEST_AV1_BITS)
 	./$(TEST_H264)
 	./$(TEST_HEVC_PARAMS)
 	./$(TEST_HEVC_REWRITE)
+	./$(TEST_AV1_BITS)
 
 install: $(DRIVER)
 	test -n "$(DRIVERDIR)"

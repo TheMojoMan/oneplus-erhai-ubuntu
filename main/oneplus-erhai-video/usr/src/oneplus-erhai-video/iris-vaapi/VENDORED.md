@@ -12,7 +12,7 @@ files are plain files now; the upstream history is not carried along.
 
 The erhai changes are also shipped as a reviewable diff next to this file:
 [`erhai-changes-vs-upstream.patch`](erhai-changes-vs-upstream.patch) — 5 files,
-**258 insertions / 23 deletions**:
+**1417 insertions / 65 deletions**:
 
 | file | what the erhai changes do |
 |---|---|
@@ -20,6 +20,13 @@ The erhai changes are also shipped as a reviewable diff next to this file:
 | `src/v4l2_dec.c` / `src/v4l2_dec.h` | resolve the Iris V4L2 node (`$IRIS_VAAPI_DEVICE` first, else scan by card/driver), handle the 10-bit profiles that also expose the plain YUV420 RT format, close-path fix, and the `IRIS_UNCLEAN_CLOSE` debug switch |
 | `src/iris_vaapi.c` | profile → fourcc handling and `__vaDriverInit_1_23` tweaks |
 | `src/dma_heap.h` (NEW) | minimal `/dev/dma_heap/system` allocator for the test harnesses that need dma-bufs |
+
+Since 1.5 the same tree also carries the AV1 work: an own DPB with reference
+slot remapping and seek detection, client refresh-set handling
+(`refresh_frame_flags`), absolute tile offsets and a stable sequence header,
+8-bit-only AV1 (10-bit is refused instead of being decoded as 8-bit), and the
+legacy `vaAcquireBufferHandle`/`vaReleaseBufferHandle` pair VLC 3.x probes
+before it uses a VA-API surface.
 
 `oneplus-erhai-video`'s `build-video-deb.sh` **rebuilds `iris_drv_video.so` from
 this tree on every build** and packs this tree under
