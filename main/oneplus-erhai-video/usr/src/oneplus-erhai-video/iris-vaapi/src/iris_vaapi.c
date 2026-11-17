@@ -179,6 +179,12 @@ iris_profile_rt_format(VAProfile profile)
 	 * vaapi_wrapper requires VA_RT_FORMAT_YUV420 for VAProfileHEVCMain10
 	 * (only VP9Profile2/3 ask for YUV420_10BPP) and drops the profile from
 	 * its supported list when the check fails. */
+	if (profile == VAProfileAV1Profile0)
+		/* AV1 Main (profile 0) spans 8- and 10-bit 4:2:0 and the depth
+		 * is not part of the VA profile: accept both RT formats and let
+		 * the surfaces the client allocates pick the capture layout
+		 * (NV12 or P010). */
+		return VA_RT_FORMAT_YUV420 | VA_RT_FORMAT_YUV420_10;
 	return iris_profile_is_10bit(profile) ?
 		(VA_RT_FORMAT_YUV420 | VA_RT_FORMAT_YUV420_10) :
 		VA_RT_FORMAT_YUV420;
@@ -499,6 +505,7 @@ iris_vaCreateContext(VADriverContextP ctx, VAConfigID config_id, int picture_wid
 	struct iris_surfs *t;
 	struct iris_decode_ctx *eng;
 	struct iris_config *cfg;
+	unsigned int av1_ten_bit = 0;
 
 	dd = iris_drv_data(ctx);
 	if (!dd)
@@ -518,8 +525,9 @@ iris_vaCreateContext(VADriverContextP ctx, VAConfigID config_id, int picture_wid
 	 * and a codec switch would feed the wrong pixfmt into a live OUTPUT
 	 * queue; either way decoding breaks and Chrome falls back to
 	 * software. */
-	/* Only the 8-bit AV1 path exists; refuse a pool that already asks for
-	 * 10-bit surfaces so the client picks software decoding up front. */
+	/* AV1 Main (profile 0) covers 8- and 10-bit 4:2:0, and the depth is
+	 * not part of the VA profile: the render targets the client allocated
+	 * tell the engine which capture layout to run (NV12 or P010). */
 	if (cfg->profile == VAProfileAV1Profile0 && render_targets &&
 	    num_render_targets > 0) {
 		int i;
@@ -530,14 +538,20 @@ iris_vaCreateContext(VADriverContextP ctx, VAConfigID config_id, int picture_wid
 
 			if (iris_surfs_buffer(t, render_targets[i], &mem, &pitch,
 					      &size, &w, &h, &fourcc) == 0 &&
-			    fourcc == VA_FOURCC_P010)
-				return VA_STATUS_ERROR_UNSUPPORTED_RT_FORMAT;
+			    fourcc == VA_FOURCC_P010) {
+				av1_ten_bit = 1;
+				break;
+			}
 		}
 	}
+	if (cfg->profile == VAProfileAV1Profile0 && av1_ten_bit &&
+	    !dd->p010_supported)
+		return VA_STATUS_ERROR_UNSUPPORTED_RT_FORMAT;
 	eng = iris_decode_create();
 	if (!eng)
 		return VA_STATUS_ERROR_ALLOCATION_FAILED;
-	iris_decode_setup(eng, picture_width, picture_height, cfg->profile);
+	iris_decode_setup(eng, picture_width, picture_height, cfg->profile,
+			  av1_ten_bit);
 	iris_decode_set_surfaces(eng, t);
 	if (iris_decode_set_render_targets(eng, render_targets,
 					   num_render_targets) < 0) {
@@ -1050,25 +1064,8 @@ iris_vaQuerySurfaceAttributes(VADriverContextP dpy, VAConfigID config,
 {
 	struct iris_drv_data *dd = dpy ? dpy->pDriverData : NULL;
 	struct iris_config *cfg;
-	VASurfaceAttrib attrs[] = {
-		{ .type = VASurfaceAttribPixelFormat,
-		  .flags = VA_SURFACE_ATTRIB_GETTABLE | VA_SURFACE_ATTRIB_SETTABLE,
-		  .value.type = VAGenericValueTypeInteger,
-		  .value.value.i = VA_FOURCC_NV12 },
-		{ .type = VASurfaceAttribMinWidth,
-		  .flags = VA_SURFACE_ATTRIB_GETTABLE,
-		  .value.type = VAGenericValueTypeInteger, .value.value.i = 16 },
-		{ .type = VASurfaceAttribMaxWidth,
-		  .flags = VA_SURFACE_ATTRIB_GETTABLE,
-		  .value.type = VAGenericValueTypeInteger, .value.value.i = 4096 },
-		{ .type = VASurfaceAttribMinHeight,
-		  .flags = VA_SURFACE_ATTRIB_GETTABLE,
-		  .value.type = VAGenericValueTypeInteger, .value.value.i = 16 },
-		{ .type = VASurfaceAttribMaxHeight,
-		  .flags = VA_SURFACE_ATTRIB_GETTABLE,
-		  .value.type = VAGenericValueTypeInteger, .value.value.i = 4096 },
-	};
-	unsigned int want = ARRAY_SIZE(attrs);
+	VASurfaceAttrib attrs[6];
+	unsigned int want = 0;
 
 	if (!num_attribs)
 		return VA_STATUS_ERROR_INVALID_PARAMETER;
@@ -1077,13 +1074,51 @@ iris_vaQuerySurfaceAttributes(VADriverContextP dpy, VAConfigID config,
 	cfg = iris_find_config(dd, config);
 	if (!cfg)
 		return VA_STATUS_ERROR_INVALID_CONFIG;
-	attrs[0].value.value.i = iris_profile_fourcc(cfg->profile);
+
+	attrs[0] = (VASurfaceAttrib){
+		.type = VASurfaceAttribPixelFormat,
+		.flags = VA_SURFACE_ATTRIB_GETTABLE | VA_SURFACE_ATTRIB_SETTABLE,
+		.value.type = VAGenericValueTypeInteger,
+		.value.value.i = iris_profile_fourcc(cfg->profile),
+	};
+	want = 1;
+	/* AV1 Main (profile 0) spans 8- and 10-bit 4:2:0 and the depth is not
+	 * part of the VA profile: offer both layouts so a client that parses
+	 * the stream (libavcodec's best-format match, VLC) picks P010 for
+	 * 10-bit content while 8-bit content still gets NV12. */
+	if (cfg->profile == VAProfileAV1Profile0 && dd->p010_supported) {
+		attrs[1] = (VASurfaceAttrib){
+			.type = VASurfaceAttribPixelFormat,
+			.flags = VA_SURFACE_ATTRIB_GETTABLE |
+				 VA_SURFACE_ATTRIB_SETTABLE,
+			.value.type = VAGenericValueTypeInteger,
+			.value.value.i = VA_FOURCC_P010,
+		};
+		want = 2;
+	}
+	attrs[want++] = (VASurfaceAttrib){
+		.type = VASurfaceAttribMinWidth,
+		.flags = VA_SURFACE_ATTRIB_GETTABLE,
+		.value.type = VAGenericValueTypeInteger, .value.value.i = 16 };
+	attrs[want++] = (VASurfaceAttrib){
+		.type = VASurfaceAttribMaxWidth,
+		.flags = VA_SURFACE_ATTRIB_GETTABLE,
+		.value.type = VAGenericValueTypeInteger, .value.value.i = 4096 };
+	attrs[want++] = (VASurfaceAttrib){
+		.type = VASurfaceAttribMinHeight,
+		.flags = VA_SURFACE_ATTRIB_GETTABLE,
+		.value.type = VAGenericValueTypeInteger, .value.value.i = 16 };
+	attrs[want++] = (VASurfaceAttrib){
+		.type = VASurfaceAttribMaxHeight,
+		.flags = VA_SURFACE_ATTRIB_GETTABLE,
+		.value.type = VAGenericValueTypeInteger, .value.value.i = 4096 };
+
 	if (attrib_list) {
 		if (*num_attribs < want) {
 			*num_attribs = want;
 			return VA_STATUS_ERROR_MAX_NUM_EXCEEDED;
 		}
-		memcpy(attrib_list, attrs, sizeof(attrs));
+		memcpy(attrib_list, attrs, want * sizeof(attrs[0]));
 		*num_attribs = want;
 	} else {
 		*num_attribs = want;

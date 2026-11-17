@@ -52,7 +52,8 @@ struct iris_decode_ctx *iris_decode_create(void);
 void iris_decode_destroy(struct iris_decode_ctx *ctx);
 
 void iris_decode_setup(struct iris_decode_ctx *ctx, unsigned int width,
-		       unsigned int height, VAProfile profile);
+		       unsigned int height, VAProfile profile,
+		       unsigned int av1_ten_bit);
 
 /* Attach the display-level registry this engine reads/writes surfaces in. */
 void iris_decode_set_surfaces(struct iris_decode_ctx *ctx,

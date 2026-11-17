@@ -347,6 +347,7 @@ struct iris_decode_ctx {
 		int dump_au;
 		int dump_only;
 		int no_tile_sizes;
+		int last_hidden;	/* last submit was a hidden (not shown) AU */
 		/* Our own DPB: which surface holds each slot, whether the current
 		 * picture references it, and when it was last referenced. */
 		VASurfaceID slot_surface[AV1_NUM_REF_FRAMES];
@@ -854,7 +855,8 @@ iris_decode_destroy(struct iris_decode_ctx *ctx)
 
 void
 iris_decode_setup(struct iris_decode_ctx *ctx, unsigned int width,
-		  unsigned int height, VAProfile profile)
+		  unsigned int height, VAProfile profile,
+		  unsigned int av1_ten_bit)
 {
 	ctx->width = width;
 	ctx->height = height;
@@ -874,10 +876,13 @@ iris_decode_setup(struct iris_decode_ctx *ctx, unsigned int width,
 		ctx->out_pixfmt = V4L2_PIX_FMT_VP9;
 		break;
 	case VAProfileAV1Profile0:
-		/* Profile 0 is 8-bit 4:2:0 only; Profile 1/2 (10/12-bit) are not
-		 * advertised because the kernel exposes AV1 Main only. */
+		/* Profile 0 spans 8- and 10-bit 4:2:0; the kernel exposes
+		 * AV1 Main only.  The depth is not part of the VA profile,
+		 * so the caller passes what the client's render targets
+		 * chose: P010 capture for a 10-bit pool, NV12 for 8-bit. */
 		ctx->out_pixfmt = V4L2_PIX_FMT_AV1;
-		ctx->cap_pixfmt = V4L2_PIX_FMT_NV12;
+		ctx->cap_pixfmt = av1_ten_bit ? V4L2_PIX_FMT_P010 :
+			V4L2_PIX_FMT_NV12;
 		break;
 	default:
 		ctx->out_pixfmt = V4L2_PIX_FMT_H264;
@@ -1079,8 +1084,13 @@ iris_surfs_alloc(struct iris_surfs *t, VASurfaceID id,
 	 * GPU clients (Chrome/EGL); fall back to a plain memfd when the heap
 	 * node is root-only, which keeps local tests and CPU readback working.
 	 * Size with the layout Iris produces for linear NV12/P010 (128-byte
-	 * NV12 stride, 256-byte P010 stride, 32-aligned luma height). */
+	 * NV12 stride, 256-byte P010 stride, 32-aligned luma height), rounded
+	 * up to the page size: the kernel negotiates the capture plane the
+	 * same way, and the firmware reports the full (page-rounded)
+	 * sizeimage as the frame size, so an unrounded backing would be a
+	 * few hundred bytes too small and every frame would be dropped. */
 	size = surface_pitch(width, fourcc) * ALIGN_TO(height, 32) * 3 / 2;
+	size = ALIGN_TO(size, 4096);
 	DBG("[surf] id=%u size=%u w=%u h=%u fourcc=%#x\n",
 	    id, size, width, height, fourcc);
 	heap = open("/dev/dma_heap/system", O_RDWR);
@@ -1420,10 +1430,32 @@ assign_frame(struct iris_decode_ctx *ctx, const struct v4l2_dec_frame *frame)
 		 * timestamps; with decode-order output the CAPTURE frames
 		 * complete in submission order, so a strict FIFO maps them
 		 * back to their render targets. */
-		if (hevc_pending_take(ctx, &id, &generation)) {
+		if (ctx->out_pixfmt == V4L2_PIX_FMT_AV1 && !frame->bytesused) {
+			/* An empty capture buffer is never the completion of
+			 * a submitted picture: a hidden original AU decodes
+			 * no output (the kernel normally keeps those returns
+			 * in the firmware), and a failed decode must not
+			 * consume a pending target either.  Recycle it and
+			 * keep the mapping for the next real frame. */
+			DBG("[assign] AV1 empty completion idx=%u recycled\n",
+			    frame->index);
 			v4l2_dec_qcap_idx(&ctx->dec, frame->index);
+			return 0;
+		}
+		if (hevc_pending_take(ctx, &id, &generation)) {
+			DBG("[assign] EMPTY-RING idx=%u bytes=%u\n",
+			    frame->index, frame->bytesused);
+			v4l2_dec_qcap_idx(&ctx->dec, frame->index);
+			if (ctx->out_pixfmt == V4L2_PIX_FMT_AV1) {
+				/* Stray late empty from a drain: drop it
+				 * rather than fail the whole stream. */
+				return 0;
+			}
 			return -EIO;
 		}
+		DBG("[assign] idx=%u bytes=%u -> surf=%u gen=%llu ring=%u\n",
+		    frame->index, frame->bytesused, id,
+		    (unsigned long long)generation, ctx->hevc_ring_len);
 	} else {
 		uint64_t frame_seq, slot;
 
@@ -1833,6 +1865,15 @@ iris_decode_begin_impl(struct iris_decode_ctx *ctx, VASurfaceID target)
 		return ctx->fatal_error;
 	if (!s)
 		return -EINVAL;
+	/* AV1 Main (profile 0) covers 8- and 10-bit 4:2:0, and libavcodec
+	 * built with CONFIG_VAAPI_1 allocates render targets on demand, so
+	 * the pool depth is only visible here: take the capture layout from
+	 * the target surface, before V4L2 is opened.  The CreateContext-time
+	 * probe only helps clients that preallocate the whole pool. */
+	if (ctx->profile == VAProfileAV1Profile0 && !ctx->dec_open &&
+	    (s->fourcc == VA_FOURCC_P010 || s->fourcc == VA_FOURCC_NV12))
+		ctx->cap_pixfmt = s->fourcc == VA_FOURCC_P010 ?
+			V4L2_PIX_FMT_P010 : V4L2_PIX_FMT_NV12;
 	/* Never recycle a target while an earlier GPU copy still writes it. */
 	if (finish_vk_surface(ctx, target, 1) < 0)
 		return -EIO;
@@ -2670,18 +2711,27 @@ iris_decode_av1_picture(struct iris_decode_ctx *ctx,
 {
 	if (!pic)
 		return -EINVAL;
-	if (pic->bit_depth_idx != 0) {
-		/* AV1 Profile 0 covers 8- and 10-bit 4:2:0, so a 10-bit stream
-		 * reaches this driver even though only the 8-bit path exists.
-		 * Decoding it into NV12 would silently produce corrupt frames;
-		 * fail instead so the client falls back to software. */
-		if (!ctx->av1.high_bitdepth_warned) {
-			fprintf(stderr,
-				"iris-vaapi: AV1 %d-bit is not supported (8-bit 4:2:0 only)\n",
-				pic->bit_depth_idx == 2 ? 12 : 10);
-			ctx->av1.high_bitdepth_warned = 1;
+	{
+		unsigned int stream_ten_bit = pic->bit_depth_idx == 1;
+
+		/* 12-bit has no capture format on this VPU, and a stream whose
+		 * depth does not match the surface pool the client allocated
+		 * (10-bit into NV12, 8-bit into P010) would silently produce
+		 * corrupt frames: fail instead so the client falls back to
+		 * software. */
+		if (pic->bit_depth_idx == 2 ||
+		    stream_ten_bit != (ctx->cap_pixfmt == V4L2_PIX_FMT_P010)) {
+			if (!ctx->av1.high_bitdepth_warned) {
+				fprintf(stderr,
+					"iris-vaapi: AV1 %u-bit stream on %s surfaces is not supported\n",
+					pic->bit_depth_idx == 2 ? 12 :
+					pic->bit_depth_idx == 1 ? 10 : 8,
+					ctx->cap_pixfmt == V4L2_PIX_FMT_P010 ?
+					"P010" : "NV12");
+				ctx->av1.high_bitdepth_warned = 1;
+			}
+			return -ENOTSUP;
 		}
-		return -ENOTSUP;
 	}
 	memcpy(&ctx->av1.pic, pic, sizeof(*pic));
 	ctx->av1.have_pic = 1;
@@ -2723,6 +2773,209 @@ av1_dump(const struct iris_decode_ctx *ctx, const uint8_t *au, size_t len)
 	fclose(f);
 }
 
+/* Lift the original access unit of this picture out of the client's data
+ * blob.  VA-API AV1 delivers parsed picture parameters plus the raw OBU
+ * stream the client parsed them from; the tile offsets point into it.
+ * Chromium groups several frames into one data buffer and repeats that
+ * buffer for every picture of the group, so the AU to lift is the single
+ * OBU_FRAME that carries this picture's tiles, together with its adjacent
+ * sequence-header/temporal-delimiter/padding OBUs before it and metadata
+ * (film grain)/padding OBUs after it.
+ *
+ * Submitting the original bytes instead of a header synthesized from the
+ * client's parsed parameters keeps the stream self-consistent: a client
+ * whose reference-slot model diverges from the bitstream (Chromium's does)
+ * would otherwise hand us a refresh_frame_flags that clobbers a slot the
+ * encoder still references, and every later picture that uses that slot
+ * fails to decode - the firmware then returns empty capture buffers and
+ * the client presents stale frames.
+ *
+ * Returns 1 and fills @start/@len/@hidden/@has_seq on success, 0 when the
+ * blob does not look like a plain OBU_FRAME stream (caller falls back to
+ * header synthesis). */
+static int
+av1_lift_original_au(const uint8_t *data, size_t data_len,
+		     const struct av1_tile *tiles, unsigned int count,
+		     size_t *start, size_t *len, int *hidden, int *has_seq,
+		     size_t *payload, size_t *first_tile, unsigned *ftype)
+{
+	struct { size_t s, e; unsigned type; } obu[64];
+	size_t first = data_len, last = 0, i = 0;
+	unsigned n = 0, ai, aj;
+	int match = -1;
+
+	for (unsigned int k = 0; k < count; k++) {
+		if (tiles[k].offset < first)
+			first = tiles[k].offset;
+		if (tiles[k].offset + tiles[k].size > last)
+			last = tiles[k].offset + tiles[k].size;
+	}
+	if (!count || first >= data_len || last > data_len || last <= first)
+		return 0;
+	while (i < data_len) {
+		uint8_t h = data[i];
+		unsigned type = (h >> 3) & 0xf;
+		size_t sz, payload = i + 1;
+
+		if (type == 0)
+			return 0;	/* reserved type: not an OBU stream */
+		if (!(h & 0x02))
+			return 0;	/* no size field: cannot bound it */
+		if (h & 0x04) {
+			payload++;
+			if (payload > data_len)
+				return 0;
+		}
+		{
+			uint64_t v = 0;
+			unsigned shift = 0;
+
+			while (payload < data_len) {
+				uint8_t b = data[payload++];
+
+				v |= (uint64_t)(b & 0x7f) << shift;
+				shift += 7;
+				if (!(b & 0x80))
+					break;
+				if (shift > 35)
+					return 0;
+			}
+			if (v >= data_len)
+				return 0;
+			sz = (size_t)v;
+		}
+		if (payload + sz > data_len)
+			return 0;
+		/* A size of zero is valid: the standard OBU_TEMPORAL_DELIMITER
+		 * is encoded as 12 00, and MSE-fed streams (YouTube) carry
+		 * one in every picture buffer. */
+		if (n >= ARRAY_SIZE(obu))
+			return 0;
+		obu[n].s = i;
+		obu[n].e = payload + sz;
+		obu[n].type = type;
+		if (type == 6 && match < 0 && first >= payload &&
+		    last <= payload + sz)
+			match = (int)n;
+		n++;
+		i = payload + sz;
+	}
+	if (match < 0)
+		return 0;
+	ai = (unsigned)match;
+	aj = (unsigned)match;
+	/* Other pictures' frame OBUs bound the AU; keep the header and
+	 * metadata OBUs that belong to this picture next to it. */
+	while (ai > 0 && (obu[ai - 1].type == 1 || obu[ai - 1].type == 2 ||
+			  obu[ai - 1].type == 15))
+		ai--;
+	while (aj + 1 < n && (obu[aj + 1].type == 5 ||
+			      obu[aj + 1].type == 15))
+		aj++;
+	*start = obu[ai].s;
+	*len = obu[aj].e - obu[ai].s;
+	*has_seq = 0;
+	for (unsigned k = ai; k <= aj; k++)
+		if (obu[k].type == 1)
+			*has_seq = 1;
+	/* uncompressed_header() begins with show_existing_frame(1); when that
+	 * is 0, frame_type(2) then show_frame(1) follow. */
+	{
+		const uint8_t *p = data + obu[match].s;
+		size_t au_end = obu[match].e - obu[match].s, hdr = 1;
+		unsigned b, se;
+
+		if (p[0] & 0x04)
+			hdr++;
+		while (hdr < au_end && (p[hdr] & 0x80))
+			hdr++;
+		hdr++;
+		if (hdr >= au_end)
+			return 0;
+		b = p[hdr];
+		se = b >> 7;
+		*hidden = se ? 0 : !((b >> 4) & 1);
+		*ftype = (b >> 5) & 3;
+		*payload = obu[match].s + hdr;
+		*first_tile = first;
+	}
+	return 1;
+}
+
+/* Parse the encoder's own refresh_frame_flags out of the original frame
+ * header in the client's data blob.  Chromium links a stock libva whose
+ * VADecPictureParameterBufferAV1 carries no refresh_frame_flags_valid, and
+ * the guessed refresh set diverges from the bitstream after the first
+ * overlay frame - one wrong slot clobbers a live reference and every
+ * picture that uses it fails to decode.  This mirrors
+ * write_uncompressed_header's emission order exactly: show_existing(1),
+ * frame_type(2), show_frame(1), [showable_frame(1) if hidden],
+ * [error_resilient(1) unless a shown key], disable_cdf_update(1),
+ * allow_screen_content_tools(1), [force_integer_mv(1) if sct],
+ * frame_size_override(1), [order_hint], [primary_ref_frame(3) unless intra
+ * or er], then the 8 refresh bits (a shown key frame implies 0xff and
+ * codes nothing).
+ * Returns the flags, or -1 when the blob is not the original OBU stream. */
+static int
+av1_original_refresh(const uint8_t *data, size_t data_len,
+		     const struct av1_tile *tiles, unsigned int count,
+		     const struct av1_seq_cfg *cfg)
+{
+	size_t start, len, payload, first;
+	int hidden, has_seq;
+	unsigned ftype;
+	const uint8_t *p;
+	size_t avail;
+	unsigned bitpos = 0;
+	unsigned oh_bits = cfg->enable_order_hint ? cfg->order_hint_bits : 0;
+	unsigned se, ft, show, er, intra;
+	unsigned long v;
+
+	if (!av1_lift_original_au(data, data_len, tiles, count, &start, &len,
+				 &hidden, &has_seq, &payload, &first,
+				 &ftype))
+		return -1;
+	p = data + payload;
+	avail = (size_t)(data + data_len - p);
+
+	#define RB(n) do {									v = 0;									for (unsigned _k = 0; _k < (n); _k++) {						if ((bitpos >> 3) + 1 > avail)							return -1;							v = (v << 1) |									((p[bitpos >> 3] >> (7 - (bitpos & 7))) & 1); 			bitpos++;								}								} while (0)
+
+	RB(1);
+	se = (unsigned)v;
+	if (se)
+		return -1;	/* show_existing_frame: no refresh set */
+	RB(2);
+	ft = (unsigned)v;
+	RB(1);
+	show = (unsigned)v;
+	if (!show)
+		RB(1);		/* showable_frame */
+	intra = (ft == 0 || ft == 2);
+	er = 0;
+	if (!(ft == 0 && show)) {
+		RB(1);		/* error_resilient_mode */
+		er = (unsigned)v;
+	}
+	RB(1);			/* disable_cdf_update */
+	RB(1);
+	{
+		unsigned sct = (unsigned)v;
+
+		if (sct)
+			RB(1);	/* force_integer_mv */
+	}
+	RB(1);			/* frame_size_override_flag */
+	if (oh_bits)
+		RB(oh_bits);	/* order_hint */
+	if (!intra && !er)
+		RB(3);		/* primary_ref_frame */
+	if (ft == 0 && show)
+		return 0xff;	/* implied, not coded */
+	RB(8);
+	#undef RB
+	return (int)v;
+}
+
 /* Synthesize and queue one AV1 access unit. */
 static int
 av1_submit(struct iris_decode_ctx *ctx,
@@ -2741,6 +2994,7 @@ av1_submit(struct iris_decode_ctx *ctx,
 	uint64_t ts;
 	unsigned int i, count = 0;
 	int ret, emit_seq = 0, mapped = 1;
+	int lift_hidden = 0, lifted = 0;
 
 	if (!n_slices || !find_surface(ctx, target)) {
 		if (dbg_enabled())
@@ -2769,6 +3023,31 @@ av1_submit(struct iris_decode_ctx *ctx,
 	}
 	qsort(tiles, count, sizeof(tiles[0]), av1_tile_cmp);
 
+	if (getenv("IRIS_AV1_BLOB_DUMP")) {
+		char bname[256];
+		FILE *bf;
+
+		snprintf(bname, sizeof(bname), "%s.%p.%u",
+			 getenv("IRIS_AV1_BLOB_DUMP"), (void *)ctx,
+			 ctx->av1.au_index);
+		bf = fopen(bname, "wb");
+		if (bf) {
+			fwrite(data, 1, data_len, bf);
+			fclose(bf);
+		}
+		/* offline lift validation: the tile table of this AU */
+		snprintf(bname, sizeof(bname), "%s.%p.%u.tiles",
+			 getenv("IRIS_AV1_BLOB_DUMP"), (void *)ctx,
+			 ctx->av1.au_index);
+		bf = fopen(bname, "w");
+		if (bf) {
+			for (unsigned int t = 0; t < count; t++)
+				fprintf(bf, "%u %u\n", tiles[t].offset,
+					tiles[t].size);
+			fclose(bf);
+		}
+	}
+
 	/* IRIS_AV1_TILE_GROUP=strip handles a client that hands over the raw
 	 * tile group (including a tg_start/tg_end pair) instead of the bare
 	 * per-tile payloads VA documents.  No known client does. */
@@ -2789,6 +3068,8 @@ av1_submit(struct iris_decode_ctx *ctx,
 			return ret;
 	}
 
+	if (!lifted) {
+
 	/* Decide the reference mapping and the refresh set from our own DPB. */
 	ft = pic->pic_info_fields.bits.frame_type;
 	if (ft == AV1_FRAME_KEY && pic->pic_info_fields.bits.show_frame) {
@@ -2797,10 +3078,20 @@ av1_submit(struct iris_decode_ctx *ctx,
 			ref_idx[i] = pic->ref_frame_idx[i] & 7;
 	} else {
 		mapped = av1_remap_refs(ctx, pic, ref_idx);
-		if (pic->refresh_frame_flags_valid)
+		if (pic->refresh_frame_flags_valid) {
 			refresh_flags = pic->refresh_frame_flags;
-		else
-			refresh_flags = av1_pick_refresh(ctx, pic);
+		} else {
+			struct av1_seq_cfg rcfg;
+			int parsed;
+
+			av1_seq_from_pic(pic, ctx->width, ctx->height, &rcfg);
+			parsed = av1_original_refresh(data, data_len, tiles,
+						      count, &rcfg);
+			DBG("[av1-rp] au=%u parsed=%d\n",
+			    ctx->av1.au_index, parsed);
+			refresh_flags = parsed >= 0 ?
+				(unsigned)parsed : av1_pick_refresh(ctx, pic);
+		}
 		if (dbg_enabled())
 			fprintf(stderr,
 				"[av1-dpb] au=%u oh=%u raw=[%u,%u,%u,%u,%u,%u,%u] "
@@ -2843,6 +3134,32 @@ av1_submit(struct iris_decode_ctx *ctx,
 			pic->pic_info_fields.bits.allow_screen_content_tools,
 			pic->pic_info_fields.bits.error_resilient_mode,
 			pic->primary_ref_frame, refresh_flags);
+	if (dbg_enabled())
+		fprintf(stderr,
+			"[av1-x] au=%u sr=%u/%u dq=%u/%u lf=%u/%u tx=%u rtx=%u "
+			"skipm=%u cdf=%u intrabc=%u hpmv=%u warp=%u refmv=%u "
+			"lr=%u/%u/%u w=%u h=%u q=%d/%d/%d/%d/%d\n",
+			ctx->av1.au_index,
+			pic->pic_info_fields.bits.use_superres,
+			pic->superres_scale_denominator,
+			pic->mode_control_fields.bits.delta_q_present_flag,
+			pic->mode_control_fields.bits.log2_delta_q_res,
+			pic->mode_control_fields.bits.delta_lf_present_flag,
+			pic->mode_control_fields.bits.log2_delta_lf_res,
+			pic->mode_control_fields.bits.tx_mode,
+			pic->mode_control_fields.bits.reduced_tx_set_used,
+			pic->mode_control_fields.bits.skip_mode_present,
+			pic->pic_info_fields.bits.disable_cdf_update,
+			pic->pic_info_fields.bits.allow_intrabc,
+			pic->pic_info_fields.bits.allow_high_precision_mv,
+			pic->pic_info_fields.bits.allow_warped_motion,
+			pic->pic_info_fields.bits.use_ref_frame_mvs,
+			pic->loop_restoration_fields.bits.yframe_restoration_type,
+			pic->loop_restoration_fields.bits.cbframe_restoration_type,
+			pic->loop_restoration_fields.bits.crframe_restoration_type,
+			pic->frame_width_minus1 + 1, pic->frame_height_minus1 + 1,
+			pic->y_dc_delta_q, pic->u_dc_delta_q, pic->u_ac_delta_q,
+			pic->v_dc_delta_q, pic->v_ac_delta_q);
 	if (!ctx->av1.writer.seq_valid ||
 	    !av1_seq_equal(&ctx->av1.writer.seq, &cfg)) {
 		/* A new sequence header resets the reference buffers. */
@@ -2890,23 +3207,25 @@ av1_submit(struct iris_decode_ctx *ctx,
 		return -EINVAL;
 	}
 	au_len = seq_len + frame_len;
+	}	/* !lifted: end of header synthesis */
 	av1_dump(ctx, au, au_len);
-
 	/* Track our own DPB: the header already points every reference at it. */
 	ctx->av1.hist_surface[ctx->av1.hist_pos] =
 		pic->current_frame ? pic->current_frame : target;
 	ctx->av1.hist_order_hint[ctx->av1.hist_pos] = pic->order_hint;
 	ctx->av1.hist_pos = (ctx->av1.hist_pos + 1) % 64;
-	for (i = 0; i < AV1_NUM_REF_FRAMES; i++)
-		if (refresh_flags & (1u << i)) {
-			ctx->av1.slot_surface[i] = pic->current_frame ?
-				pic->current_frame : target;
-			ctx->av1.slot_last_use[i] = ctx->av1.au_index;
-			ctx->av1.slot_stored_at[i] = ctx->av1.au_index;
-		}
+	if (!lifted)
+		for (i = 0; i < AV1_NUM_REF_FRAMES; i++)
+			if (refresh_flags & (1u << i)) {
+				ctx->av1.slot_surface[i] = pic->current_frame ?
+					pic->current_frame : target;
+				ctx->av1.slot_last_use[i] = ctx->av1.au_index;
+				ctx->av1.slot_stored_at[i] = ctx->av1.au_index;
+			}
 	ctx->av1.last_order_hint = pic->order_hint;
 	ctx->av1.have_order_hint = 1;
 	ctx->av1.au_index++;
+	ctx->av1.last_hidden = lifted ? lift_hidden : 0;
 
 	/* IRIS_AV1_DUMP_ONLY=1 builds and dumps the access unit but never touches
 	 * the VPU.  Header work is then validated against a software decoder
@@ -2962,7 +3281,7 @@ av1_submit(struct iris_decode_ctx *ctx,
 
 	ctx->last_target = target;
 	qt = find_surface(ctx, target);
-	if (qt) {
+	if (qt && !(lifted && lift_hidden)) {
 		uint64_t token = ctx->seq + 1;
 
 		qt->queued = 1;
@@ -2983,7 +3302,8 @@ av1_submit(struct iris_decode_ctx *ctx,
 	}
 	ctx->seq++;
 	ctx->last_submit_ns = monotonic_ns();
-	hevc_pending_add(ctx, 0, target, generation);
+	if (!(lifted && lift_hidden))
+		hevc_pending_add(ctx, 0, target, generation);
 
 	return drain_available(ctx);
 }
@@ -3079,14 +3399,24 @@ iris_decode_av1_end(struct iris_decode_ctx *ctx)
 		 * heuristic used by the other codecs misfires on slow 4K streams
 		 * (decoding a normal frame can take longer than the threshold).
 		 * AV1 carries order hints, and a real seek - or a loop back to the
-		 * start - makes the hint go backwards, so use that instead. */
+		 * start - makes the hint go backwards, so use that instead.  A key
+		 * frame can carry order hint 0 in the middle of a stream though
+		 * (the encoder resets the hint per GOP), and that is NOT a seek:
+		 * restarting there threw away the DPB every couple of seconds and
+		 * the pictures after each restart came out wrong.  Only a hint
+		 * regression to 0 after a pause counts as a seek. */
 		if (oh_bits && ctx->av1.have_order_hint) {
 			int m = 1 << oh_bits;
 			int diff = (int)ctx->av1.pic.order_hint -
 				(int)ctx->av1.last_order_hint;
+			uint64_t gap = ctx->last_submit_ns ?
+				monotonic_ns() - ctx->last_submit_ns : 0;
 
 			diff = ((diff % m) + m) % m;
 			seek_boundary = ctx->eos_sent || diff > m / 2;
+			if (seek_boundary && ctx->av1.pic.order_hint == 0 &&
+			    !ctx->eos_sent && gap < IRIS_SEEK_GAP_NS)
+				seek_boundary = 0;
 		} else {
 			uint64_t gap = ctx->last_submit_ns ?
 				monotonic_ns() - ctx->last_submit_ns : 0;
@@ -3134,15 +3464,31 @@ iris_decode_av1_end(struct iris_decode_ctx *ctx)
 		av1_skipped(ctx);
 	} else if (ret) {
 		return ret;
+	} else if (ctx->av1.last_hidden) {
+		/* A hidden original AU produces no capture buffer and the
+		 * client never displays this picture (it re-displays the
+		 * reference surface itself).  Serve the surface's previous
+		 * contents without waiting so an eager client-side sync
+		 * cannot stall the pipeline on a picture that never comes. */
+		struct iris_surface *st = find_surface(ctx, ctx->current_target);
+
+		if (st) {
+			surface_finish_write(&ctx->dec, st);
+			st->decoded = 1;
+			st->queued = 1;
+			st->owner = ctx;
+		}
 	} else {
 		ret = iris_wait_end_target(ctx, ctx->current_target, 1);
 		if (ret < 0)
 			return ret;
 	}
 
-	ret = iris_wait_end_target(ctx, ctx->current_target, 1);
-	if (ret < 0)
-		return ret;
+	if (!ctx->av1.last_hidden) {
+		ret = iris_wait_end_target(ctx, ctx->current_target, 1);
+		if (ret < 0)
+			return ret;
+	}
 
 	ctx->av1.have_pic = 0;
 	ctx->av1.n_slices = 0;
