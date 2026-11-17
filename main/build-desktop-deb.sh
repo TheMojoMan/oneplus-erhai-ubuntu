@@ -53,6 +53,7 @@ for f in usr/local/sbin/erhai-user-groups.sh \
 	 etc/systemd/system/erhai-rtc-sync.timer \
 	 usr/local/sbin/erhai-bypass-charge.sh \
 	 etc/default/erhai-charge \
+	 etc/environment.d/90-erhai-vaapi.conf \
 	 etc/systemd/system/erhai-bypass-charge.service \
 	 etc/systemd/system/erhai-bypass-charge@.service \
 	 etc/polkit-1/rules.d/50-erhai-bypass-charge.rules \

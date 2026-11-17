@@ -5,4 +5,11 @@
 # touchpads are exempt from the tablet-mode suspension (and DWT pairing
 # with the folio keyboard works via the libinput quirk file shipped in the
 # same package).
-ACTION=="add|change", SUBSYSTEM=="input", ATTRS{name}=="OnePlus Pad 3 Touchpad", ENV{ID_INPUT_TOUCHPAD}=="1", ENV{ID_INPUT_TOUCHPAD_INTEGRATION}="external"
+#
+# ID_INTEGRATION is the property libinput >= 1.32 reads first; the
+# ID_INPUT_TOUCHPAD_INTEGRATION fallback is what 1.31 and older used. This
+# touchpad hangs off the pogo serial controller, so systemd's
+# 65-integration.rules tags it "internal" from ID_BUS=platform and
+# 70-touchpad.rules copies that back — set both, or a libinput upgrade
+# silently suspends the touchpad again (seen on the Arch/Omarchy image).
+ACTION=="add|change", SUBSYSTEM=="input", ATTRS{name}=="OnePlus Pad 3 Touchpad", ENV{ID_INPUT_TOUCHPAD}=="1", ENV{ID_INTEGRATION}="external", ENV{ID_INPUT_TOUCHPAD_INTEGRATION}="external"

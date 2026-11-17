@@ -41,6 +41,15 @@ pam_remove_line() {
 
 case "$1" in
 remove|purge)
+	# erhai: drop the AV1 hardware-decode lines the postinst put into
+	# /etc/environment (2.39).  The environment.d drop-in is a package file
+	# and disappears on its own.
+	if [ -f /etc/environment ]; then
+		grep -v -x -e 'LIBVA_DRIVER_NAME=iris' -e 'IRIS_VAAPI_AV1=1' \
+			/etc/environment >/etc/environment.erhai-tmp 2>/dev/null &&
+			mv -f /etc/environment.erhai-tmp /etc/environment ||
+			rm -f /etc/environment.erhai-tmp
+	fi
 	dpkg-divert --remove --no-rename \
 		--divert "$DOCK_ORIG" "$DOCK_DASH" >/dev/null 2>&1 || true
 	if [ -f "$DOCK_ORIG" ]; then

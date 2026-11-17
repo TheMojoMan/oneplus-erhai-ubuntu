@@ -1,9 +1,10 @@
 0512d9b7381c2f5c3c3f4b5b1aea16a5  etc/dconf/db/local.d/00-erhai
 b38c0460f7b1b4e6e7f7a599229a4046  etc/dconf/profile/gdm
 15e272d1b7f84a0cfcc3e741c9b2e4b3  etc/default/erhai-charge
+e2a063741839091951d5795d29739de7  etc/environment.d/90-erhai-vaapi.conf
 e612b000a9d362391310470e5aed75e5  etc/erhai/gpu-pin.conf
 d4550f43e21808cbb2d45bd565ebc49c  etc/polkit-1/rules.d/50-erhai-bypass-charge.rules
-084da443656d4d048b4ee3e0b2b80906  etc/systemd/logind.conf.d/10-erhai-powerkey.conf
+4e3876bc375af9dbb559b7a8d4aedbc2  etc/systemd/logind.conf.d/10-erhai-powerkey.conf
 b718cd60cfd0922dd71eda02e7abdd67  etc/systemd/system/erhai-backlight.service
 1fab0e62e9d1e48825e0fe6ea2d0f201  etc/systemd/system/erhai-bypass-charge.service
 502dad77988fe25255b9c7ff653c8330  etc/systemd/system/erhai-bypass-charge@.service
@@ -22,7 +23,7 @@ b7d70ae00a046f13eb2095ab31e86671  etc/systemd/system/erhai-touchscreen.service
 449241d6e52f1df03d67acb34edde1a1  etc/systemd/system/systemd-suspend.service.d/erhai-s2idle.conf
 1549212aa03231d646aedf1ccd87ff08  etc/udev/rules.d/71-erhai-folio-udev.rules
 1c4e5826547b901d29c68073c9299a1c  etc/udev/rules.d/72-erhai-gpu-external.rules
-1203acd4aeafd7664865ac415ef77be6  etc/udev/rules.d/81-erhai-pogo-touchpad.rules
+bef7da546eb5c50337fcb9695a2e1a47  etc/udev/rules.d/81-erhai-pogo-touchpad.rules
 3997d498709d8bea8f366fb236e72ccb  etc/udev/rules.d/99-nvt-touch-calibration.rules
 0268999da57277d23b962900a23a4ceb  usr/lib/systemd/user/filter-chain.service.d/50-erhai-session.conf
 0268999da57277d23b962900a23a4ceb  usr/lib/systemd/user/pipewire-pulse.service.d/50-erhai-session.conf

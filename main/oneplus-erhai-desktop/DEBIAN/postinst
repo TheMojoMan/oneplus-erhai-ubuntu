@@ -35,6 +35,21 @@ if [ -d "$DOCK_EXT_DIR" ] && [ -f "$DOCK_PAYLOAD" ]; then
 	install -o root -g root -m 0644 "$DOCK_PAYLOAD" "$DOCK_DASH" || true
 fi
 
+# erhai: AV1 hardware decode environment (2.39).  The video stack only uses the
+# VPU when libva is told which driver to load and iris-vaapi is told to expose
+# AV1; the values used to exist on the development pad only, so an installed
+# image decoded everything in software.  The drop-in ships with this package
+# (systemd user sessions read environment.d), and the same two lines go into
+# /etc/environment for sessions that gdm starts through PAM.  Existing values
+# are never overwritten -- a user who pinned a different driver keeps it.
+for kv in LIBVA_DRIVER_NAME=iris IRIS_VAAPI_AV1=1; do
+	key=${kv%%=*}
+	if [ -f /etc/environment ] &&
+	   ! grep -q "^[[:space:]]*${key}=" /etc/environment; then
+		printf '%s\n' "$kv" >>/etc/environment
+	fi
+done
+
 # erhai: touch long-press -> context menu for the Desktop Icons NG extension
 # (2026-10-04).  DING opens its context menus only on a secondary (mouse)
 # button press; a touch long tap arrives as an emulated primary (button 1)

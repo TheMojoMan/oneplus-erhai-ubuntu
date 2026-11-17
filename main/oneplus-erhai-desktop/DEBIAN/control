@@ -1,5 +1,5 @@
 Package: oneplus-erhai-desktop
-Version: 2.38
+Version: 2.39
 Section: utils
 Priority: optional
 Architecture: all
@@ -470,3 +470,12 @@ Description: Desktop glue for the OnePlus Pad 3 (erhai)
  behaviour is unchanged.  The seed enables it and sets
  workspaces-only-on-primary=true; a user-level copy of the same uuid shadows the
  system one.
+ 2.39 ships the AV1 HARDWARE-DECODE ENVIRONMENT that so far existed on the
+ development pad only: /etc/environment.d/90-erhai-vaapi.conf (for systemd user
+ sessions) and the two matching lines in /etc/environment (for sessions gdm
+ starts through PAM) select the patched iris VA-API driver
+ (LIBVA_DRIVER_NAME=iris) and enable AV1 on the VPU (IRIS_VAAPI_AV1=1).
+ Without them an installed image picked the default driver and played AV1 in
+ software no matter what the kernel and the driver could do.  Values already
+ present are never overwritten, the postinst only appends a missing key, and a
+ removal deletes exactly those two lines again.
