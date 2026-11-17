@@ -329,6 +329,8 @@ struct iris_decode_ctx {
 		size_t data_len, data_cap;
 		uint32_t blob_base;
 		int blob_ready;
+		uint32_t slice_base;
+		int slice_base_valid;
 
 		int pending;
 		VADecPictureParameterBufferAV1 pending_pic;
@@ -1872,6 +1874,7 @@ iris_decode_begin_impl(struct iris_decode_ctx *ctx, VASurfaceID target)
 		ctx->av1.n_slices = 0;
 		ctx->av1.data_len = 0;
 		ctx->av1.blob_ready = 0;
+		ctx->av1.slice_base_valid = 0;
 	}
 	return 0;
 }
@@ -2597,6 +2600,7 @@ av1_reset_picture(struct iris_decode_ctx *ctx)
 	ctx->av1.n_slices = 0;
 	ctx->av1.data_len = 0;
 	ctx->av1.blob_ready = 0;
+	ctx->av1.slice_base_valid = 0;
 }
 
 
@@ -2624,10 +2628,31 @@ static int
 av1_record_slice(struct iris_decode_ctx *ctx,
 		 const VASliceParameterBufferAV1 *sp)
 {
-	uint32_t base = ctx->av1.blob_ready ? ctx->av1.blob_base :
-		(uint32_t)ctx->av1.data_len;
+	uint32_t base;
 
-	ctx->av1.blob_ready = 0;
+	/* A slice's offset is relative to the one data buffer it belongs to, and
+	 * several slice parameter buffers can belong to the same data buffer:
+	 * Chromium renders one buffer with the whole tile group and then one
+	 * parameter buffer per tile, each with its own offset inside it.  Keep
+	 * the base of the buffer that was appended last until a new one arrives;
+	 * a client that renders the parameters BEFORE their buffer (ffmpeg)
+	 * gets the position the next append will start at. */
+	if (ctx->av1.blob_ready) {
+		base = ctx->av1.blob_base;
+		ctx->av1.slice_base = base;
+		ctx->av1.slice_base_valid = 1;
+		ctx->av1.blob_ready = 0;
+	} else if (ctx->av1.slice_base_valid) {
+		base = ctx->av1.slice_base;
+	} else {
+		base = (uint32_t)ctx->av1.data_len;
+	}
+	if (dbg_enabled())
+		fprintf(stderr,
+			"[av1] slice %u base=%u off=%u size=%u data=%zu row=%u col=%u\n",
+			ctx->av1.n_slices, base, sp->slice_data_offset,
+			sp->slice_data_size, ctx->av1.data_len,
+			sp->tile_row, sp->tile_column);
 	if (ctx->av1.n_slices >= AV1_MAX_TILES)
 		return -1;
 	ctx->av1.slices[ctx->av1.n_slices].offset =
@@ -2660,6 +2685,12 @@ iris_decode_av1_picture(struct iris_decode_ctx *ctx,
 	}
 	memcpy(&ctx->av1.pic, pic, sizeof(*pic));
 	ctx->av1.have_pic = 1;
+	if (dbg_enabled())
+		fprintf(stderr,
+			"[av1] params ft=%u oh=%u bd=%u tiles=%ux%u w=%u h=%u\n",
+			pic->pic_info_fields.bits.frame_type, pic->order_hint,
+			pic->bit_depth_idx, pic->tile_cols, pic->tile_rows,
+			pic->frame_width_minus1 + 1, pic->frame_height_minus1 + 1);
 	return 0;
 }
 
@@ -2711,14 +2742,25 @@ av1_submit(struct iris_decode_ctx *ctx,
 	unsigned int i, count = 0;
 	int ret, emit_seq = 0, mapped = 1;
 
-	if (!n_slices || !find_surface(ctx, target))
+	if (!n_slices || !find_surface(ctx, target)) {
+		if (dbg_enabled())
+			fprintf(stderr,
+				"[av1] submit refused: slices=%u target=%u found=%d data=%zu\n",
+				n_slices, target, find_surface(ctx, target) ? 1 : 0,
+				data_len);
 		return -EINVAL;
-	for (i = 0; i < n_slices; i++) {
+	}	for (i = 0; i < n_slices; i++) {
 		uint64_t off = slices[i].offset;
 		uint64_t size = slices[i].size;
 
-		if (off + size > data_len)
+		if (off + size > data_len) {
+			if (dbg_enabled())
+				fprintf(stderr,
+					"[av1] tile %u/%u out of range off=%llu size=%llu data=%zu\n",
+					i, n_slices, (unsigned long long)off,
+					(unsigned long long)size, data_len);
 			return -EINVAL;
+		}
 		tiles[count].offset = (uint32_t)off;
 		tiles[count].size = (uint32_t)size;
 		tiles[count].row = slices[i].row;
@@ -3106,6 +3148,7 @@ iris_decode_av1_end(struct iris_decode_ctx *ctx)
 	ctx->av1.n_slices = 0;
 	ctx->av1.data_len = 0;
 	ctx->av1.blob_ready = 0;
+	ctx->av1.slice_base_valid = 0;
 	if (ctx->stats_enabled) {
 		ctx->stats_end_ns += monotonic_ns() - end_start;
 		ctx->stats_ends++;

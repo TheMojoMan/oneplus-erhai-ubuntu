@@ -1,5 +1,5 @@
 Package: oneplus-erhai-video
-Version: 1.8
+Version: 1.9
 Section: video
 Priority: optional
 Architecture: arm64
@@ -64,3 +64,11 @@ Description: Hardware video decoding for the OnePlus Pad 3 (erhai, SM8750)
  black frames: a Brave report showed VaapiVideoDecoder at ~52 pictures/s while
  the compositor received empty pictures.  Same source as the /usr/local build of
  2026-11-15 17:48 that renders correctly.
+ 1.9 (2026-11-17): hardware decode no longer needs environment variables.  A
+ browser started from a desktop session that predates the variables ran without
+ LIBVA_DRIVER_NAME and IRIS_VAAPI_AV1, so libva looked for its built-in default
+ driver (msm_drv_video.so), found nothing and the browser fell back to dav1d --
+ software AV1, no VPU.  The package now also installs the driver under that
+ default name (a symlink to iris_drv_video.so) and the driver advertises AV1
+ unless IRIS_VAAPI_AV1=0, which stays as the kill switch.  Hosts that still
+ export the variables keep working unchanged.

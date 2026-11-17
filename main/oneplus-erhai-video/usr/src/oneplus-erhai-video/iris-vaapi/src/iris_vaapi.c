@@ -136,9 +136,11 @@ static const VAProfile iris_profiles[] = {
 #define NUM_IRIS_PROFILES (sizeof(iris_profiles) / sizeof(iris_profiles[0]))
 
 /* AV1 Main (8-bit 4:2:0) only.  The header synthesis is validated bit-exactly
- * against dav1d on the sample matrix, but the hardware path is still opt-in:
- * IRIS_VAAPI_AV1=1 advertises the profile, anything else hides it so no client
- * can reach the new path by accident. */
+ * against dav1d on the sample matrix and the profile is advertised by default:
+ * a client cannot be asked to export an environment variable before it gets
+ * hardware decode (the browsers were launched from sessions that never saw
+ * IRIS_VAAPI_AV1=1 and silently fell back to dav1d).  IRIS_VAAPI_AV1=0 is the
+ * kill switch that hides the profile again. */
 static int
 iris_av1_enabled(void)
 {
@@ -147,7 +149,7 @@ iris_av1_enabled(void)
 	if (enabled < 0) {
 		const char *env = getenv("IRIS_VAAPI_AV1");
 
-		enabled = env && *env && atoi(env) != 0;
+		enabled = !(env && *env && atoi(env) == 0);
 	}
 	return enabled;
 }
