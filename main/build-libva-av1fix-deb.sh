@@ -59,7 +59,7 @@ grep -q refresh_frame_flags_valid va/va_dec_av1.h || {
 # path (ppa_scrub_debug refuses it), so the install goes through DESTDIR.
 meson setup build --prefix=/usr/local --libdir=lib/aarch64-linux-gnu \
 	--buildtype=release \
-	-Ddriverdir=/usr/local/lib/aarch64-linux-gnu/dri \
+	-Ddriverdir=/usr/lib/aarch64-linux-gnu/dri \
 	-Dwith_x11=no -Dwith_glx=no -Dwith_wayland=no -Denable_docs=false
 ninja -C build -j"$(nproc)"
 DESTDIR="$STAGE" ninja -C build install

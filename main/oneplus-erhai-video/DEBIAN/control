@@ -1,5 +1,5 @@
 Package: oneplus-erhai-video
-Version: 1.5
+Version: 1.7
 Section: video
 Priority: optional
 Architecture: arm64
@@ -53,3 +53,8 @@ Description: Hardware video decoding for the OnePlus Pad 3 (erhai, SM8750)
  VPU with no software fallback.  It also implements the legacy
  vaAcquireBufferHandle/vaReleaseBufferHandle pair, which VLC 3.x probes before
  it will display a VA-API surface at all.
+ 1.7 (2026-11-17): the driver lives in /usr/lib/aarch64-linux-gnu/dri only.
+ 1.5/1.6 also shipped a copy under /usr/local/lib/<multiarch>/dri because the
+ patched libva was built with that driverdir; libva-av1fix now uses the distro
+ directory, so the second copy (and the Conflicts on the old test package) is
+ gone and a plain apt upgrade is enough.

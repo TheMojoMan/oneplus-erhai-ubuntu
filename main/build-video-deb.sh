@@ -26,12 +26,6 @@ make -C "$SRCDIR" BUILD="$(readlink -f "$BUILD")" -j"$(nproc)" \
 	"$(readlink -f "$BUILD")/iris_drv_video.so"
 install -m755 "$BUILD/iris_drv_video.so" \
 	"$SRC/usr/lib/aarch64-linux-gnu/dri/iris_drv_video.so"
-# The same driver also goes to /usr/local/lib/<multiarch>/dri, because that is
-# the driverdir the patched libva (libva-av1fix) was built with — libva only
-# searches ONE driverdir, the one compiled into it.  Both copies are dpkg-owned
-# now, so they can no longer drift apart behind an upgrade.
-install -D -m755 "$BUILD/iris_drv_video.so" \
-	"$SRC/usr/local/lib/aarch64-linux-gnu/dri/iris_drv_video.so"
 rm -rf "$BUILD"
 
 # Pre-pack guard: a nested .git in the payload is dev cruft, never payload.  The
@@ -48,8 +42,7 @@ if find "$SRC" -name .git -print -quit | grep -q .; then
 fi
 
 find "$SRC" -type d -exec chmod 755 {} \;
-chmod 644 "$SRC/usr/lib/aarch64-linux-gnu/dri/iris_drv_video.so" \
-	"$SRC/usr/local/lib/aarch64-linux-gnu/dri/iris_drv_video.so"
+chmod 644 "$SRC/usr/lib/aarch64-linux-gnu/dri/iris_drv_video.so"
 chmod 644 "$SRC"/etc/udev/rules.d/*.rules "$SRC"/etc/environment.d/*.conf \
 	"$SRC"/etc/firefox/policies/policies.json "$SRC"/etc/chromium.d/* \
 	"$SRC"/etc/brave/policies/managed/*.json
