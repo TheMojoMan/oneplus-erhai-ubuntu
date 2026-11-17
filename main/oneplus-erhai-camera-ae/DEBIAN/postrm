@@ -1,0 +1,22 @@
+#!/bin/sh
+set -e
+
+UNIT=erhai-camera-ae.service
+
+case "$1" in
+remove|purge)
+	# The unit file is already gone, so `systemctl --global disable` cannot
+	# resolve it; drop the [Install] symlink directly.
+	rm -f "/etc/systemd/user/pipewire.service.wants/$UNIT"
+	rmdir /etc/systemd/user/pipewire.service.wants 2>/dev/null || true
+	echo "oneplus-erhai-camera-ae: log out and back in (or reboot) to give libcamera"
+	echo "  its own auto-exposure back."
+	;;
+esac
+
+if [ "$1" = purge ]; then
+	rm -rf /var/lib/oneplus-erhai-camera-ae
+	# Per-user state (~/.local/state/camera-ae/remembered.json) is left in place.
+fi
+
+exit 0
