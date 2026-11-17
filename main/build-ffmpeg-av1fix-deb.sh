@@ -100,4 +100,8 @@ dpkg-deb --build --root-owner-group "$STAGE" \
 cd "$HERE"
 rm -rf "$WORK"
 echo "built $(basename "$DEB_DIR/${PKG}_${VER}_${ARCH}.deb")"
-ppa_copy "$DEB_DIR/${PKG}_${VER}_${ARCH}.deb"
+# NO_PPA=1 builds locally without publishing (in-development iterations;
+# the PPA only gets the package once it is feature-complete and owner-tested).
+if [ "${NO_PPA:-0}" != 1 ]; then
+	ppa_copy "$DEB_DIR/${PKG}_${VER}_${ARCH}.deb"
+fi

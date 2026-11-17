@@ -501,6 +501,35 @@ write_delta_q(struct av1_bw *bw, int32_t delta)
 	}
 }
 
+static unsigned int g_gm_frame;
+
+/* What the decoder reconstructs from subexp code word @v. */
+static int32_t
+inverse_recenter(int32_t r, int32_t v)
+{
+	if (v > 2 * r)
+		return v;
+	if (v & 1)
+		return r - ((v + 1) >> 1);
+	return r + (v >> 1);
+}
+
+static int32_t
+gm_reconstruct(unsigned int v, int32_t r_arg, unsigned int num_syms,
+	       int32_t mx, unsigned int prec_diff, int32_t round)
+{
+	int32_t u;
+
+	/* decode_unsigned_subexp_with_ref(), then (value << precDiff) + round */
+	if ((int64_t)r_arg * 2 <= (int64_t)num_syms)
+		u = inverse_recenter(r_arg, (int32_t)v);
+	else
+		u = (int32_t)num_syms - 1 -
+		    inverse_recenter((int32_t)(num_syms - 1) - r_arg,
+				     (int32_t)v);
+	return (u - mx) * (int32_t)(1u << prec_diff) + round;
+}
+
 /* Invert read_global_param(): find the subexp code word that decodes to
  * @target given the recentering reference value @prev. */
 static void
@@ -557,6 +586,39 @@ write_global_param(struct av1_bw *bw, int type, int idx, int32_t target,
 		v = 0;
 	if ((uint32_t)v >= num_syms)
 		v = (int32_t)(num_syms - 1);
+	if (getenv("IRIS_AV1_GM_DEBUG"))
+		fprintf(stderr,
+			"[gm] f=%u type=%d idx=%d target=%d prev=%d v=%d recon=%d\n",
+			g_gm_frame, type, idx, target, prev[idx], v,
+			gm_reconstruct((unsigned int)v, (int32_t)r_arg, num_syms,
+				       (int32_t)mx, prec_diff, round));
+	if (gm_reconstruct((unsigned int)v, (int32_t)r_arg, num_syms,
+			   (int32_t)mx, prec_diff, round) != target) {
+		uint32_t best = 0, k;
+		int64_t best_err = -1;
+
+		for (k = 0; k < num_syms; k++) {
+			int32_t got = gm_reconstruct(k, (int32_t)r_arg, num_syms,
+						     (int32_t)mx, prec_diff,
+						     round);
+			int64_t err = (int64_t)got - target;
+
+			if (err < 0)
+				err = -err;
+			if (best_err < 0 || err < best_err) {
+				best_err = err;
+				best = k;
+				if (!err)
+					break;
+			}
+		}
+		v = (int32_t)best;
+		if (getenv("IRIS_AV1_GM_DEBUG"))
+			fprintf(stderr,
+				"[gm] f=%u type=%d idx=%d INEXACT target=%d best_err=%lld v=%d\n",
+				g_gm_frame, type, idx, target,
+				(long long)best_err, v);
+	}
 
 	/* Code the value with decode_subexp()'s word structure. */
 	i = 0;
@@ -1254,15 +1316,25 @@ write_uncompressed_header(struct av1_bw *bw, struct av1_writer *w,
 	av1_bw_bit(bw, pic->mode_control_fields.bits.reduced_tx_set_used);
 
 	MARK(bw, "warped-motion");
-	/* global_motion_params() */
-	for (i = 0; i < AV1_REFS_PER_FRAME; i++) {
-		unsigned int slot = (ref_idx ? ref_idx[i] :
-				     pic->ref_frame_idx[i]) & 7;
+	/* global_motion_params(): read_global_param() predicts from
+	 * PrevGmParams, which load_previous() sets to
+	 * SavedGmParams[ref_frame_idx[primary_ref_frame]] - the gm_params of
+	 * the picture sitting in the primary reference slot, saved when that
+	 * picture was decoded.  With PRIMARY_REF_NONE setup_past_independence()
+	 * leaves it identity. */
+	{
+		const unsigned int *idx = ref_idx ? ref_idx :
+			(const unsigned int *)pic->ref_frame_idx;
+		unsigned int prim = idx[primary_ref_frame < AV1_REFS_PER_FRAME ?
+					primary_ref_frame : 0] & 7;
 
-		if (primary_ref_frame == AV1_PRIMARY_REF_NONE)
-			gm_identity(prev_gm[i]);
-		else
-			memcpy(prev_gm[i], w->slot_gm[slot], sizeof(prev_gm[i]));
+		for (i = 0; i < AV1_REFS_PER_FRAME; i++) {
+			if (primary_ref_frame == AV1_PRIMARY_REF_NONE)
+				gm_identity(prev_gm[i]);
+			else
+				memcpy(prev_gm[i], w->slot_gm[prim][i],
+				       sizeof(prev_gm[i]));
+		}
 	}
 	if (!frame_is_intra)
 		write_global_motion(bw, pic, (const int32_t(*)[6])prev_gm,
@@ -1281,10 +1353,16 @@ av1_writer_commit(struct av1_writer *w,
 {
 	unsigned int ref, i;
 	int32_t decoded[AV1_REFS_PER_FRAME][6];
+	/* global_motion_params() returns early for an intra frame, leaving every
+	 * gm_params[] entry identity - so SavedGmParams[] must not pick up
+	 * whatever the client left in wm[] for such a frame. */
+	int intra_frame = pic->pic_info_fields.bits.frame_type == AV1_FRAME_KEY ||
+			  pic->pic_info_fields.bits.frame_type == AV1_FRAME_INTRA_ONLY;
 
 	for (ref = 0; ref < AV1_REFS_PER_FRAME; ref++) {
 		const VAWarpedMotionParamsAV1 *wm = &pic->wm[ref];
-		int type = wm->invalid ? AV1_IDENTITY : (int)wm->wmtype;
+		int type = intra_frame ? AV1_IDENTITY :
+			   wm->invalid ? AV1_IDENTITY : (int)wm->wmtype;
 
 		gm_identity(decoded[ref]);
 		if (type == AV1_IDENTITY)
@@ -1341,6 +1419,7 @@ av1_write_frame_obu(struct av1_writer *w,
 	if (!tile_count)
 		return 0;
 	memset(&geo, 0, sizeof(geo));
+	g_gm_frame = w->frame_index;
 	av1_bw_init(&bw, header, sizeof(header));
 	write_uncompressed_header(&bw, w, pic, &w->seq, refresh_frame_flags,
 				  ref_idx, &geo);
