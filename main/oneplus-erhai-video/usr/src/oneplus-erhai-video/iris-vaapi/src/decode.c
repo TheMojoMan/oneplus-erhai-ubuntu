@@ -60,6 +60,11 @@ surface_pitch(unsigned int width, unsigned int fourcc)
  * is slow.  Opt in with IRIS_VAAPI_DEBUG=1. */
 static int g_dbg = -1;
 static uint64_t g_buffer_serial;
+/* Reservation-fence tokens must be unique among *live* fences: the kernel keeps
+ * them in one table per device, and a per-context sequence (ctx->seq + 1)
+ * restarts at 1 for every new context, so two overlapping contexts would signal
+ * each other's fences.  One global counter avoids that. */
+static uint64_t g_surface_fence_token;
 
 static int dbg_enabled(void)
 {
@@ -69,6 +74,25 @@ static int dbg_enabled(void)
 }
 
 #define DBG(...)	do { if (dbg_enabled()) fprintf(stderr, __VA_ARGS__); } while (0)
+
+/* DMA-BUF ownership / fence trace (IRIS_DMABUF_TRACE=1).  The 2026-11-18
+ * symptom - the video repeats older frames and never shows new ones while the
+ * page's compositor stops submitting entirely - means either the decoder writes
+ * into a backing the display client still scans out, or a reservation fence is
+ * never signalled so the client never releases the frame.  Trace every export,
+ * every fence attach/signal and every write into an already-exported backing. */
+static int g_dmabuf_trace = -1;
+static uint64_t g_trace_pic;
+
+static int
+dmabuf_trace_enabled(void)
+{
+	if (g_dmabuf_trace < 0)
+		g_dmabuf_trace = getenv("IRIS_DMABUF_TRACE") != NULL;
+	return g_dmabuf_trace;
+}
+
+#define TRACE_DM(...)	do { if (dmabuf_trace_enabled()) fprintf(stderr, __VA_ARGS__); } while (0)
 
 static uint64_t
 monotonic_ns(void)
@@ -183,6 +207,9 @@ surface_finish_write(struct v4l2_dec *dec, struct iris_surface *s)
 		int signal_ret = v4l2_dec_signal_surface_fence(dec,
 							 s->fence_token);
 
+		TRACE_DM("[dm] fence-signal id=%u serial=%llu token=%llu ret=%d\n",
+			 s->id, (unsigned long long)s->backing_serial,
+			 (unsigned long long)s->fence_token, signal_ret);
 		s->fence_token = 0;
 		if (!ret && signal_ret)
 			ret = signal_ret;
@@ -194,6 +221,12 @@ static void
 surface_begin_write(struct v4l2_dec *dec, struct iris_surface *s,
 		    uint64_t token)
 {
+	TRACE_DM("[dm] write pic=%llu id=%u serial=%llu exported=%d decoded=%d "
+		 "queued=%d inflight=%d old_token=%llu\n",
+		 (unsigned long long)++g_trace_pic, s->id,
+		 (unsigned long long)s->backing_serial, s->exported, s->decoded,
+		 s->queued, s->write_started || s->fence_token != 0,
+		 (unsigned long long)s->fence_token);
 	if (s->write_started || s->fence_token)
 		surface_finish_write(dec, s);
 	if (dma_buf_cpu_sync(s->bfd,
@@ -203,6 +236,8 @@ surface_begin_write(struct v4l2_dec *dec, struct iris_surface *s,
 	if (!v4l2_dec_attach_surface_fence(dec, s->bfd, token)) {
 		s->fence_token = token;
 	} else {
+		TRACE_DM("[dm] fence-attach-FAILED id=%u token=%llu\n", s->id,
+			 (unsigned long long)token);
 		dma_buf_cpu_sync(s->bfd,
 				 DMA_BUF_SYNC_END | DMA_BUF_SYNC_WRITE);
 		s->write_started = 0;
@@ -213,10 +248,19 @@ static void
 surface_begin_device_write(struct v4l2_dec *dec, struct iris_surface *s,
 			   uint64_t token)
 {
+	TRACE_DM("[dm] write-dev pic=%llu id=%u serial=%llu exported=%d decoded=%d "
+		 "queued=%d inflight=%d old_token=%llu\n",
+		 (unsigned long long)++g_trace_pic, s->id,
+		 (unsigned long long)s->backing_serial, s->exported, s->decoded,
+		 s->queued, s->write_started || s->fence_token != 0,
+		 (unsigned long long)s->fence_token);
 	if (s->write_started || s->fence_token)
 		surface_finish_write(dec, s);
 	if (!v4l2_dec_attach_surface_fence(dec, s->bfd, token))
 		s->fence_token = token;
+	else
+		TRACE_DM("[dm] fence-attach-FAILED id=%u token=%llu\n", s->id,
+			 (unsigned long long)token);
 }
 
 /* Display-level registry: surfaces may outlive the engine that decodes into
@@ -686,6 +730,16 @@ finish_pending_writes(struct iris_decode_ctx *ctx)
 		if (s->owner == ctx && (s->write_started || s->fence_token))
 			surface_finish_write(&ctx->dec, s);
 	}
+	for (i = 0; i < ctx->surfs->n; i++) {
+		struct iris_surface *s = &ctx->surfs->s[i];
+
+		if (s->exported && (s->write_started || s->fence_token))
+			TRACE_DM("[dm] LEAK after drain id=%u serial=%llu write=%d "
+				 "token=%llu\n",
+				 s->id, (unsigned long long)s->backing_serial,
+				 s->write_started,
+				 (unsigned long long)s->fence_token);
+	}
 }
 
 static void
@@ -698,8 +752,15 @@ detach_owned_surfaces(struct iris_decode_ctx *ctx)
 	for (i = 0; i < ctx->surfs->n; i++) {
 		struct iris_surface *s = &ctx->surfs->s[i];
 
-		if (s->owner == ctx)
-			s->owner = NULL;
+		if (s->owner != ctx)
+			continue;
+		if (s->write_started || s->fence_token)
+			TRACE_DM("[dm] LEAK at context detach id=%u serial=%llu "
+				 "exported=%d write=%d token=%llu dec_open=%d\n",
+				 s->id, (unsigned long long)s->backing_serial,
+				 s->exported, s->write_started,
+				 (unsigned long long)s->fence_token, ctx->dec_open);
+		s->owner = NULL;
 	}
 }
 
@@ -1270,6 +1331,12 @@ iris_surfs_export(struct iris_surfs *t, VASurfaceID id, int *fd,
 		return -1;
 	/* If this backing is reused for a later picture, legacy Adreno may have
 	 * imported it before the new reservation fence was attached. */
+	TRACE_DM("[dm] export id=%u serial=%llu fd=%d decoded=%d exported=%d "
+		 "queued=%d inflight=%d token=%llu\n",
+		 s->id, (unsigned long long)s->backing_serial, exported_fd,
+		 s->decoded, s->exported, s->queued,
+		 s->write_started || s->fence_token != 0,
+		 (unsigned long long)s->fence_token);
 	s->exported = 1;
 	*fd = exported_fd;
 	*pitch = p;
@@ -1784,6 +1851,20 @@ drain_and_restart_seek(struct iris_decode_ctx *ctx)
 	uint64_t next_seq = ctx->seq;
 	unsigned int pending = 0, i;
 	int ret;
+
+	/* IRIS_AV1_NO_SEEK_TEARDOWN=1 keeps the firmware session alive across a
+	 * seek: no EOS drain, no v4l2_dec_close/reopen.  Diagnostic switch for
+	 * the 2026-11-18 hard reset that followed a seek with AV1 (the box
+	 * died with no printk, no oops and an empty pstore, i.e. the kind of
+	 * reset a wedged VPU causes).  Costs DPB hygiene after the seek - the
+	 * client's key frame is expected to refresh it - so it is test only. */
+	if (getenv("IRIS_AV1_NO_SEEK_TEARDOWN")) {
+		ctx->seq = next_seq;
+		ctx->vp9_seek_barrier = ctx->out_pixfmt == V4L2_PIX_FMT_VP9;
+		DBG("[seek] teardown skipped by IRIS_AV1_NO_SEEK_TEARDOWN codec=0x%x\n",
+		    ctx->out_pixfmt);
+		return 0;
+	}
 
 	for (i = 0; i < ARRAY_SIZE(ctx->target_ring); i++)
 		pending += ctx->target_ring[i].used != 0;
@@ -3407,7 +3488,8 @@ av1_submit(struct iris_decode_ctx *ctx,
 	ctx->last_target = target;
 	qt = find_surface(ctx, target);
 	if (qt && !(lifted && lift_hidden)) {
-		uint64_t token = ctx->seq + 1;
+		uint64_t token = __atomic_add_fetch(&g_surface_fence_token, 1,
+						    __ATOMIC_RELAXED);
 
 		qt->queued = 1;
 		qt->owner = ctx;
@@ -3881,7 +3963,8 @@ iris_decode_end_impl(struct iris_decode_ctx *ctx)
 							       ctx->current_target);
 
 			if (qt) {
-				uint64_t token = ctx->seq + 1;
+				uint64_t token = __atomic_add_fetch(&g_surface_fence_token, 1,
+						    __ATOMIC_RELAXED);
 
 				qt->queued = 1;
 				qt->owner = ctx;
