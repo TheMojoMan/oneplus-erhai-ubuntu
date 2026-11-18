@@ -47,6 +47,9 @@ chmod 644 "$SRC"/etc/udev/rules.d/*.rules "$SRC"/etc/environment.d/*.conf \
 	"$SRC"/etc/firefox/policies/policies.json "$SRC"/etc/chromium.d/* \
 	"$SRC"/etc/brave/policies/managed/*.json
 [ -f "$SRC/DEBIAN/postinst" ] && chmod 755 "$SRC/DEBIAN/postinst"
+# The Firefox kill switch is a wrapper: it must stay executable whatever the
+# working tree mode says (a 644 wrapper breaks `firefox` silently).
+[ -f "$SRC/usr/local/bin/firefox" ] && chmod 755 "$SRC/usr/local/bin/firefox"
 
 # md5sums for every payload file (DEBIAN/ excluded).
 cd "$SRC"

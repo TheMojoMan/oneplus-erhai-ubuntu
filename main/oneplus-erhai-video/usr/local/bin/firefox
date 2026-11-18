@@ -1,0 +1,22 @@
+#!/bin/sh
+# erhai: AV1 hardware decode stays Chromium-only for now.  Firefox 160 drives
+# the iris VA-API driver into its stall-recovery loop (frames arrive slower
+# than the frame duration, then NS_ERROR_DOM_MEDIA_FATAL_ERR), and the
+# resulting firmware session churn once wedged the VPU hard enough to reboot
+# the tablet (2026-11-17).  This wrapper is the kill switch that keeps Firefox
+# on dav1d for AV1: IRIS_VAAPI_AV1=0 makes the driver withhold its AV1
+# entrypoint, so Firefox never offers it.  H.264, HEVC and VP9 keep hardware
+# decode, and libva still gets its driver name.
+#
+# It shadows /usr/bin/firefox through PATH (/usr/local/bin comes first), which
+# is how the desktop launcher (Exec=firefox %u) and a shell call both reach it.
+# Nothing else needs to change: the VA-API prefs stay enabled in
+# /etc/firefox/policies/policies.json, so only the AV1 entrypoint disappears.
+export LIBVA_DRIVER_NAME=iris
+export IRIS_VAAPI_AV1=0
+
+FIREFOX=/usr/bin/firefox
+if [ ! -x "$FIREFOX" ]; then
+	FIREFOX=/usr/lib/firefox/firefox
+fi
+exec "$FIREFOX" "$@"

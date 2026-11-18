@@ -2,8 +2,9 @@
 636b0b30dabfe275ca1a4604bcc453f3  etc/environment.d/55-erhai-iris-vaapi.conf
 098606cc1d0bf401f72c0a16556cec7b  etc/udev/rules.d/99-iris-dmaheap.rules
 30222e6bce7581ae13eb8dae2664db9f  etc/firefox/policies/policies.json
-1c92d793bf60dfe92787eeee0521d9e6  etc/chromium.d/erhai-hw-video
+4d1f1db1468e094e7275cc50fa4452c7  etc/chromium.d/erhai-hw-video
 f13f3905b4bdf93edd95095bc6a14236  etc/brave/policies/managed/erhai-hwvideo.json
+ae7bef9919d0838efe4f79bea86cc630  usr/local/bin/firefox
 c03bf81b4058ed2b4b8d6560cc541e19  usr/src/oneplus-erhai-video/iris-vaapi/README.md
 0d0a6d2c05de23c5fa64f114b74a16b4  usr/src/oneplus-erhai-video/iris-vaapi/benchmarks/compare_10bit_paths.py
 3556e9cf79a01f28e5144aec39bd28cc  usr/src/oneplus-erhai-video/iris-vaapi/benchmarks/compare_decode_paths.py

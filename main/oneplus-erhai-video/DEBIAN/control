@@ -1,5 +1,5 @@
 Package: oneplus-erhai-video
-Version: 1.9-test-04
+Version: 1.11
 Section: video
 Priority: optional
 Architecture: arm64
@@ -16,11 +16,14 @@ Description: Hardware video decoding for the OnePlus Pad 3 (erhai, SM8750)
  . - /etc/environment.d/56: MOZ_DISABLE_RDD_SANDBOX=1 (Firefox VA-API decode
    runs in the RDD process, whose seccomp sandbox blocks /dev/dma_heap)
  . - /etc/firefox/policies/policies.json: locked VA-API decode prefs
+ . - /usr/local/bin/firefox: PATH-shadowing wrapper that withholds the AV1
+   entrypoint from Firefox (IRIS_VAAPI_AV1=0) while VA-API stays enabled
  . - /etc/chromium.d/erhai-hw-video: AcceleratedVideoDecoder feature flag
    (chromium's V4L2VideoDecoder drives the iris node directly, no VA-API)
  . - /etc/brave/policies/managed/erhai-hwvideo.json: HardwareAccelerationMode
  . - udev rule giving the video group access to /dev/dma_heap/system
- Codecs: H.264, HEVC Main/Main10, VP9 Profile 0/2, AV1 Main (8-bit). Chromium
+ Codecs: H.264, HEVC Main/Main10, VP9 Profile 0/2, AV1 Main (8-bit and
+ 10-bit). Chromium
  (xtradeb) decodes H.264/VP9 via V4L2; Firefox and Brave decode H.264/HEVC
  Main (and Main10/VP9 P2 where the firmware exposes P010) via VA-API.
  Needs an erhai kernel with the iris decode-order output property (the 7.2
@@ -72,3 +75,16 @@ Description: Hardware video decoding for the OnePlus Pad 3 (erhai, SM8750)
  default name (a symlink to iris_drv_video.so) and the driver advertises AV1
  unless IRIS_VAAPI_AV1=0, which stays as the kill switch.  Hosts that still
  export the variables keep working unchanged.
+ 1.11 (2026-11-18): the Firefox AV1 kill switch ships.  Since 1.9 the driver
+ advertises AV1 to every client, which includes Firefox -- and Firefox 160
+ mishandles the erhai VPU (its stall-recovery loop ends in
+ NS_ERROR_DOM_MEDIA_FATAL_ERR, and the firmware session churn once wedged the
+ decoder hard enough to reboot the tablet).  The workaround existed only as a
+ hand-written /usr/local/bin/firefox on the development pad, so every
+ installed system still exposed AV1 to Firefox.  The package now ships that
+ wrapper (PATH-shadowing, IRIS_VAAPI_AV1=0, exec of the real binary): Firefox
+ keeps H.264/HEVC/VP9 on the chip and decodes AV1 with dav1d until the Firefox
+ side is fixed.  Also: 10-bit (P010) AV1 decode, the loop-restoration type
+ mismatch that made LR-using films fail to decode, and the per-client
+ restoration type conventions (libavcodec raw syntax vs the DXVA order stock
+ libva clients use) are in the 1.10 driver already.
