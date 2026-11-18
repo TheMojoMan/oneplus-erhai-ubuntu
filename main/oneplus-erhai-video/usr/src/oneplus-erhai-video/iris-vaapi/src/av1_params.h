@@ -77,6 +77,20 @@ void av1_seq_from_pic(const VADecPictureParameterBufferAV1 *pic,
 		      struct av1_seq_cfg *cfg);
 int av1_seq_equal(const struct av1_seq_cfg *a, const struct av1_seq_cfg *b);
 
+/* Parse the encoder's own sequence header OBU payload for the four flags
+ * that VA's picture parameters do not carry: enable_superres,
+ * enable_cdef, enable_restoration and separate_uv_delta_q.  Header
+ * synthesis must reproduce these exactly, because a frame header lifted
+ * or coded against the original sequence header is only parseable when
+ * the signalled sequence configuration matches the encoder's.
+ * Returns 1 and fills the flags on success, 0 when the header uses a
+ * construct this walk does not handle (the caller then keeps its
+ * defaults, which is today's behaviour). */
+int av1_parse_seq_flags(const uint8_t *payload, size_t len,
+			unsigned int *superres, unsigned int *cdef,
+			unsigned int *restoration,
+			unsigned int *separate_uv_delta_q);
+
 /* Write an OBU_SEQUENCE_HEADER (obu_has_size_field = 1).  Returns the byte
  * count, or 0 when @cap is too small. */
 size_t av1_write_sequence_header(const struct av1_seq_cfg *cfg,

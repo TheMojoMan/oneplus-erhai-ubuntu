@@ -22,10 +22,18 @@
 #include "av1_bits.h"
 #include "av1_params.h"
 
-/* VA-API orders loop-restoration types like the DXVA/Vulkan enum:
- * 0 none, 1 wiener, 2 sgrproj, 3 switchable.  The AV1 bitstream orders
- * them 0 none, 1 switchable, 2 wiener, 3 sgrproj. */
-static const uint8_t va_lr_to_av1[4] = { 0, 2, 3, 1 };
+/* VA-API loop-restoration type values follow the AV1 syntax order
+ * (0 none, 1 switchable, 2 wiener, 3 sgrproj): libva's va_dec_av1.h
+ * documents no remap, and the av1fix libavcodec patch (0006) explicitly
+ * passes the raw frame_header->lr_type[] values.  The earlier
+ * {0,2,3,1} table assumed a DXVA/Vulkan-style order and made every
+ * non-NONE type land on the wrong filter: the tiles then decoded
+ * correctly but the loop-restoration stage ran with coefficients read
+ * against the wrong filter type, which shows up as a small zero-mean
+ * pixel deviation against the reference decode (visible on 10-bit
+ * CostaRica, invisible on LR-free streams like the 8-bit Die_Anden
+ * sample). */
+static const uint8_t va_lr_to_av1[4] = { 0, 1, 2, 3 };
 
 /* Specification constants. */
 #define AV1_MAX_TILE_WIDTH	4096
@@ -170,6 +178,176 @@ int
 av1_seq_equal(const struct av1_seq_cfg *a, const struct av1_seq_cfg *b)
 {
 	return memcmp(a, b, sizeof(*a)) == 0;
+}
+
+/* spec 5.5.1 sequence_header_obu(), read far enough to recover the four
+ * flags VA does not carry.  Mirrors the emission order of
+ * write_sequence_header plus the sections the encoder may code and the
+ * writer forces off (timing info, decoder model, initial display delay,
+ * the color description). */
+int
+av1_parse_seq_flags(const uint8_t *payload, size_t len,
+		     unsigned int *superres, unsigned int *cdef,
+		     unsigned int *restoration,
+		     unsigned int *separate_uv_delta_q)
+{
+	size_t pos = 0;
+	unsigned int profile, reduced, v, i;
+
+	#define RB(n) do {							\
+		v = 0;							\
+		for (unsigned _k = 0; _k < (n); _k++) {			\
+			if ((pos >> 3) >= len)				\
+				return 0;				\
+			v = (v << 1) |					\
+				((payload[pos >> 3] >> (7 - (pos & 7))) & 1); \
+			pos++;						\
+		}							\
+	} while (0)
+
+	if (len < 2)
+		return 0;
+	profile = v = 0;
+	RB(3);					/* seq_profile */
+	RB(1);					/* still_picture */
+	reduced = v;
+	{
+		unsigned int order_hint, wbits, hbits, mono, cdp, matrix = 0;
+
+		if (!reduced) {
+			unsigned int timing, model = 0, display, opcnt;
+
+			RB(1);			/* timing_info_present_flag */
+			timing = v;
+			if (timing) {
+				RB(32);		/* num_units_in_display_tick */
+				RB(32);		/* time_scale */
+				RB(1);		/* equal_picture_interval */
+				if (v)
+					RB(32);	/* num_ticks_per_picture_minus_1 */
+			}
+			RB(1);			/* decoder_model_info_present_flag */
+			model = v;
+			if (model) {
+				RB(5);		/* buffer_delay_length_minus_1 */
+				RB(32);		/* num_units_in_decoding_tick */
+				RB(5);		/* buffer_removal_time_length_minus_1 */
+				RB(5);		/* frame_presentation_time_length_minus_1 */
+			}
+			RB(1);			/* initial_display_delay_present_flag */
+			display = v;
+			RB(5);			/* operating_points_cnt_minus_1 */
+			opcnt = v;
+			for (i = 0; i <= opcnt; i++) {
+				unsigned int level;
+
+				if (i > 31)
+					return 0;
+				RB(12);		/* operating_point_idc[i] */
+				RB(5);		/* seq_level_idx[i] */
+				level = v;
+				if (level > 7)
+					RB(1);	/* seq_tier[i] */
+				if (model) {
+					RB(1);	/* operating_parameters_present_flag */
+					if (v)
+						return 0; /* delay bits: unhandled */
+				}
+				if (display)
+					RB(5);	/* initial_display_delay_minus_1[i] */
+			}
+		} else {
+			RB(5);			/* seq_level_idx[0] */
+		}
+
+		RB(4);				/* frame_width_bits_minus_1 */
+		wbits = v + 1;
+		RB(4);				/* frame_height_bits_minus_1 */
+		hbits = v + 1;
+		RB(wbits);			/* max_frame_width_minus_1 */
+		RB(hbits);			/* max_frame_height_minus_1 */
+		if (!reduced) {
+			RB(4);			/* delta_frame_id_length_minus_2 */
+			RB(3);			/* additional_frame_id_length_minus_1 */
+		}
+		RB(1);				/* use_128x128_superblock */
+		RB(1);				/* enable_filter_intra */
+		RB(1);				/* enable_intra_edge_filter */
+		if (reduced) {
+			/* Tools forced off without being coded. */
+			*superres = 0;
+			*cdef = 0;
+			*restoration = 0;
+			*separate_uv_delta_q = 0;
+			return 1;
+		}
+		RB(1);				/* enable_interintra_compound */
+		RB(1);				/* enable_masked_compound */
+		RB(1);				/* enable_warped_motion */
+		RB(1);				/* enable_dual_filter */
+		RB(1);				/* enable_order_hint */
+		order_hint = v;
+		if (order_hint) {
+			RB(1);			/* enable_jnt_comp */
+			RB(1);			/* enable_ref_frame_mvs */
+		}
+		RB(1);				/* seq_choose_screen_content_tools */
+		if (!v)
+			RB(1);			/* seq_force_screen_content_tools */
+		else
+			v = 2;			/* SELECT_SCREEN_CONTENT_TOOLS */
+		if (v > 0) {
+			RB(1);			/* seq_choose_integer_mv */
+			if (!v)
+				RB(1);		/* seq_force_integer_mv */
+		}
+		if (order_hint)
+			RB(3);			/* order_hint_bits_minus_1 */
+		RB(1);				/* enable_superres */
+		*superres = v;
+		RB(1);				/* enable_cdef */
+		*cdef = v;
+		RB(1);				/* enable_restoration */
+		*restoration = v;
+
+		/* color_config() */
+		RB(1);				/* use_highbitdepth */
+		if (profile == 2 && v)
+			RB(1);			/* twelve_bit */
+		mono = 0;
+		if (profile != 1)
+			RB(1);			/* mono_chrome */
+		mono = v;
+		RB(1);				/* color_description_present_flag */
+		cdp = v;
+		if (cdp) {
+			RB(8);			/* color_primaries */
+			RB(8);			/* transfer_characteristics */
+			RB(8);			/* matrix_coefficients */
+			matrix = v;
+		}
+		if (mono) {
+			RB(1);			/* color_range */
+		} else {
+			if (!(cdp && matrix == 2)) {
+				unsigned int ssx, ssy;
+
+				if (profile != 1) {
+					RB(1);	/* subsampling_x */
+					ssx = v;
+					RB(1);	/* subsampling_y */
+					ssy = v;
+					if (ssx && ssy)
+						RB(2); /* chroma_sample_position */
+				}
+			}
+			RB(1);			/* color_range */
+		}
+		RB(1);				/* separate_uv_delta_q */
+		*separate_uv_delta_q = v;
+	}
+	#undef RB
+	return 1;
 }
 
 static unsigned int

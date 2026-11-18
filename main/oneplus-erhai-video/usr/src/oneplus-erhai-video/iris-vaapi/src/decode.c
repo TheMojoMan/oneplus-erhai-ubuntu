@@ -363,6 +363,16 @@ struct iris_decode_ctx {
 		int have_order_hint;
 		uint64_t substituted;
 		uint64_t skips;
+		/* The encoder's own sequence header OBU seen in a lifted AU.
+		 * Re-emitting it resets the firmware's reference buffers, so
+		 * it is submitted once (when it changes) and skipped when the
+		 * client repeats the same blob; its four flags that VA does
+		 * not carry feed the synthesized headers so lifted and
+		 * rewritten access units stay mutually parseable. */
+		uint8_t seq_bytes[288];
+		size_t seq_len;
+		unsigned int seq_superres, seq_cdef, seq_restoration;
+		unsigned int seq_separate_uv_delta_q;
 		/* Surface -> order hint of the pictures we decoded, so a lost
 		 * reference can be replaced by the temporally closest one. */
 		VASurfaceID hist_surface[64];
@@ -796,6 +806,12 @@ iris_decode_create(void)
 		ctx->av1.dump_only = getenv("IRIS_AV1_DUMP_ONLY") != NULL;
 		ctx->av1.no_tile_sizes = getenv("IRIS_AV1_TILE_SIZES") != NULL &&
 			atoi(getenv("IRIS_AV1_TILE_SIZES")) == 0;
+		/* Until the encoder's own sequence header shows up in a lifted
+		 * access unit, rewritten headers use the "signal the tools as
+		 * available" defaults the writer was validated with. */
+		ctx->av1.seq_superres = 1;
+		ctx->av1.seq_restoration = 1;
+		ctx->av1.seq_separate_uv_delta_q = 1;
 		av1_writer_reset(&ctx->av1.writer);
 	}
 	return ctx;
@@ -2765,8 +2781,9 @@ av1_dump(const struct iris_decode_ctx *ctx, const uint8_t *au, size_t len)
 	/* One stream per decode context: clients like FFmpeg spin up a throwaway
 	 * context to probe the stream first, and interleaving both dumps would
 	 * make the result undecodable. */
-	snprintf(name, sizeof(name), "%s.%p", path, (const void *)ctx);
-	f = fopen(name, "ab");
+	snprintf(name, sizeof(name), "%s.%p.%u", path, (const void *)ctx,
+		 ctx->av1.au_index);
+	f = fopen(name, "wb");
 	if (!f)
 		return;
 	fwrite(au, 1, len, f);
@@ -2797,12 +2814,13 @@ static int
 av1_lift_original_au(const uint8_t *data, size_t data_len,
 		     const struct av1_tile *tiles, unsigned int count,
 		     size_t *start, size_t *len, int *hidden, int *has_seq,
-		     size_t *payload, size_t *first_tile, unsigned *ftype)
+		     size_t *payload, size_t *first_tile, unsigned *ftype,
+		     size_t *frame_end)
 {
 	struct { size_t s, e; unsigned type; } obu[64];
 	size_t first = data_len, last = 0, i = 0;
-	unsigned n = 0, ai, aj;
-	int match = -1;
+	unsigned n = 0, ai, aj, hidx = 0;
+	int match = -1, hdr_idx = -1;
 
 	for (unsigned int k = 0; k < count; k++) {
 		if (tiles[k].offset < first)
@@ -2854,6 +2872,8 @@ av1_lift_original_au(const uint8_t *data, size_t data_len,
 		obu[n].s = i;
 		obu[n].e = payload + sz;
 		obu[n].type = type;
+		if (hdr_idx < 0 && (type == 3 || type == 6 || type == 9))
+			hdr_idx = (int)n;
 		if (type == 6 && match < 0 && first >= payload &&
 		    last <= payload + sz)
 			match = (int)n;
@@ -2862,8 +2882,9 @@ av1_lift_original_au(const uint8_t *data, size_t data_len,
 	}
 	if (match < 0)
 		return 0;
-	ai = (unsigned)match;
-	aj = (unsigned)match;
+	hidx = (unsigned)match;
+	ai = hidx;
+	aj = hidx;
 	/* Other pictures' frame OBUs bound the AU; keep the header and
 	 * metadata OBUs that belong to this picture next to it. */
 	while (ai > 0 && (obu[ai - 1].type == 1 || obu[ai - 1].type == 2 ||
@@ -2881,8 +2902,8 @@ av1_lift_original_au(const uint8_t *data, size_t data_len,
 	/* uncompressed_header() begins with show_existing_frame(1); when that
 	 * is 0, frame_type(2) then show_frame(1) follow. */
 	{
-		const uint8_t *p = data + obu[match].s;
-		size_t au_end = obu[match].e - obu[match].s, hdr = 1;
+		const uint8_t *p = data + obu[hidx].s;
+		size_t au_end = obu[hidx].e - obu[hidx].s, hdr = 1;
 		unsigned b, se;
 
 		if (p[0] & 0x04)
@@ -2896,8 +2917,9 @@ av1_lift_original_au(const uint8_t *data, size_t data_len,
 		se = b >> 7;
 		*hidden = se ? 0 : !((b >> 4) & 1);
 		*ftype = (b >> 5) & 3;
-		*payload = obu[match].s + hdr;
+		*payload = obu[hidx].s + hdr;
 		*first_tile = first;
+		*frame_end = obu[hidx].e;
 	}
 	return 1;
 }
@@ -2921,7 +2943,7 @@ av1_original_refresh(const uint8_t *data, size_t data_len,
 		     const struct av1_tile *tiles, unsigned int count,
 		     const struct av1_seq_cfg *cfg)
 {
-	size_t start, len, payload, first;
+	size_t start, len, payload, first, end;
 	int hidden, has_seq;
 	unsigned ftype;
 	const uint8_t *p;
@@ -2933,7 +2955,7 @@ av1_original_refresh(const uint8_t *data, size_t data_len,
 
 	if (!av1_lift_original_au(data, data_len, tiles, count, &start, &len,
 				 &hidden, &has_seq, &payload, &first,
-				 &ftype))
+				 &ftype, &end))
 		return -1;
 	p = data + payload;
 	avail = (size_t)(data + data_len - p);
@@ -2995,6 +3017,10 @@ av1_submit(struct iris_decode_ctx *ctx,
 	unsigned int i, count = 0;
 	int ret, emit_seq = 0, mapped = 1;
 	int lift_hidden = 0, lifted = 0;
+	int lift_has_seq;
+	unsigned int lift_ftype;
+	size_t lift_start = 0, lift_len = 0, lift_payload = 0;
+	size_t lift_first_tile = 0, lift_frame_end = 0;
 
 	if (!n_slices || !find_surface(ctx, target)) {
 		if (dbg_enabled())
@@ -3059,6 +3085,27 @@ av1_submit(struct iris_decode_ctx *ctx,
 		tiles[0].size -= 2;
 	}
 
+	/* Lift this picture's original access unit out of the client blob.
+	 * The encoder's own frame header carries what VA's picture parameters
+	 * cannot - the loop-restoration coefficients, the true refresh set,
+	 * the coded order hints - so a verbatim submission is the only
+	 * bit-exact path once a stream uses those tools.  libavcodec's AV1
+	 * hwaccel hands over HEADERLESS tile payloads though (its decoder
+	 * parses the OBUs itself), so the lift can only serve clients that
+	 * submit framed OBUs (Chromium) and needs validation there first:
+	 * IRIS_AV1_LIFT=1 opts in.  Hidden pictures always need the
+	 * synthesized forced-show header. */
+	if (av1_lift_original_au(data, data_len, tiles, count, &lift_start,
+				 &lift_len, &lift_hidden, &lift_has_seq,
+				 &lift_payload, &lift_first_tile,
+				 &lift_ftype, &lift_frame_end) &&
+	    getenv("IRIS_AV1_LIFT") && !lift_hidden)
+		lifted = 1;
+	(void)lift_len;
+	(void)lift_payload;
+	(void)lift_first_tile;
+	(void)lift_ftype;
+
 	/* May reopen the firmware session (and with it the mirrored DPB).
 	 * Dump-only mode synthesizes headers without a VPU session: there is no
 	 * firmware state to reopen and no /dev/video to require. */
@@ -3068,8 +3115,6 @@ av1_submit(struct iris_decode_ctx *ctx,
 			return ret;
 	}
 
-	if (!lifted) {
-
 	/* Decide the reference mapping and the refresh set from our own DPB. */
 	ft = pic->pic_info_fields.bits.frame_type;
 	if (ft == AV1_FRAME_KEY && pic->pic_info_fields.bits.show_frame) {
@@ -3078,7 +3123,7 @@ av1_submit(struct iris_decode_ctx *ctx,
 			ref_idx[i] = pic->ref_frame_idx[i] & 7;
 	} else {
 		mapped = av1_remap_refs(ctx, pic, ref_idx);
-		if (pic->refresh_frame_flags_valid) {
+		if (!lifted && pic->refresh_frame_flags_valid) {
 			refresh_flags = pic->refresh_frame_flags;
 		} else {
 			struct av1_seq_cfg rcfg;
@@ -3123,6 +3168,13 @@ av1_submit(struct iris_decode_ctx *ctx,
 	}
 
 	av1_seq_from_pic(pic, ctx->width, ctx->height, &cfg);
+	/* The encoder's own sequence header (captured from a lifted AU)
+	 * knows the four flags VA does not carry; rewritten access units
+	 * must match them exactly or the frame headers stop being
+	 * parseable against the sequence the stream established. */
+	cfg.enable_superres = ctx->av1.seq_superres;
+	cfg.enable_restoration = ctx->av1.seq_restoration;
+	cfg.separate_uv_delta_q = ctx->av1.seq_separate_uv_delta_q;
 	if (dbg_enabled())
 		fprintf(stderr,
 			"[av1] pic ft=%u show=%u tiles=%ux%u uniform=%u count=%u base_q=%u sct=%u er=%u prf=%u refresh=0x%02x\n",
@@ -3160,6 +3212,80 @@ av1_submit(struct iris_decode_ctx *ctx,
 			pic->frame_width_minus1 + 1, pic->frame_height_minus1 + 1,
 			pic->y_dc_delta_q, pic->u_dc_delta_q, pic->u_ac_delta_q,
 			pic->v_dc_delta_q, pic->v_ac_delta_q);
+	if (lifted) {
+		/* Verbatim access unit: TD + the encoder's own [sequence
+		 * header?] + frame OBU.  A sequence header resets the
+		 * firmware's reference buffers, so it is submitted only when
+		 * it changes; clients that repeat the same blob for every
+		 * picture of a group would otherwise re-send it per AU. */
+		size_t off = lift_start, end = lift_frame_end;
+
+		while (end - off >= 2 && data[off] == 0x12 &&
+		       data[off + 1] == 0x00)
+			off += 2;	/* leading temporal delimiters */
+		if (end - off >= 2 && ((data[off] >> 3) & 0xf) == 1) {
+			uint8_t h = data[off];
+			size_t pl = off + 1, plen;
+			uint64_t v = 0;
+			unsigned int shift = 0;
+
+			if (h & 0x04)
+				pl++;
+			while (pl < end) {
+				uint8_t b = data[pl++];
+
+				v |= (uint64_t)(b & 0x7f) << shift;
+				shift += 7;
+				if (!(b & 0x80))
+					break;
+			}
+			plen = (size_t)v;
+			if (pl + plen <= end &&
+			    plen <= sizeof(ctx->av1.seq_bytes)) {
+				if (ctx->av1.seq_len == plen &&
+				    !memcmp(ctx->av1.seq_bytes, data + pl,
+					    plen)) {
+					off = pl + plen;
+					DBG("[av1] au=%u sequence header re-seen, skipped\n",
+					    ctx->av1.au_index);
+				} else {
+					unsigned int sr = ctx->av1.seq_superres;
+					unsigned int cd = ctx->av1.seq_cdef;
+					unsigned int rst = ctx->av1.seq_restoration;
+					unsigned int suv = ctx->av1.seq_separate_uv_delta_q;
+
+					memcpy(ctx->av1.seq_bytes, data + pl,
+					       plen);
+					ctx->av1.seq_len = plen;
+					if (av1_parse_seq_flags(data + pl, plen,
+							       &sr, &cd, &rst,
+							       &suv)) {
+						ctx->av1.seq_superres = sr;
+						ctx->av1.seq_cdef = cd;
+						ctx->av1.seq_restoration = rst;
+						ctx->av1.seq_separate_uv_delta_q = suv;
+					}
+					DBG("[av1] au=%u original sequence header captured (%zu bytes): superres=%u cdef=%u restoration=%u sep_uv_dq=%u\n",
+					    ctx->av1.au_index, plen, sr, cd, rst,
+					    suv);
+				}
+			}
+		}
+		need = 8 + (end - off);
+		if (need > ctx->av1.au_cap) {
+			void *n = realloc(ctx->av1.au, need);
+
+			if (!n)
+				return -ENOMEM;
+			ctx->av1.au = n;
+			ctx->av1.au_cap = need;
+		}
+		au = ctx->av1.au;
+		au[0] = (uint8_t)((2 << 3) | 0x02);
+		au[1] = 0x00;
+		memcpy(au + 2, data + off, end - off);
+		au_len = 2 + (end - off);
+	} else {
 	if (!ctx->av1.writer.seq_valid ||
 	    !av1_seq_equal(&ctx->av1.writer.seq, &cfg)) {
 		/* A new sequence header resets the reference buffers. */
@@ -3214,14 +3340,13 @@ av1_submit(struct iris_decode_ctx *ctx,
 		pic->current_frame ? pic->current_frame : target;
 	ctx->av1.hist_order_hint[ctx->av1.hist_pos] = pic->order_hint;
 	ctx->av1.hist_pos = (ctx->av1.hist_pos + 1) % 64;
-	if (!lifted)
-		for (i = 0; i < AV1_NUM_REF_FRAMES; i++)
-			if (refresh_flags & (1u << i)) {
-				ctx->av1.slot_surface[i] = pic->current_frame ?
-					pic->current_frame : target;
-				ctx->av1.slot_last_use[i] = ctx->av1.au_index;
-				ctx->av1.slot_stored_at[i] = ctx->av1.au_index;
-			}
+	for (i = 0; i < AV1_NUM_REF_FRAMES; i++)
+		if (refresh_flags & (1u << i)) {
+			ctx->av1.slot_surface[i] = pic->current_frame ?
+				pic->current_frame : target;
+			ctx->av1.slot_last_use[i] = ctx->av1.au_index;
+			ctx->av1.slot_stored_at[i] = ctx->av1.au_index;
+		}
 	ctx->av1.last_order_hint = pic->order_hint;
 	ctx->av1.have_order_hint = 1;
 	ctx->av1.au_index++;
