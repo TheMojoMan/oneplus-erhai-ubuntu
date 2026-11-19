@@ -78,10 +78,20 @@ struct iris_engine {
 	struct iris_decode_ctx *dec;
 };
 
+/*
+ * VA surface IDs must be unique for the whole process, not just for one
+ * VADisplay: Chrome creates a new VADisplay (and a new driver instance) for
+ * every decoder, i.e. on a VP9 -> AV1 switch, and keys its video-frame
+ * SharedImages by VASurfaceID.  If the new display hands out the same IDs
+ * 1..N again, Chrome reuses the old codec's images and the compositor keeps
+ * sampling backings the new decoder never writes.  One process-wide counter
+ * keeps every VA display's IDs distinct.
+ */
+static unsigned int g_surface_id;
+
 struct iris_drv_data {
 	unsigned int config_id;
 	unsigned int context_id;
-	unsigned int surface_id;
 	unsigned int buffer_id;
 	unsigned int width, height;
 	int p010_supported;
@@ -641,7 +651,8 @@ iris_vaCreateSurfaces(VADriverContextP ctx, int width, int height, int format,
 		dd->direct_spare_height = height;
 		dd->direct_spare_fourcc = fourcc;
 		for (j = 0; j < allocate; j++) {
-			VASurfaceID id = ++dd->surface_id;
+			VASurfaceID id = __atomic_add_fetch(&g_surface_id, 1,
+						__ATOMIC_RELAXED);
 
 			if (iris_surfs_alloc(t, id, width, height, fourcc))
 				return VA_STATUS_ERROR_MAX_NUM_EXCEEDED;
@@ -654,7 +665,8 @@ iris_vaCreateSurfaces(VADriverContextP ctx, int width, int height, int format,
 	}
 
 	for (; i < num_surfaces; i++) {
-		VASurfaceID id = ++dd->surface_id;
+		VASurfaceID id = __atomic_add_fetch(&g_surface_id, 1,
+						__ATOMIC_RELAXED);
 
 		if (iris_surfs_alloc(t, id, width, height, fourcc))
 			return VA_STATUS_ERROR_MAX_NUM_EXCEEDED;
