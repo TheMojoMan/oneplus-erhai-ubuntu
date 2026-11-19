@@ -3187,17 +3187,27 @@ av1_submit(struct iris_decode_ctx *ctx,
 	 * payloads only -- libavcodec's AV1 hwaccel parses the OBUs itself, so
 	 * av1_lift_original_au() fails for it and `lifted` stays 0.
 	 *
-	 * Hidden (show_frame = 0) pictures are lifted as well: mixing verbatim
-	 * AUs with synthesized forced-show headers desynchronizes the firmware,
-	 * which now tracks the encoder's own state.  A hidden AU produces no
-	 * capture buffer, which the submit path already accounts for (no
-	 * surface write, no pending target, previous contents served).
-	 * IRIS_AV1_LIFT=0 forces the old synthesized path for comparison. */
+	 * Hidden (show_frame = 0) pictures are NOT lifted: they are the alternate
+	 * references (ARFs) that a later show_existing_frame puts on screen, and
+	 * the client only ever has a surface for the picture it asked us to
+	 * decode.  A lifted hidden AU produces no capture buffer, so that surface
+	 * keeps its older pixels and the client then displays it - the screen then
+	 * alternates between the current frame and a stale one (owner report
+	 * 2026-11-19: "older frames shown in between the newer ones").
+	 *
+	 * The lift is therefore OPT-IN again (`IRIS_AV1_LIFT=1`) until the forced
+	 * show is done at bit level: flip the coded show_frame bit and drop the
+	 * showable_frame bit inside the encoder's own header instead of
+	 * re-synthesizing the whole header, which desynchronizes the firmware and
+	 * stalls the stream after ~15 s.
+	 *
+	 * The synthesized path is what 1.13 ships. */
 	if (av1_lift_original_au(data, data_len, tiles, count, &lift_start,
 				 &lift_len, &lift_hidden, &lift_has_seq,
 				 &lift_payload, &lift_first_tile,
 				 &lift_ftype, &lift_frame_end) &&
-	    !(getenv("IRIS_AV1_LIFT") && atoi(getenv("IRIS_AV1_LIFT")) == 0))
+	    getenv("IRIS_AV1_LIFT") && atoi(getenv("IRIS_AV1_LIFT")) != 0 &&
+	    !lift_hidden)
 		lifted = 1;
 	(void)lift_len;
 	(void)lift_payload;
