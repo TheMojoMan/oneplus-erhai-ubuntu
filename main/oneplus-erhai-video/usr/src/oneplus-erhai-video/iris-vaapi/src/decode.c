@@ -3104,6 +3104,7 @@ av1_submit(struct iris_decode_ctx *ctx,
 	uint64_t ts;
 	unsigned int i, count = 0;
 	int ret, emit_seq = 0, mapped = 1;
+	int lift_mode = 0, lift_ok = 0, synth_encoder_slots = 0;
 	int lift_hidden = 0, lifted = 0;
 	int lift_has_seq;
 	unsigned int lift_ftype;
@@ -3180,14 +3181,32 @@ av1_submit(struct iris_decode_ctx *ctx,
 	 * bit-exact path once a stream uses those tools.  libavcodec's AV1
 	 * hwaccel hands over HEADERLESS tile payloads though (its decoder
 	 * parses the OBUs itself), so the lift can only serve clients that
-	 * submit framed OBUs (Chromium) and needs validation there first:
-	 * IRIS_AV1_LIFT=1 opts in.  Hidden pictures always need the
-	 * synthesized forced-show header. */
-	if (av1_lift_original_au(data, data_len, tiles, count, &lift_start,
+	 * submit framed OBUs (Chromium).
+	 *
+	 * IRIS_AV1_LIFT=1 selects the firmware-native model: every picture the
+	 * encoder shows travels verbatim, and the firmware's DPB is *the
+	 * encoder's DPB*.  A hidden picture (ARF) cannot travel verbatim - the
+	 * Iris firmware only writes a picture it believes is displayed - so it
+	 * is still synthesized with show_frame forced to 1, but with the
+	 * encoder's own slot numbering (refresh set and ref_frame_idx taken
+	 * from the bitstream) instead of the driver's remapped DPB.  Every
+	 * header then describes the same DPB, which is what one earlier
+	 * attempt got wrong: it flipped the show_frame bit inside the
+	 * encoder's own header (and kept the synthesized path for hidden key
+	 * frames), so the firmware's picture semantics no longer matched the
+	 * bitstream and it returned empty captures after a few frames.
+	 *
+	 * Default stays 0: the single-model synthesized path, which needs no
+	 * bitstream parsing at all. */
+	if (getenv("IRIS_AV1_LIFT") && atoi(getenv("IRIS_AV1_LIFT")) != 0)
+		lift_mode = 1;
+	if (lift_mode &&
+	    av1_lift_original_au(data, data_len, tiles, count, &lift_start,
 				 &lift_len, &lift_hidden, &lift_has_seq,
 				 &lift_payload, &lift_first_tile,
-				 &lift_ftype, &lift_frame_end) &&
-	    getenv("IRIS_AV1_LIFT") && !lift_hidden)
+				 &lift_ftype, &lift_frame_end) > 0)
+		lift_ok = 1;
+	if (lift_ok && !lift_hidden)
 		lifted = 1;
 	(void)lift_len;
 	(void)lift_payload;
@@ -3203,27 +3222,50 @@ av1_submit(struct iris_decode_ctx *ctx,
 			return ret;
 	}
 
-	/* Decide the reference mapping and the refresh set from our own DPB. */
+	/* Decide the reference mapping and the refresh set.
+	 *
+	 * In the default model both come from the driver's own DPB (slots
+	 * remapped onto the surfaces we hold).  In the firmware-native model
+	 * (IRIS_AV1_LIFT=1) the firmware's DPB is the encoder's, so the header
+	 * must keep the encoder's slot numbering: the refresh set is parsed out
+	 * of the bitstream and ref_frame_idx is passed through untouched.  A
+	 * hidden picture - always synthesized, because the firmware writes no
+	 * capture buffer for a frame it considers hidden - therefore uses the
+	 * same numbering as the verbatim pictures around it. */
 	ft = pic->pic_info_fields.bits.frame_type;
 	if (ft == AV1_FRAME_KEY && pic->pic_info_fields.bits.show_frame) {
 		refresh_flags = 0xff;
 		for (i = 0; i < AV1_REFS_PER_FRAME; i++)
 			ref_idx[i] = pic->ref_frame_idx[i] & 7;
 	} else {
-		mapped = av1_remap_refs(ctx, pic, ref_idx);
-		if (!lifted && pic->refresh_frame_flags_valid) {
-			refresh_flags = pic->refresh_frame_flags;
-		} else {
-			struct av1_seq_cfg rcfg;
-			int parsed;
+		struct av1_seq_cfg rcfg;
+		int parsed = -1;
 
+		if (lift_mode || !pic->refresh_frame_flags_valid) {
 			av1_seq_from_pic(pic, ctx->width, ctx->height, &rcfg);
 			parsed = av1_original_refresh(data, data_len, tiles,
 						      count, &rcfg);
-			DBG("[av1-rp] au=%u parsed=%d\n",
-			    ctx->av1.au_index, parsed);
-			refresh_flags = parsed >= 0 ?
-				(unsigned)parsed : av1_pick_refresh(ctx, pic);
+		}
+		DBG("[av1-rp] au=%u parsed=%d lift_mode=%d\n",
+		    ctx->av1.au_index, parsed, lift_mode);
+
+		if (lift_mode && parsed >= 0) {
+			synth_encoder_slots = 1;
+			refresh_flags = (unsigned)parsed;
+			for (i = 0; i < AV1_REFS_PER_FRAME; i++)
+				ref_idx[i] = pic->ref_frame_idx[i] & 7;
+		} else {
+			mapped = av1_remap_refs(ctx, pic, ref_idx);
+			if (pic->refresh_frame_flags_valid)
+				refresh_flags = pic->refresh_frame_flags;
+			else
+				refresh_flags = parsed >= 0 ?
+					(unsigned)parsed :
+					av1_pick_refresh(ctx, pic);
+			if (lift_mode && !mapped)
+				DBG("[av1] firmware-native picture without a "
+				    "parseable header; falling back to the "
+				    "driver DPB (slot model now mixed)\n");
 		}
 		if (dbg_enabled())
 			fprintf(stderr,
@@ -3359,6 +3401,15 @@ av1_submit(struct iris_decode_ctx *ctx,
 				}
 			}
 		}
+		/* The firmware now holds this stream's sequence configuration.
+		 * Record it, otherwise the next synthesized hidden picture would
+		 * re-emit a sequence header and reset the reference buffers
+		 * mid-GOP. */
+		if (!ctx->av1.writer.seq_valid ||
+		    !av1_seq_equal(&ctx->av1.writer.seq, &cfg)) {
+			ctx->av1.writer.seq = cfg;
+			ctx->av1.writer.seq_valid = 1;
+		}
 		need = 8 + (end - off);
 		if (need > ctx->av1.au_cap) {
 			void *n = realloc(ctx->av1.au, need);
@@ -3412,7 +3463,8 @@ av1_submit(struct iris_decode_ctx *ctx,
 		seq_len += n;
 	}
 	frame_len = av1_write_frame_obu(&ctx->av1.writer, pic, tiles, count,
-					data, refresh_flags, ref_idx,
+					data, refresh_flags,
+					synth_encoder_slots ? NULL : ref_idx,
 					!ctx->av1.no_tile_sizes,
 					au + seq_len, ctx->av1.au_cap - seq_len);
 	if (!frame_len) {
@@ -3693,12 +3745,6 @@ iris_decode_av1_end(struct iris_decode_ctx *ctx)
 			st->owner = ctx;
 		}
 	} else {
-		ret = iris_wait_end_target(ctx, ctx->current_target, 1);
-		if (ret < 0)
-			return ret;
-	}
-
-	if (!ctx->av1.last_hidden) {
 		ret = iris_wait_end_target(ctx, ctx->current_target, 1);
 		if (ret < 0)
 			return ret;
