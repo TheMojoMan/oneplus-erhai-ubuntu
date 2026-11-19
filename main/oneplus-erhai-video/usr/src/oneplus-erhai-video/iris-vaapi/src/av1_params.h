@@ -38,6 +38,8 @@ struct av1_seq_cfg {
 	unsigned int enable_intra_edge_filter;
 	unsigned int enable_interintra_compound;
 	unsigned int enable_masked_compound;
+	unsigned int enable_warped_motion;
+	unsigned int enable_ref_frame_mvs;
 	unsigned int enable_dual_filter;
 	unsigned int enable_order_hint;
 	unsigned int enable_jnt_comp;
@@ -77,19 +79,29 @@ void av1_seq_from_pic(const VADecPictureParameterBufferAV1 *pic,
 		      struct av1_seq_cfg *cfg);
 int av1_seq_equal(const struct av1_seq_cfg *a, const struct av1_seq_cfg *b);
 
-/* Parse the encoder's own sequence header OBU payload for the four flags
- * that VA's picture parameters do not carry: enable_superres,
- * enable_cdef, enable_restoration and separate_uv_delta_q.  Header
- * synthesis must reproduce these exactly, because a frame header lifted
- * or coded against the original sequence header is only parseable when
- * the signalled sequence configuration matches the encoder's.
- * Returns 1 and fills the flags on success, 0 when the header uses a
- * construct this walk does not handle (the caller then keeps its
- * defaults, which is today's behaviour). */
-int av1_parse_seq_flags(const uint8_t *payload, size_t len,
-			unsigned int *superres, unsigned int *cdef,
-			unsigned int *restoration,
-			unsigned int *separate_uv_delta_q);
+/* The sequence-header flags VA's picture parameters do not carry, but which
+ * decide the *syntax* of a synthesized frame header: enable_warped_motion
+ * gates the allow_warped_motion bit, enable_cdef gates the CDEF parameters,
+ * enable_superres/restoration/separate_uv_delta_q gate their frame-level
+ * syntax.  A frame header is only parseable against the sequence header that
+ * the stream actually carries, so these have to match the encoder's.
+ * enable_ref_frame_mvs is carried for completeness; it constrains rather than
+ * gates syntax. */
+struct av1_seq_tools {
+	unsigned int superres;
+	unsigned int cdef;
+	unsigned int restoration;
+	unsigned int separate_uv_delta_q;
+	unsigned int warped_motion;
+	unsigned int ref_frame_mvs;
+};
+
+/* Parse the encoder's own sequence header OBU payload for the flags in
+ * struct av1_seq_tools.  Returns 1 and fills @tools on success, 0 when the
+ * header uses a construct this walk does not handle (the caller then keeps
+ * its defaults). */
+int av1_parse_seq_tools(const uint8_t *payload, size_t len,
+			struct av1_seq_tools *tools);
 
 /* Write an OBU_SEQUENCE_HEADER (obu_has_size_field = 1).  Returns the byte
  * count, or 0 when @cap is too small. */

@@ -143,6 +143,9 @@ av1_seq_from_pic(const VADecPictureParameterBufferAV1 *pic,
 	cfg->enable_intra_edge_filter = (seq >> 3) & 1;
 	cfg->enable_interintra_compound = (seq >> 4) & 1;
 	cfg->enable_masked_compound = (seq >> 5) & 1;
+	/* Not carried by VA; signalled as available, exactly as before. */
+	cfg->enable_warped_motion = 1;
+	cfg->enable_ref_frame_mvs = 1;
 	cfg->enable_dual_filter = (seq >> 6) & 1;
 	cfg->enable_order_hint = (seq >> 7) & 1;
 	cfg->enable_jnt_comp = (seq >> 8) & 1;
@@ -193,10 +196,8 @@ av1_seq_equal(const struct av1_seq_cfg *a, const struct av1_seq_cfg *b)
  * writer forces off (timing info, decoder model, initial display delay,
  * the color description). */
 int
-av1_parse_seq_flags(const uint8_t *payload, size_t len,
-		     unsigned int *superres, unsigned int *cdef,
-		     unsigned int *restoration,
-		     unsigned int *separate_uv_delta_q)
+av1_parse_seq_tools(const uint8_t *payload, size_t len,
+		    struct av1_seq_tools *tools)
 {
 	size_t pos = 0;
 	unsigned int profile, reduced, v, i;
@@ -214,12 +215,14 @@ av1_parse_seq_flags(const uint8_t *payload, size_t len,
 
 	if (len < 2)
 		return 0;
-	profile = v = 0;
 	RB(3);					/* seq_profile */
+	profile = v;
 	RB(1);					/* still_picture */
 	reduced = v;
 	{
-		unsigned int order_hint, wbits, hbits, mono, cdp, matrix = 0;
+		unsigned int order_hint, wbits, hbits;
+		unsigned int mono = 0, cdp = 0, cp = 0, tc = 0, mc = 0;
+		unsigned int twelve = 0, high_bitdepth = 0;
 
 		if (!reduced) {
 			unsigned int timing, model = 0, display, opcnt;
@@ -274,29 +277,31 @@ av1_parse_seq_flags(const uint8_t *payload, size_t len,
 		RB(wbits);			/* max_frame_width_minus_1 */
 		RB(hbits);			/* max_frame_height_minus_1 */
 		if (!reduced) {
-			RB(4);			/* delta_frame_id_length_minus_2 */
-			RB(3);			/* additional_frame_id_length_minus_1 */
+			RB(1);			/* frame_id_numbers_present_flag */
+			if (v) {
+				RB(4);		/* delta_frame_id_length_minus_2 */
+				RB(3);		/* additional_frame_id_length_minus_1 */
+			}
 		}
 		RB(1);				/* use_128x128_superblock */
 		RB(1);				/* enable_filter_intra */
 		RB(1);				/* enable_intra_edge_filter */
 		if (reduced) {
 			/* Tools forced off without being coded. */
-			*superres = 0;
-			*cdef = 0;
-			*restoration = 0;
-			*separate_uv_delta_q = 0;
+			*tools = (struct av1_seq_tools){ 0 };
 			return 1;
 		}
 		RB(1);				/* enable_interintra_compound */
 		RB(1);				/* enable_masked_compound */
 		RB(1);				/* enable_warped_motion */
+		tools->warped_motion = v;
 		RB(1);				/* enable_dual_filter */
 		RB(1);				/* enable_order_hint */
 		order_hint = v;
 		if (order_hint) {
 			RB(1);			/* enable_jnt_comp */
 			RB(1);			/* enable_ref_frame_mvs */
+			tools->ref_frame_mvs = v;
 		}
 		RB(1);				/* seq_choose_screen_content_tools */
 		if (!v)
@@ -311,47 +316,68 @@ av1_parse_seq_flags(const uint8_t *payload, size_t len,
 		if (order_hint)
 			RB(3);			/* order_hint_bits_minus_1 */
 		RB(1);				/* enable_superres */
-		*superres = v;
+		tools->superres = v;
 		RB(1);				/* enable_cdef */
-		*cdef = v;
+		tools->cdef = v;
 		RB(1);				/* enable_restoration */
-		*restoration = v;
+		tools->restoration = v;
 
-		/* color_config() */
-		RB(1);				/* use_highbitdepth */
-		if (profile == 2 && v)
+		/* color_config(), spec 5.5.2.  The order matters: subsampling is
+		 * only coded when the colour description is not the identity
+		 * case, and color_range comes first.  Getting this wrong shifts
+		 * separate_uv_delta_q by a few bits - harmless while the driver
+		 * wrote its own sequence header, fatal when a synthesized frame
+		 * header has to be parseable against the encoder's. */
+		RB(1);				/* high_bitdepth */
+		high_bitdepth = v;
+		if (profile == 2 && high_bitdepth) {
 			RB(1);			/* twelve_bit */
-		mono = 0;
-		if (profile != 1)
+			twelve = v;
+		}
+		if (profile != 1) {
 			RB(1);			/* mono_chrome */
-		mono = v;
+			mono = v;
+		}
 		RB(1);				/* color_description_present_flag */
 		cdp = v;
 		if (cdp) {
 			RB(8);			/* color_primaries */
+			cp = v;
 			RB(8);			/* transfer_characteristics */
+			tc = v;
 			RB(8);			/* matrix_coefficients */
-			matrix = v;
+			mc = v;
 		}
 		if (mono) {
 			RB(1);			/* color_range */
+		} else if (cdp && cp == 1 && tc == 13 && mc == 0) {
+			/* CP_BT_709 + TC_SRGB + MC_IDENTITY: implied range/subsampling */
 		} else {
-			if (!(cdp && matrix == 2)) {
-				unsigned int ssx, ssy;
+			unsigned int ssx = 1, ssy = 1;
 
-				if (profile != 1) {
-					RB(1);	/* subsampling_x */
-					ssx = v;
+			RB(1);			/* color_range */
+			if (profile == 0) {
+				ssx = ssy = 1;
+			} else if (profile == 1) {
+				ssx = ssy = 0;
+			} else if (twelve) {
+				RB(1);		/* subsampling_x */
+				ssx = v;
+				if (ssx) {
 					RB(1);	/* subsampling_y */
 					ssy = v;
-					if (ssx && ssy)
-						RB(2); /* chroma_sample_position */
+				} else {
+					ssy = 0;
 				}
+			} else {
+				ssx = 1;
+				ssy = 0;
 			}
-			RB(1);			/* color_range */
+			if (ssx && ssy)
+				RB(2);		/* chroma_sample_position */
 		}
 		RB(1);				/* separate_uv_delta_q */
-		*separate_uv_delta_q = v;
+		tools->separate_uv_delta_q = v;
 	}
 	#undef RB
 	return 1;
@@ -407,17 +433,14 @@ write_sequence_header(struct av1_bw *bw, const struct av1_seq_cfg *cfg)
 
 	av1_bw_bit(bw, cfg->enable_interintra_compound);
 	av1_bw_bit(bw, cfg->enable_masked_compound);
-	/* enable_warped_motion and enable_ref_frame_mvs are not carried by
-	 * VA.  Signal them as available and let the per-frame
-	 * allow_warped_motion / use_ref_frame_mvs bits carry the truth: a
-	 * stream that never uses them sets those frame flags to 0, which is
-	 * exactly what the encoder signalled. */
-	av1_bw_bit(bw, 1);		/* enable_warped_motion */
+	/* This gates allow_warped_motion in every frame header, so it must
+	 * match the sequence header in force, not just look permissive. */
+	av1_bw_bit(bw, cfg->enable_warped_motion);
 	av1_bw_bit(bw, cfg->enable_dual_filter);
 	av1_bw_bit(bw, cfg->enable_order_hint);
 	if (cfg->enable_order_hint) {
 		av1_bw_bit(bw, cfg->enable_jnt_comp);
-		av1_bw_bit(bw, 1);	/* enable_ref_frame_mvs */
+		av1_bw_bit(bw, cfg->enable_ref_frame_mvs);
 	}
 
 	/* seq_force_screen_content_tools = SELECT_SCREEN_CONTENT_TOOLS and

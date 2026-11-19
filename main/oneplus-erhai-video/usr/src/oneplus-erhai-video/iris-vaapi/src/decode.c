@@ -415,8 +415,12 @@ struct iris_decode_ctx {
 		 * rewritten access units stay mutually parseable. */
 		uint8_t seq_bytes[288];
 		size_t seq_len;
-		unsigned int seq_superres, seq_cdef, seq_restoration;
-		unsigned int seq_separate_uv_delta_q;
+		/* Sequence-header flags VA does not carry.  Defaults reproduce
+		 * what the synthesized sequence header has always signalled. */
+		struct av1_seq_tools seq_tools;
+		/* Set once a lifted AU actually carried a sequence header, i.e.
+		 * @seq_tools describes the stream in flight. */
+		unsigned int seq_known;
 		/* Surface -> order hint of the pictures we decoded, so a lost
 		 * reference can be replaced by the temporally closest one. */
 		VASurfaceID hist_surface[64];
@@ -870,9 +874,11 @@ iris_decode_create(void)
 		/* Until the encoder's own sequence header shows up in a lifted
 		 * access unit, rewritten headers use the "signal the tools as
 		 * available" defaults the writer was validated with. */
-		ctx->av1.seq_superres = 1;
-		ctx->av1.seq_restoration = 1;
-		ctx->av1.seq_separate_uv_delta_q = 1;
+		ctx->av1.seq_tools.superres = 1;
+		ctx->av1.seq_tools.restoration = 1;
+		ctx->av1.seq_tools.separate_uv_delta_q = 1;
+		ctx->av1.seq_tools.warped_motion = 1;
+		ctx->av1.seq_tools.ref_frame_mvs = 1;
 		av1_writer_reset(&ctx->av1.writer);
 	}
 	return ctx;
@@ -2732,6 +2738,7 @@ av1_reset_session(struct iris_decode_ctx *ctx)
 	 * firmware answered VA_STATUS_ERROR_DECODING_ERROR and Chrome dropped
 	 * the decoder.  Only relevant while IRIS_AV1_LIFT=1. */
 	ctx->av1.seq_len = 0;
+	ctx->av1.seq_known = 0;
 	av1_writer_reset(&ctx->av1.writer);
 }
 
@@ -3302,9 +3309,31 @@ av1_submit(struct iris_decode_ctx *ctx,
 	 * knows the four flags VA does not carry; rewritten access units
 	 * must match them exactly or the frame headers stop being
 	 * parseable against the sequence the stream established. */
-	cfg.enable_superres = ctx->av1.seq_superres;
-	cfg.enable_restoration = ctx->av1.seq_restoration;
-	cfg.separate_uv_delta_q = ctx->av1.seq_separate_uv_delta_q;
+	cfg.enable_superres = ctx->av1.seq_tools.superres;
+	cfg.enable_restoration = ctx->av1.seq_tools.restoration;
+	cfg.separate_uv_delta_q = ctx->av1.seq_tools.separate_uv_delta_q;
+	cfg.enable_warped_motion = ctx->av1.seq_tools.warped_motion;
+	cfg.enable_ref_frame_mvs = ctx->av1.seq_tools.ref_frame_mvs;
+	/* VA carries CDEF too, but only as a scan hint; the value the encoder's
+	 * sequence header actually signalled is what a synthesized frame header
+	 * has to match.  A mismatch in any of these shifts the frame header and
+	 * the tiles stop decoding - the 17:2x hardware runs lost every picture
+	 * after the first one this way (enable_warped_motion was the last one). */
+	if (lift_mode && ctx->av1.seq_known)
+		cfg.enable_cdef = ctx->av1.seq_tools.cdef;
+	if (dbg_enabled()) {
+		uint8_t sbuf[288];
+		size_t n = av1_write_sequence_header(&cfg, sbuf, sizeof(sbuf));
+		unsigned int k;
+
+		fprintf(stderr, "[av1-seq] au=%u ours(%zu)=", ctx->av1.au_index, n);
+		for (k = 0; k < n; k++)
+			fprintf(stderr, "%02x", sbuf[k]);
+		fprintf(stderr, " enc(%zu)=", ctx->av1.seq_len);
+		for (k = 0; k < ctx->av1.seq_len; k++)
+			fprintf(stderr, "%02x", ctx->av1.seq_bytes[k]);
+		fprintf(stderr, "\n");
+	}
 	if (dbg_enabled())
 		fprintf(stderr,
 			"[av1] pic ft=%u show=%u tiles=%ux%u uniform=%u count=%u base_q=%u sct=%u er=%u prf=%u refresh=0x%02x\n",
@@ -3379,32 +3408,41 @@ av1_submit(struct iris_decode_ctx *ctx,
 					DBG("[av1] au=%u sequence header re-seen, skipped\n",
 					    ctx->av1.au_index);
 				} else {
-					unsigned int sr = ctx->av1.seq_superres;
-					unsigned int cd = ctx->av1.seq_cdef;
-					unsigned int rst = ctx->av1.seq_restoration;
-					unsigned int suv = ctx->av1.seq_separate_uv_delta_q;
+					struct av1_seq_tools tools =
+						ctx->av1.seq_tools;
 
 					memcpy(ctx->av1.seq_bytes, data + pl,
 					       plen);
 					ctx->av1.seq_len = plen;
-					if (av1_parse_seq_flags(data + pl, plen,
-							       &sr, &cd, &rst,
-							       &suv)) {
-						ctx->av1.seq_superres = sr;
-						ctx->av1.seq_cdef = cd;
-						ctx->av1.seq_restoration = rst;
-						ctx->av1.seq_separate_uv_delta_q = suv;
+					if (av1_parse_seq_tools(data + pl, plen,
+								&tools)) {
+						ctx->av1.seq_tools = tools;
+						ctx->av1.seq_known = 1;
 					}
-					DBG("[av1] au=%u original sequence header captured (%zu bytes): superres=%u cdef=%u restoration=%u sep_uv_dq=%u\n",
-					    ctx->av1.au_index, plen, sr, cd, rst,
-					    suv);
+					DBG("[av1] au=%u original sequence header captured (%zu bytes): superres=%u cdef=%u restoration=%u sep_uv_dq=%u warped=%u refmvs=%u\n",
+					    ctx->av1.au_index, plen,
+					    tools.superres, tools.cdef,
+					    tools.restoration,
+					    tools.separate_uv_delta_q,
+					    tools.warped_motion,
+					    tools.ref_frame_mvs);
 				}
 			}
 		}
 		/* The firmware now holds this stream's sequence configuration.
 		 * Record it, otherwise the next synthesized hidden picture would
 		 * re-emit a sequence header and reset the reference buffers
-		 * mid-GOP. */
+		 * mid-GOP.  The four tool flags are only known after parsing the
+		 * encoder's own sequence header above, so they have to be folded
+		 * into @cfg first - comparing against the pre-parse defaults made
+		 * every hidden picture re-emit a sequence header with the wrong
+		 * values (the 17:2x hardware run: stall from the first ARF on). */
+		cfg.enable_superres = ctx->av1.seq_tools.superres;
+		cfg.enable_cdef = ctx->av1.seq_tools.cdef;
+		cfg.enable_restoration = ctx->av1.seq_tools.restoration;
+		cfg.separate_uv_delta_q = ctx->av1.seq_tools.separate_uv_delta_q;
+		cfg.enable_warped_motion = ctx->av1.seq_tools.warped_motion;
+		cfg.enable_ref_frame_mvs = ctx->av1.seq_tools.ref_frame_mvs;
 		if (!ctx->av1.writer.seq_valid ||
 		    !av1_seq_equal(&ctx->av1.writer.seq, &cfg)) {
 			ctx->av1.writer.seq = cfg;
