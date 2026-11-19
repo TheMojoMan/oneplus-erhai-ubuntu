@@ -1,5 +1,5 @@
 Package: oneplus-erhai-video
-Version: 1.12
+Version: 1.13
 Section: video
 Priority: optional
 Architecture: arm64
@@ -88,3 +88,18 @@ Description: Hardware video decoding for the OnePlus Pad 3 (erhai, SM8750)
  mismatch that made LR-using films fail to decode, and the per-client
  restoration type conventions (libavcodec raw syntax vs the DXVA order stock
  libva clients use) are in the 1.10 driver already.
+ 1.13 (2026-11-19): two decode-path fixes found while chasing a 4K AV1 picture
+ freeze at a VP9->AV1 codec switch.  VA surface ids are now process-wide instead
+ of per-VADisplay: a second VAContext in the same process (Chrome starts one
+ VADisplay per decoder) restarted the id sequence at 1, so the client's
+ id-keyed surface cache handed the compositor stale images of the first pool
+ while the decoder wrote into new buffers it had never imported -- the visible
+ result was a picture that stopped following the stream.  And a VP9 barrier
+ timeout no longer fails vaEndPicture: the driver tries the firmware stall
+ recovery, then serves the target's previous contents for that one frame.
+ Chrome treats the error as a decode failure, destroys the decoder and
+ re-creates it, which is what wedged presentation at the switch ("vaEndPicture
+ failed, VA error: internal decoding error" immediately before the player was
+ recreated).  Both were verified on the pad with 0 failures over a long 4K AV1
+ run.  The freeze itself was Mutter withholding Wayland frame callbacks
+ (oneplus-erhai-mutter +erhai3), not the driver.

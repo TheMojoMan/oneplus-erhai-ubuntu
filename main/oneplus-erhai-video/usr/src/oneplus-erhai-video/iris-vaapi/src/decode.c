@@ -4106,10 +4106,16 @@ iris_decode_end_impl(struct iris_decode_ctx *ctx)
 			DBG("[vp9-barrier] target=%u wait incomplete: %d\n",
 			    ctx->current_target, ret);
 			/* A seek boundary is specifically protecting ANGLE from stale
-			 * pixels.  Prefer decoder fallback to returning that surface
-			 * before it is ready. */
-			if (ctx->vp9_seek_barrier || vp9_barrier_submitted)
-				return ret;
+			 * pixels.  Try the firmware stall recovery first; if that does
+			 * not complete the target, serve its previous contents for this
+			 * one frame.  Never fail vaEndPicture here: Chrome treats the
+			 * error as a decode failure and tears the decoder down, and that
+			 * re-initialisation is what wedges the compositor at a codec
+			 * switch ("vaEndPicture failed, VA error: internal decoding
+			 * error" right before the media player is recreated). */
+			if (recover_stalled_target(ctx, ctx->current_target) != 0)
+				DBG("[vp9-barrier] target=%u keeping previous contents\n",
+				    ctx->current_target);
 		}
 	}
 

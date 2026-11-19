@@ -25,13 +25,13 @@ a081dce3bc4f0ed46d3d2fcc7df6836a  usr/src/oneplus-erhai-video/iris-vaapi/benchma
 15693e24d1821ff50d8360476bbb4e9b  usr/src/oneplus-erhai-video/iris-vaapi/src/v4l2_dec.c
 944b1a026af61d93d510e54e458f5de9  usr/src/oneplus-erhai-video/iris-vaapi/src/av1_params.c
 d73dbbcb89669166fba8131f3cd2e7ff  usr/src/oneplus-erhai-video/iris-vaapi/src/iris_surface_fence.h
-51a5399a32b482301ccaad2e31594a04  usr/src/oneplus-erhai-video/iris-vaapi/src/decode.c
+53fd5407553be37c0f07bff768c45827  usr/src/oneplus-erhai-video/iris-vaapi/src/decode.c
 1ee295799c4a548cad4e556d5e1e8ec3  usr/src/oneplus-erhai-video/iris-vaapi/src/av1_bits.h
 d46c678fa81c79a13ffa8f63b0ae8603  usr/src/oneplus-erhai-video/iris-vaapi/src/dma_heap.h
 0516b81e662046c159ab43f08919de00  usr/src/oneplus-erhai-video/iris-vaapi/src/hevc_slice_rewrite.h
 8c23c8bc55c19101937a22f349855177  usr/src/oneplus-erhai-video/iris-vaapi/src/decode.h
 32875a33ae71cdf6e93eca92842a99a3  usr/src/oneplus-erhai-video/iris-vaapi/src/av1_params.h
-2c4ac8fb8296b0864ab179ed674084c5  usr/src/oneplus-erhai-video/iris-vaapi/src/iris_vaapi.c
+c5e05f576d766cab7c47de98edffe117  usr/src/oneplus-erhai-video/iris-vaapi/src/iris_vaapi.c
 2f194bcda25b4da7e0570a5c05d876a5  usr/src/oneplus-erhai-video/iris-vaapi/src/vk_copy.h
 b143ccadddf4ee5103047df0b34ee3c2  usr/src/oneplus-erhai-video/iris-vaapi/src/hevc_params.h
 b2fa55d4a453273fe11954fd846c3f01  usr/src/oneplus-erhai-video/iris-vaapi/src/hevc_slice_rewrite.c
@@ -68,5 +68,5 @@ b0612c18cd3581c193e77db6865f44bc  usr/src/oneplus-erhai-video/iris-vaapi/tools/9
 508e77c8276920cba9a4fc76b1638544  usr/src/oneplus-erhai-video/iris-vaapi/VENDORED.md
 a9fe9fc072a2b9ea3ccd646666c6423d  usr/src/oneplus-erhai-video/iris-vaapi/erhai-changes-vs-upstream.patch
 d026761a1be016470ad39729f0022518  usr/src/oneplus-erhai-video/iris-vaapi/.github/workflows/build.yml
-a157b5ee6bbc1f2b5d094542b307ade1  usr/lib/aarch64-linux-gnu/dri/iris_drv_video.so
+bac7ee29abe7fc8ef1f84bc1097d8aed  usr/lib/aarch64-linux-gnu/dri/iris_drv_video.so
 8cd23e20e99930640b88b80488fae626  usr/share/doc/oneplus-erhai-video/README
