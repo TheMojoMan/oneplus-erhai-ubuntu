@@ -8,11 +8,15 @@
 #
 # all at <base>+erhai1 (default base 50.1-0ubuntu2.5).  See
 # oneplus-erhai-mutter/README.md, and nautilus-MEMORY-2026-10-15.md §5-§7.
-# The library carries three source patches: touch-drag-null-guard.patch,
+# The library carries four source patches: touch-drag-null-guard.patch,
 # mutter-hw-cursor-external-monitor.patch (composited cursor while an external
-# monitor is active, see mirror-MEMORY-2026-11-07.md §19) and
+# monitor is active, see mirror-MEMORY-2026-11-07.md §19),
 # mutter-primary-flag-reset.patch (GetCurrentState must report one primary, so
-# Settings -> Displays -> Primary Display shows the real one).
+# Settings -> Displays -> Primary Display shows the real one) and
+# mutter-frame-callback-visible.patch (emit frame callbacks for every visible
+# surface, only throttle effectively obscured ones -- a withheld callback
+# deadlocked the presentation of a fullscreen video toplevel, see
+# video-MEMORY-2026-11-19.md).
 #
 #   ./build-mutter-deb.sh                       -> publish to the PPA suite
 #   NO_PPA=1 ./build-mutter-deb.sh              -> build locally only
@@ -31,7 +35,7 @@ BASE=${BASE:-50.1-0ubuntu2.5}
 SUFFIX=${ERHAI_SUFFIX:-+erhai1}
 VERSION="$BASE$SUFFIX"
 PORTS_MIRROR=${PORTS_MIRROR:-http://ports.ubuntu.com/ubuntu-ports}
-EXPECT_LIB_MD5=${EXPECT_LIB_MD5:-df62d04160042122d2c7d17643c3fbb8}
+EXPECT_LIB_MD5=${EXPECT_LIB_MD5:-6bb6f47ec79e543be03dd887a0e50de6}
 LIBREL="/usr/lib/aarch64-linux-gnu"
 WORK="$PROJ/build"
 PATHS="$WORK/built-paths.txt"
@@ -94,9 +98,9 @@ c = re.sub(r'^Version: %s$' % re.escape(ver),
            'Version: %s%s' % (ver, suffix), c, count=1, flags=re.M)
 note = """Locally rebuilt package: Ubuntu's %s with the oneplus-erhai patched
 libmutter-18.so.0.0.0 (compositor touch-drag NULL-deref guard, the composited
-cursor while an external monitor is active, and one-primary reporting for the
-Primary Display setting).  Depends, Breaks and Symbols are Ubuntu's,
-unchanged.""" % ver
+cursor while an external monitor is active, one-primary reporting for the
+Primary Display setting, and frame callbacks for visible surfaces).  Depends,
+Breaks and Symbols are Ubuntu's, unchanged.""" % ver
 note = '\n'.join((' ' + l) if l.strip() else ' .' for l in note.splitlines())
 open(path, 'w').write(c.rstrip('\n') + '\n .\n' + note + '\n')
 PY

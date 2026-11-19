@@ -1,8 +1,9 @@
 # oneplus-erhai-mutter — the erhai patched Mutter library set
 
-Three source fixes in the compositor library, in
+Four source fixes in the compositor library, in
 `src/backends/native/meta-cursor-renderer-native.c` /
-`src/wayland/meta-wayland-touch.c` / `src/backends/meta-*.c`:
+`src/wayland/meta-wayland-touch.c` / `src/backends/meta-*.c` /
+`src/wayland/meta-wayland.c`:
 
 1. **A NULL dereference in Mutter's Wayland touch code** that **crashed the whole
 compositor** and looked like a "logout":
@@ -47,10 +48,25 @@ compositor** and looked like a "logout":
    backported: add `meta_logical_monitor_clear_primary()` and clear every
    logical monitor before marking the new primary.
 
+4. **Frame callbacks are withheld from a visible surface**
+   (`mutter-frame-callback-visible.patch`, `src/wayland/meta-wayland.c`,
+   `emit_frame_callbacks_for_stage_view()`).  Stock Mutter skips the callbacks
+   of any surface that is not the stage view's "primary" one, without asking
+   whether the surface is visible at all.  A fullscreen video toplevel that is
+   not primary by that heuristic then waits for a `wl_callback.done` that never
+   arrives, stops committing, the compositor goes idle and the picture freezes
+   while decoding continues at full rate; a forced redraw (workspace switch)
+   revives it.  Seen on YouTube's VP9→AV1 switch in a 4K video, in Brave and
+   Chromium alike, and cured by this patch (owner test 2026-11-19,
+   `video-MEMORY-2026-11-19.md`).  The patch keeps the throttling, but only for
+   surfaces that are *effectively obscured*; everything visible gets its
+   callback.
+
 ## What ships
 
 Ubuntu-named packages, like the mesa `/usr` replacement — released at
-`<base>+erhai1` (`50.1-0ubuntu2.5+erhai1`), test builds at `<base>+erhai2-test-NN`:
+`<base>+erhai3` (`50.1-0ubuntu2.5+erhai3`; `+erhai1` was the 2026-10 line,
+`+erhai2` was published and withdrawn), test builds at `<base>+erhai2-test-NN`:
 
 | package | contents |
 |---|---|
@@ -81,20 +97,24 @@ So the recipe is surgical: take Ubuntu's own deb, drop in the patched library,
 bump the `Version`, regenerate md5sums, repack — the Depends list stays
 byte-identical to Ubuntu's and no shlibdeps run is needed.  The patched, stripped
 library is therefore stored here as `libmutter-18.so.0.0.0.patched`
-(md5 **`df62d04160042122d2c7d17643c3fbb8`**, 3 119 424 B); `build-mutter-deb.sh`
+(md5 **`6bb6f47ec79e543be03dd887a0e50de6`**, 3 119 424 B); `build-mutter-deb.sh`
 verifies that md5 before packaging and refuses a library with a `/usr/local`
 path baked in (the prefix bug of `mirror-MEMORY-2026-11-07.md` §12).
 
 To rebuild it from source: `apt-get source mutter`, apply
-`touch-drag-null-guard.patch`, `mutter-hw-cursor-external-monitor.patch` and
-`mutter-primary-flag-reset.patch`, then
+`touch-drag-null-guard.patch`, `mutter-hw-cursor-external-monitor.patch`,
+`mutter-primary-flag-reset.patch` and `mutter-frame-callback-visible.patch`, then
 build with the user environment cleaned (`env -u PKG_CONFIG_PATH -u
 LD_LIBRARY_PATH`) and these options -- the prefix is NOT optional, meson's
 default `/usr/local` pointed the X11 frames helper at a path that does not exist:
 
     meson setup build -Dprefix=/usr -Dsysconfdir=/etc -Dlocalstatedir=/var \
-                      -Dtests=disabled -Dprofiler=false --buildtype=plain
+                      -Doptimization=2 -Dtests=disabled -Dprofiler=false --buildtype=plain
     ninja -C build
+
+Use `-Doptimization=2` (the checked-in artifact was built that way, 3 119 424 B
+stripped; a plain `-Dbuildtype=plain` setup without it produces a 4.2 MB
+`-O0`-ish library).
     objcopy --only-keep-debug src/libmutter-18.so.0.0.0 libmutter-18.debug
     strip --strip-unneeded   src/libmutter-18.so.0.0.0
 
@@ -113,12 +133,13 @@ match the patched library (its `Build-Ids:` are the unpatched build's).
 The pristine Ubuntu debs it packages are fetched from the archive (sha256-checked
 against the apt metadata) and kept in `rollback/` for offline rollback.
 
-Versioning: the released line is `+erhai1`; a test build keeps the released line
-and adds `-test-NN` (`ERHAI_SUFFIX=+erhai2-test-01 ./build-mutter-deb.sh`), and
-only the released build increments the number.  `+erhai2` was published and
-withdrawn on 2026-11-07 (mirror-MEMORY-2026-11-07.md §11), so the next release
-is **`+erhai3`** -- test builds must therefore be `+erhai2-test-NN` (they sort
-above `+erhai2`), never `+erhai1-test-NN`.
+Versioning: the current released line is **`+erhai3`** (built 2026-11-19 with the
+frame-callback fix; `+erhai1` was the 2026-10 line, `+erhai2` was published and
+withdrawn on 2026-11-07, mirror-MEMORY-2026-11-07.md §11).  A test build keeps
+the released line and adds `-test-NN` (`ERHAI_SUFFIX=+erhai3-test-01
+./build-mutter-deb.sh`); only the released build increments the number.  Builds
+made before the 2026-11-19 fix carry `+erhai2-test-NN` (they sort above the
+withdrawn `+erhai2`); a build must never be called `+erhai1-test-NN`.
 
 ## Rollback
 
