@@ -76,3 +76,43 @@ firmware contract this driver has to live with:
 - A hidden picture's OPB has no film-grain information; only the DPB is kept.
   With `show_frame` forced to 1 the picture is complete instead, which is why
   the default model does not expose that limitation.
+
+## Status of the firmware-native model (2026-11-19, negative)
+
+`IRIS_AV1_LIFT=1` is **not usable on this VPU generation** and stays off.  Three
+layers of the problem were peeled off in hardware runs:
+
+1. every hidden picture re-emitted a sequence header (the writer compared the
+   new config before folding the encoder's parsed flags in) - each reset the
+   firmware's reference buffers;
+2. the sequence-header parser read `frame_id_numbers_present_flag` wrong (it
+   consumed the 4+3 frame-id bits unconditionally, shifting every following
+   bit by 7) and parsed `color_config()` out of order, so `enable_cdef` and
+   `separate_uv_delta_q` did not match the stream;
+3. the writer hardcoded `enable_warped_motion = 1` while the stream signalled 0.
+   That bit gates `allow_warped_motion` in *every* frame header, so a
+   synthesized hidden picture carried an extra bit and the rest of its header
+   was misparsed ("failed to decode tile data" in libaom as well as firmware
+   errors).
+
+After (1)-(3) the synthesized sequence header matches the encoder's in every
+frame-relevant field (only the operating-point level and the colour
+description differ, neither affects frame parsing) and the first hidden ARF
+decodes.  What is left is not a flag: a hidden picture synthesized from VA
+parameters still has no access to the DPB state of the pictures that travelled
+verbatim - `SavedGmParams`, per-slot order hints, reference frame types - so
+its global-motion prediction is written against a mirror that only ever saw
+synthesized frames.  Pictures with `skip_mode_present`/`use_ref_frame_mvs`
+then fail, which is where the hardware runs die (stall from the second ARF on).
+
+Making this work needs one of:
+- a firmware that holds the hidden picture's OPB until the SEF arrives (the
+  X2E/iris36 behaviour) plus a matching kernel contract, so hidden pictures
+  can travel verbatim;
+- a full frame-header mirror of every verbatim picture (that is a decoder);
+- an explicit, spec-legal `show_existing_frame` AU after each hidden one, so
+  the firmware re-decodes the ARF for the client surface (costs one extra
+  decode per ARF, ~1.5x at 4K - the vendor "old chipset" behaviour).
+
+Until then the default single-model synthesized path is the supported one and
+`IRIS_AV1_LIFT` is a debugging knob, not a feature.
