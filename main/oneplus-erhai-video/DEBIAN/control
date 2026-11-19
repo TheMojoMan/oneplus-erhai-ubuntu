@@ -103,17 +103,13 @@ Description: Hardware video decoding for the OnePlus Pad 3 (erhai, SM8750)
  recreated).  Both were verified on the pad with 0 failures over a long 4K AV1
  run.  The freeze itself was Mutter withholding Wayland frame callbacks
  (oneplus-erhai-mutter +erhai3), not the driver.
- 1.14 (2026-11-19): AV1 is decoded the way VP9/H.264/HEVC are.  The driver now
- hands the encoder's own access units to the firmware, which parses the headers
- and owns the reference state; it no longer synthesizes OBU headers, rebuilds
- every reference through a private DPB or guesses the refresh set.  Two bugs came
- with the old design: a seek restarted the firmware session but the cached
- encoder sequence header was skipped, so the first key frame was decoded without
- one (VA_STATUS_ERROR_DECODING_ERROR, Chrome dropped the decoder and the player
- hung on its loading animation), and the forced-show rewrite of hidden
- pictures desynchronized the firmware.  Hidden pictures (the alternate
- references a show_existing_frame displays later) are now forced shown at bit
- level inside the encoder's own header - show_frame flipped, showable_frame
- bit dropped - so their pixels reach the client surface while everything else
- stays bit-exact.  Owner test: 4K AV1 plays with correct images, seeks no longer
- flicker.
+ 1.14 (2026-11-19): a seek restarts the firmware session, but the driver kept
+ its cached copy of the encoder's AV1 sequence header, so the first key frame
+ after the restart was submitted with the sequence header stripped; a fresh
+ firmware session has none, answered VA_STATUS_ERROR_DECODING_ERROR, Chrome
+ destroyed the decoder and the player sat on its loading animation.  The cache
+ is now cleared on every session reset.  AV1 otherwise stays on the synthesized
+ header path of 1.13: driving the firmware with the encoder's own access units
+ (tested as IRIS_AV1_LIFT=1) is not reliable - the firmware answered
+ "internal decoding error" at stream start on a 4K AV1 stream, Chrome fell back
+ to other decoders and YouTube dropped the rendition to 480p.

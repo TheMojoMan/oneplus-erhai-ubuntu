@@ -2725,12 +2725,12 @@ av1_reset_session(struct iris_decode_ctx *ctx)
 	memset(ctx->av1.hist_surface, 0, sizeof(ctx->av1.hist_surface));
 	ctx->av1.hist_pos = 0;
 	ctx->av1.have_order_hint = 0;
-	/* The firmware session is gone, so it has no sequence header any more.
-	 * Forgetting the cached copy makes the next lifted access unit carry it
-	 * again -- without this, a seek restarted the session and the first
-	 * (key) frame was submitted without the encoder's sequence header, the
-	 * firmware answered VA_STATUS_ERROR_DECODING_ERROR, Chrome tore the
-	 * decoder down and the player sat on its loading animation. */
+	/* The firmware session is gone, so it no longer has the encoder's
+	 * sequence header.  Forgetting the cached copy makes the next lifted
+	 * access unit carry it again; without this a seek restarted the session
+	 * and the first key frame went out without a sequence header, the
+	 * firmware answered VA_STATUS_ERROR_DECODING_ERROR and Chrome dropped
+	 * the decoder.  Only relevant while IRIS_AV1_LIFT=1. */
 	ctx->av1.seq_len = 0;
 	av1_writer_reset(&ctx->av1.writer);
 }
@@ -3087,39 +3087,6 @@ av1_original_refresh(const uint8_t *data, size_t data_len,
 }
 
 /* Synthesize and queue one AV1 access unit. */
-/* Force a hidden original AU (show_frame = 0) to be shown by editing the
- * encoder's own uncompressed header instead of re-synthesizing it: flip the
- * coded show_frame bit and delete the showable_frame bit that only exists while
- * show_frame is 0.  Everything else - frame type, refresh set, order hints,
- * CDF, tile offsets - stays bit-exact, so the firmware keeps parsing what the
- * encoder wrote.  It simply produces the picture into the client's surface,
- * which is the surface a later show_existing_frame puts on screen: without it
- * that surface keeps older pixels and the client displays a stale frame.
- *
- * The header ends with byte_alignment() padding, so removing one bit never
- * changes its byte length: the freed bit becomes one more padding bit. */
-static void
-av1_force_show_bit(uint8_t *hdr, size_t hdr_len)
-{
-	size_t nbits, i;
-
-	if (hdr_len < 2)
-		return;
-	nbits = hdr_len * 8;
-	/* bit 0 show_existing_frame (0 here), bits 1-2 frame_type,
-	 * bit 3 show_frame, bit 4 showable_frame (coded only while hidden). */
-	hdr[0] |= 0x10;
-	for (i = 4; i + 1 < nbits; i++) {
-		unsigned bit = (hdr[(i + 1) >> 3] >> (7 - ((i + 1) & 7))) & 1;
-
-		if (bit)
-			hdr[i >> 3] |= (uint8_t)(1u << (7 - (i & 7)));
-		else
-			hdr[i >> 3] &= (uint8_t)~(1u << (7 - (i & 7)));
-	}
-	hdr[hdr_len - 1] &= (uint8_t)~1u;
-}
-
 static int
 av1_submit(struct iris_decode_ctx *ctx,
 	   const VADecPictureParameterBufferAV1 *pic,
@@ -3137,7 +3104,7 @@ av1_submit(struct iris_decode_ctx *ctx,
 	uint64_t ts;
 	unsigned int i, count = 0;
 	int ret, emit_seq = 0, mapped = 1;
-	int lift_hidden = 0, lifted = 0, forced_show = 0;
+	int lift_hidden = 0, lifted = 0;
 	int lift_has_seq;
 	unsigned int lift_ftype;
 	size_t lift_start = 0, lift_len = 0, lift_payload = 0;
@@ -3210,37 +3177,17 @@ av1_submit(struct iris_decode_ctx *ctx,
 	 * The encoder's own frame header carries what VA's picture parameters
 	 * cannot - the loop-restoration coefficients, the true refresh set,
 	 * the coded order hints - so a verbatim submission is the only
-	 * bit-exact path once a stream uses those tools.
-	 *
-	 * This is the DEFAULT: AV1 then goes through the firmware exactly like
-	 * VP9/H.264/HEVC do, i.e. the firmware parses the bitstream and owns the
-	 * reference state, instead of the driver synthesizing headers and
-	 * rebuilding every reference from its own DPB.  The synthesized path
-	 * stays as the fallback for clients that hand over headerless tile
-	 * payloads only -- libavcodec's AV1 hwaccel parses the OBUs itself, so
-	 * av1_lift_original_au() fails for it and `lifted` stays 0.
-	 *
-	 * Hidden (show_frame = 0) pictures are NOT lifted: they are the alternate
-	 * references (ARFs) that a later show_existing_frame puts on screen, and
-	 * the client only ever has a surface for the picture it asked us to
-	 * decode.  A lifted hidden AU produces no capture buffer, so that surface
-	 * keeps its older pixels and the client then displays it - the screen then
-	 * alternates between the current frame and a stale one (owner report
-	 * 2026-11-19: "older frames shown in between the newer ones").
-	 *
-	 * The lift is therefore OPT-IN again (`IRIS_AV1_LIFT=1`) until the forced
-	 * show is done at bit level: flip the coded show_frame bit and drop the
-	 * showable_frame bit inside the encoder's own header instead of
-	 * re-synthesizing the whole header, which desynchronizes the firmware and
-	 * stalls the stream after ~15 s.
-	 *
-	 * The synthesized path is what 1.13 ships. */
+	 * bit-exact path once a stream uses those tools.  libavcodec's AV1
+	 * hwaccel hands over HEADERLESS tile payloads though (its decoder
+	 * parses the OBUs itself), so the lift can only serve clients that
+	 * submit framed OBUs (Chromium) and needs validation there first:
+	 * IRIS_AV1_LIFT=1 opts in.  Hidden pictures always need the
+	 * synthesized forced-show header. */
 	if (av1_lift_original_au(data, data_len, tiles, count, &lift_start,
 				 &lift_len, &lift_hidden, &lift_has_seq,
 				 &lift_payload, &lift_first_tile,
 				 &lift_ftype, &lift_frame_end) &&
-	    !(getenv("IRIS_AV1_LIFT") && atoi(getenv("IRIS_AV1_LIFT")) == 0) &&
-	    (!lift_hidden || lift_ftype != AV1_FRAME_KEY))
+	    getenv("IRIS_AV1_LIFT") && !lift_hidden)
 		lifted = 1;
 	(void)lift_len;
 	(void)lift_payload;
@@ -3426,17 +3373,6 @@ av1_submit(struct iris_decode_ctx *ctx,
 		au[1] = 0x00;
 		memcpy(au + 2, data + off, end - off);
 		au_len = 2 + (end - off);
-		if (lift_hidden) {
-			size_t hp = 2 + (lift_payload - off);
-			size_t ht = 2 + (lift_first_tile - off);
-
-			if (hp < ht && ht <= au_len) {
-				av1_force_show_bit(au + hp, ht - hp);
-				forced_show = 1;
-				DBG("[av1] au=%u hidden picture forced shown\n",
-				    ctx->av1.au_index);
-			}
-		}
 	} else {
 	if (!ctx->av1.writer.seq_valid ||
 	    !av1_seq_equal(&ctx->av1.writer.seq, &cfg)) {
@@ -3502,7 +3438,7 @@ av1_submit(struct iris_decode_ctx *ctx,
 	ctx->av1.last_order_hint = pic->order_hint;
 	ctx->av1.have_order_hint = 1;
 	ctx->av1.au_index++;
-	ctx->av1.last_hidden = (lifted && lift_hidden && !forced_show) ? 1 : 0;
+	ctx->av1.last_hidden = lifted ? lift_hidden : 0;
 
 	/* IRIS_AV1_DUMP_ONLY=1 builds and dumps the access unit but never touches
 	 * the VPU.  Header work is then validated against a software decoder
@@ -3558,7 +3494,7 @@ av1_submit(struct iris_decode_ctx *ctx,
 
 	ctx->last_target = target;
 	qt = find_surface(ctx, target);
-	if (qt && !(lifted && lift_hidden && !forced_show)) {
+	if (qt && !(lifted && lift_hidden)) {
 		uint64_t token = __atomic_add_fetch(&g_surface_fence_token, 1,
 						    __ATOMIC_RELAXED);
 
@@ -3580,7 +3516,7 @@ av1_submit(struct iris_decode_ctx *ctx,
 	}
 	ctx->seq++;
 	ctx->last_submit_ns = monotonic_ns();
-	if (!(lifted && lift_hidden && !forced_show))
+	if (!(lifted && lift_hidden))
 		hevc_pending_add(ctx, 0, target, generation);
 
 	return drain_available(ctx);
@@ -3663,6 +3599,7 @@ iris_decode_av1_end(struct iris_decode_ctx *ctx)
 {
 	uint64_t end_start = ctx->stats_enabled ? monotonic_ns() : 0;
 	int random_access, ret;
+
 	if (!ctx->av1.have_pic)
 		return -1;
 
