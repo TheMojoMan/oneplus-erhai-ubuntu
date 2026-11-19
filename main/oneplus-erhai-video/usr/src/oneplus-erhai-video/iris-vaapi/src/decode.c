@@ -2725,6 +2725,13 @@ av1_reset_session(struct iris_decode_ctx *ctx)
 	memset(ctx->av1.hist_surface, 0, sizeof(ctx->av1.hist_surface));
 	ctx->av1.hist_pos = 0;
 	ctx->av1.have_order_hint = 0;
+	/* The firmware session is gone, so it has no sequence header any more.
+	 * Forgetting the cached copy makes the next lifted access unit carry it
+	 * again -- without this, a seek restarted the session and the first
+	 * (key) frame was submitted without the encoder's sequence header, the
+	 * firmware answered VA_STATUS_ERROR_DECODING_ERROR, Chrome tore the
+	 * decoder down and the player sat on its loading animation. */
+	ctx->av1.seq_len = 0;
 	av1_writer_reset(&ctx->av1.writer);
 }
 
@@ -3170,17 +3177,27 @@ av1_submit(struct iris_decode_ctx *ctx,
 	 * The encoder's own frame header carries what VA's picture parameters
 	 * cannot - the loop-restoration coefficients, the true refresh set,
 	 * the coded order hints - so a verbatim submission is the only
-	 * bit-exact path once a stream uses those tools.  libavcodec's AV1
-	 * hwaccel hands over HEADERLESS tile payloads though (its decoder
-	 * parses the OBUs itself), so the lift can only serve clients that
-	 * submit framed OBUs (Chromium) and needs validation there first:
-	 * IRIS_AV1_LIFT=1 opts in.  Hidden pictures always need the
-	 * synthesized forced-show header. */
+	 * bit-exact path once a stream uses those tools.
+	 *
+	 * This is the DEFAULT: AV1 then goes through the firmware exactly like
+	 * VP9/H.264/HEVC do, i.e. the firmware parses the bitstream and owns the
+	 * reference state, instead of the driver synthesizing headers and
+	 * rebuilding every reference from its own DPB.  The synthesized path
+	 * stays as the fallback for clients that hand over headerless tile
+	 * payloads only -- libavcodec's AV1 hwaccel parses the OBUs itself, so
+	 * av1_lift_original_au() fails for it and `lifted` stays 0.
+	 *
+	 * Hidden (show_frame = 0) pictures are lifted as well: mixing verbatim
+	 * AUs with synthesized forced-show headers desynchronizes the firmware,
+	 * which now tracks the encoder's own state.  A hidden AU produces no
+	 * capture buffer, which the submit path already accounts for (no
+	 * surface write, no pending target, previous contents served).
+	 * IRIS_AV1_LIFT=0 forces the old synthesized path for comparison. */
 	if (av1_lift_original_au(data, data_len, tiles, count, &lift_start,
 				 &lift_len, &lift_hidden, &lift_has_seq,
 				 &lift_payload, &lift_first_tile,
 				 &lift_ftype, &lift_frame_end) &&
-	    getenv("IRIS_AV1_LIFT") && !lift_hidden)
+	    !(getenv("IRIS_AV1_LIFT") && atoi(getenv("IRIS_AV1_LIFT")) == 0))
 		lifted = 1;
 	(void)lift_len;
 	(void)lift_payload;
