@@ -73,7 +73,7 @@ JOBS="${JOBS:-$(nproc)}"
 # counter exists; DEB_REV=<n> exported by the caller overrides it in both.
 
 # ------------------------------------------------------------------ source ---
-if [ ! -d "$KERNEL_TREE/.git" ]; then
+if [ ! -e "$KERNEL_TREE/.git" ]; then
 	echo "kernel tree $KERNEL_TREE not found -- cloning $KERNEL_REPO ($BRANCH)"
 	git clone --branch="$BRANCH" "$KERNEL_REPO" "$KERNEL_TREE"
 else
