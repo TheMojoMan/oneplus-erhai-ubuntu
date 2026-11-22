@@ -599,6 +599,9 @@ if [ "$SETACTIVE_FIRST" = 1 ] || [ "$PARK_GPU" = 1 ]; then
             say "STEP4c !!! GPU never parked within ${PARK_WAIT}s — ABORTING (no suspend)"
             echo on > "$GPU/control" 2>/dev/null
             say "STEP4c abort: GPU re-pinned $(snap)"
+            # an aborted run must not leave mem_sleep on the state it selected
+            # (the last STEP4 selection is reverted by STEP6 only on a completed run)
+            [ -n "${ORIG_MEM_SLEEP:-}" ] && echo "$ORIG_MEM_SLEEP" > /sys/power/mem_sleep 2>/dev/null
             exit 3
         fi
         say "STEP4c PARK confirmed — proceeding to STEP5 immediately"
