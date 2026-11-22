@@ -239,8 +239,42 @@ usb_restore() {        # re-probe the host iff STEP2f unbound it (idempotent, tr
     kmsg "USB rebind done devices=$(usb_nonroot_devs)"
     return 0
 }
+# ---- STEP4d: quiesce the ADSP sensor streams (deep-suspend blocker)
+# A live SSC/fastrpc sensor stream keeps the ADSP busy, and a busy ADSP makes
+# the firmware return from PSCI SYSTEM_SUSPEND almost immediately: measured
+# 0.03-0.19 s instead of the RTC alarm's 20 s (b5, 2026-11-22).  The folio
+# watcher streams the magnetometer at 5 Hz for its whole life (and the gate
+# restarts it), so stop the gate FIRST, then the watcher.  sscli exiting is
+# what frees the ADSP; the services are started again after the resume.
+SSC_QUIESCE=${SSC_QUIESCE:-1}
+SSC_UNITS="erhai-folio-gate.service erhai-folio-fold.service iio-sensor-proxy.service"
+SSC_STOPPED=""
+ssc_stop() {
+    [ "$SSC_QUIESCE" = 1 ] || { say "STEP4d ADSP sensor quiesce disabled (SSC_QUIESCE=0)"; return 0; }
+    for _u in $SSC_UNITS; do
+        if systemctl is-active --quiet "$_u" 2>/dev/null; then
+            systemctl stop "$_u" 2>/dev/null && SSC_STOPPED="$SSC_STOPPED $_u"
+        fi
+    done
+    _i=0
+    while [ "$_i" -lt 10 ] && pgrep -x ssccli >/dev/null 2>&1; do
+        sleep 0.5; _i=$((_i+1))
+    done
+    if pgrep -x ssccli >/dev/null 2>&1; then
+        say "STEP4d !!! ssccli still running after ${_i} polls ($(pgrep -x ssccli | tr '\n' ' ')) — the deep entry may abort in <1 s"
+    else
+        say "STEP4d ADSP sensor streams quiesced (stopped:${SSC_STOPPED:- none})"
+    fi
+}
+ssc_restore() {
+    [ -n "${SSC_STOPPED:-}" ] || return 0
+    # shellcheck disable=SC2086
+    systemctl start $SSC_STOPPED 2>/dev/null
+    say "STEP6 sensor services restarted:$SSC_STOPPED"
+    SSC_STOPPED=""
+}
 # belt-and-braces: an abort path that exits after the unbind still re-binds (idempotent)
-trap 'usb_restore 2>/dev/null || true' EXIT INT TERM
+trap 'ssc_restore 2>/dev/null || true; usb_restore 2>/dev/null || true' EXIT INT TERM
 
 say "===== SUSPEND s2idle RUN START (WAKE_SECS=$WAKE_SECS QUIESCE=$QUIESCE DISPLAY_OFF_FIRST=$DISPLAY_OFF_FIRST DRY=$DRY MEM_STATE=$MEM_STATE) ====="
 kmsg "START WAKE_SECS=$WAKE_SECS QUIESCE=$QUIESCE"
@@ -572,6 +606,7 @@ if [ "$SETACTIVE_FIRST" = 1 ] || [ "$PARK_GPU" = 1 ]; then
 fi
 
 # ---- STEP 5: THE SUSPEND
+ssc_stop
 if [ "$DRY" = 1 ]; then
     say "STEP5 DRY run — not writing /sys/power/state"
 else
@@ -638,6 +673,9 @@ if [ -n "${ORIG_MEM_SLEEP:-}" ]; then
     echo "$ORIG_MEM_SLEEP" > /sys/power/mem_sleep 2>/dev/null
     say "STEP6 mem_sleep restored=[$(cat /sys/power/mem_sleep)] (orig=$ORIG_MEM_SLEEP)"
 fi
+# STEP4d: bring the ADSP sensor users back only after the panel is restored
+# (erhai-folio-fold's ExecStopPost unblanks, and a restart re-reads the fold).
+ssc_restore
 if [ -n "$WLAN_TM_ORIG" ]; then
     if [ "$WLAN_TM_ORIG" != 1000000 ]; then
         echo "$WLAN_TM_ORIG" > "$WLAN_TM" 2>/dev/null && say "STEP6 WCN timer_multiplier restored -> $WLAN_TM_ORIG"
