@@ -1,28 +1,31 @@
 Package: oneplus-erhai-wifi
-Version: 1.5
+Version: 1.6
 Section: net
 Priority: optional
 Architecture: all
 Maintainer: TheMojoMan <themojoman@gmx.net>
-Depends: network-manager, iw, iproute2
+Depends: network-manager, iw, iproute2, oneplus-erhai-firmware (>= 1.4)
 Recommends: kmod
-Description: WCN7880 WiFi bring-up for the OnePlus Pad 3 (erhai)
- Everything the internal WCN7880 (WCN7850-family) WiFi needs on the erhai
- image: modprobe.d policy (blacklist ath12k, no cnss2 auto-load), the
- erhai-wcn-holdfloor / erhai-wcn-devcd / erhai-wcn-wifi systemd units and
- their scripts (erhai-wcn-wifi.sh, save-wcn-devcd.sh, wl_drvcmd), and the
- qcacld config INI (scan_mode_6ghz=0 so 5GHz networks show at cold boot).
+Description: WCN7860 WiFi policy for the OnePlus Pad 3 (erhai)
+ Selects the mainline ath12k driver for the internal WCN7860 radio: the
+ modprobe policy no longer blacklists ath12k and instead blacklists the
+ cnss2/qcacld vendor stack (cnss2, wlan), so udev binds ath12k_pci to the
+ PCIe endpoint at boot, the firmware from oneplus-erhai-firmware 1.4
+ (ath12k/WCN7860/hw2.0) is downloaded, and NetworkManager takes over the
+ wlp1s0 station as usual. The WCN7880 power calibration that ath12k does
+ itself is untouched by any modprobe option.
  .
- erhai-wcn-wifi.service (oneshot at boot, after NetworkManager) brings the
- station up: wait for the PCIe endpoint, modprobe cnss2 until fs_ready
- appears, trigger the cold-boot calibration, settle, modprobe wlan
- (qcacld-3.0 mission driver from the kernel deb's extra/), detect the
- managed-type netdev, set the country via wl_drvcmd and hand the interface
- to NetworkManager for last-used autoconnect.
+ Needs the 7.3.4 kernel line at +b6 or newer (the first release with the
+ WCN7860 hw2.0 definition, the pwrctrl pwrseq 110e match and the three
+ PCIe/GCC wake patches); older kernels have no driver for this radio and
+ the ath12k firmware cannot be used by them.
  .
- erhai-wifi-discover.service runs erhai-wifi-discover.sh: while the internal
- station is disconnected it fires small-channel-list active scans every 30s
- because the qcacld firmware never probes UNII-1 (ch36-48) in disconnected
- full-band scans — without this, 5GHz APs on UNII-1 are found only by
- passive beacon luck or after connecting on 2.4GHz first.
-
+ The cnss2/qcacld backend is still shipped but no longer enabled:
+ erhai-wcn-wifi.service, erhai-wcn-holdfloor.service,
+ erhai-wcn-devcd.service, erhai-wifi-discover.service and their scripts
+ (erhai-wcn-wifi.sh, erhai-wcn-recover.sh, save-wcn-devcd.sh,
+ erhai-wifi-discover.sh, wl_drvcmd) plus the qcacld INI
+ (WCNSS_qcom_cfg.ini, scan_mode_6ghz=0) remain on disk for a manual
+ fallback: blacklist ath12k, unblacklist wlan/cnss2 and
+ `systemctl enable --now erhai-wcn-wifi.service`. version 1.5 of this
+ package is the last one that defaults to that backend.

@@ -1,5 +1,5 @@
 Package: oneplus-erhai-firmware
-Version: 1.3
+Version: 1.4
 Architecture: arm64
 Maintainer: TheMojoMan <themojoman@gmx.net>
 Conflicts: linux-firmware
@@ -11,4 +11,10 @@ Description: Firmware blobs for OnePlus Pad 3 (erhai)
  (cdsp.mdt + cdsp.bNN + cdsp_dtb.mdt + cdsp_dtb.bNN) that hosts the
  Hexagon NPU (HTP) and is the prerequisite for FastRPC on the compute
  DSP (/dev/fastrpc-cdsp).
+ .
+ Since 1.4 the ath12k firmware set for the mainline WCN7860 radio
+ (ath12k/WCN7860/hw2.0: amss, m3, aux_ucode, qdss.cfg and the board-2/regdb
+ built from this model's own WCN calibration data), which the mainline
+ ath12k driver in the 7.3.4 kernel needs instead of the cnss2/qcacld vendor
+ stack. The WCN7850 set under ath12k/WCN7850 is unchanged.
 

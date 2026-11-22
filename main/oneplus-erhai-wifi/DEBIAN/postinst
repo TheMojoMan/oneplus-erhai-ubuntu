@@ -1,25 +1,40 @@
 #!/bin/sh
-# Enable the three WCN7880 bring-up services after install/upgrade.
+# 1.6 and later: ath12k is the backend, so the cnss2/qcacld units are NOT
+# enabled; with the old 1.5 package they were. Disable them and drop the wants
+# symlinks that 1.5 created in /etc (dpkg does not own those), otherwise systemd
+# logs "unit not found" at every boot.
 set -e
 
-enable_unit() {
+drop_unit() {
 	unit="$1"
-	wants="/etc/systemd/system/$2.target.wants/$unit"
-	ln -sf "../$unit" "$wants"
+	target="$2"
+	wants="/etc/systemd/system/$target.wants"
+	if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+		systemctl disable "$unit" >/dev/null 2>&1 || true
+		systemctl stop "$unit" >/dev/null 2>&1 || true
+	fi
+	rm -f "$wants/$unit"
 }
+
+drop_unit erhai-wcn-wifi.service multi-user
+drop_unit erhai-wcn-devcd.service multi-user
+drop_unit erhai-wcn-holdfloor.service sysinit
+drop_unit erhai-wifi-discover.service multi-user
 
 if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
 	systemctl daemon-reload || true
-	systemctl enable erhai-wcn-holdfloor.service || true
-	systemctl enable erhai-wcn-devcd.service || true
-	systemctl enable erhai-wcn-wifi.service || true
-	systemctl enable erhai-wifi-discover.service || true
-else
-	# Image build chroot (no systemd running): enable via wants symlinks.
-	enable_unit erhai-wcn-holdfloor.service sysinit
-	enable_unit erhai-wcn-devcd.service multi-user
-	enable_unit erhai-wcn-wifi.service multi-user
-	enable_unit erhai-wifi-discover.service multi-user
 fi
+
+# ath12k itself needs no unit: udev binds ath12k_pci to 0000:01:00.0 and
+# NetworkManager manages wlp1s0. The firmware comes from oneplus-erhai-firmware
+# (>= 1.4); say so loudly if it is missing, the module will fail with "no
+# firmware" otherwise.
+if [ ! -f /usr/lib/firmware/ath12k/WCN7860/hw2.0/board-2.bin ]; then
+	echo "warning: /usr/lib/firmware/ath12k/WCN7860/hw2.0/board-2.bin is missing;" >&2
+	echo "         install oneplus-erhai-firmware 1.4 or newer, ath12k needs it." >&2
+fi
+
+# The vendor path is kept for a manual fallback: see
+# /usr/share/oneplus-erhai-wifi/README.md
 
 exit 0
