@@ -273,8 +273,18 @@ ssc_restore() {
     say "STEP6 sensor services restarted:$SSC_STOPPED"
     SSC_STOPPED=""
 }
+# Any exit after STEP2b must give the power button back: a STEP4c abort used to
+# leave erhai-power-toggle.service stopped, so the owner's next press did
+# nothing and the blanked panel stayed dark until something else ran
+# (2026-11-22 18:27, "pressed the power key, ~10 s until the panel came back").
+pw_restore() {
+    [ "${POWERWATCH_ACTIVE:-0}" = 1 ] || return 0
+    systemctl is-active --quiet erhai-power-toggle.service && return 0
+    systemctl start erhai-power-toggle.service 2>/dev/null && \
+        say "exit: power-watch service restarted (was stopped for the sleep window)"
+}
 # belt-and-braces: an abort path that exits after the unbind still re-binds (idempotent)
-trap 'ssc_restore 2>/dev/null || true; usb_restore 2>/dev/null || true' EXIT INT TERM
+trap 'ssc_restore 2>/dev/null || true; pw_restore 2>/dev/null || true; usb_restore 2>/dev/null || true' EXIT INT TERM
 
 say "===== SUSPEND s2idle RUN START (WAKE_SECS=$WAKE_SECS QUIESCE=$QUIESCE DISPLAY_OFF_FIRST=$DISPLAY_OFF_FIRST DRY=$DRY MEM_STATE=$MEM_STATE) ====="
 kmsg "START WAKE_SECS=$WAKE_SECS QUIESCE=$QUIESCE"
