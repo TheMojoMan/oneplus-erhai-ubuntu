@@ -365,6 +365,20 @@ class FoldWatcher:
         self.startup_dwell = max(
             self.dwell, cfg_int(cfg, "STARTUP_DWELL_MS", 1500) / 1000.0)
         self.log_signal = cfg_int(cfg, "LOG_SIGNAL", 0) == 1
+        # Reject samples outside the calibrated envelope.  The SSC
+        # magnetometer can report |mag| of 2-3 mT for the first seconds after
+        # boot (before its calibration settles); that is far above the folded
+        # band, so without this the watcher declares FOLDED at the greeter,
+        # blanks the panel and grabs the keyboard/touchscreen (2026-11-22).
+        pmin = (cfg.get("PLAUSIBLE_MIN") or "").strip()
+        pmax = (cfg.get("PLAUSIBLE_MAX") or "").strip()
+        self.plausible = None
+        if pmin and pmax:
+            try:
+                self.plausible = (float(pmin), float(pmax))
+            except ValueError:
+                log(f"bad PLAUSIBLE_MIN/MAX {pmin!r}/{pmax!r}; ignoring")
+        self.reject_logged = False
         self.toggle = args.toggle_cmd.split() if args.toggle_cmd else \
             shlex.split(cfg.get("TOGGLE_CMD") or TOGGLE_DEFAULT)
         # The POWER path, used when an unfold has to hand a power-button blank
@@ -639,6 +653,16 @@ class FoldWatcher:
                     break
             if math.isnan(v):
                 continue
+            if self.plausible and not (
+                    self.plausible[0] <= v <= self.plausible[1]):
+                self.pending = None
+                if not self.reject_logged:
+                    log(f"implausible signal {v:.4f} (plausible "
+                        f"{self.plausible[0]:g}..{self.plausible[1]:g})"
+                        f" -> ignored")
+                    self.reject_logged = True
+                continue
+            self.reject_logged = False
             if first:
                 log(f"first sample: {v:.4f} (state {self.state})")
                 first = False
