@@ -6,6 +6,10 @@
 
 #include <stdio.h>
 #include <errno.h>
+#include <time.h>
+#include <unistd.h>
+
+static void present_note(char tag, unsigned int surface_id);
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1201,6 +1205,8 @@ iris_vaDeriveImage(VADriverContextP ctx, VASurfaceID surface, VAImage *image)
 	void *mem;
 	VABufferID bid;
 
+	present_note('D', surface);
+
 	if (!dd || !image)
 		return VA_STATUS_ERROR_INVALID_SURFACE;
 	if (iris_surfs_buffer(dd->surfs, surface, &mem, &pitch, &size,
@@ -1282,6 +1288,7 @@ iris_vaGetImage(VADriverContextP ctx, VASurfaceID surface, int x, int y,
 
 	if (!dd)
 		return VA_STATUS_ERROR_INVALID_PARAMETER;
+	present_note('G', surface);
 	if (!dd->surfs || !iris_surfs_valid(dd->surfs, surface))
 		return VA_STATUS_ERROR_INVALID_SURFACE;
 	i = iris_surfs_sync(dd->surfs, surface);
@@ -1416,6 +1423,38 @@ iris_vaSetDisplayAttributes(VADriverContextP ctx, VADisplayAttribute *attr_list,
 	return VA_STATUS_SUCCESS;
 }
 
+/* Presentation trace: Chromium asks for a dma-buf exactly when it is about to
+ * hand a decoded surface to its compositor, so the order of these calls is the
+ * display order the client intends.  IRIS_PRESENT_LOG=<path> records one line
+ * per export (monotonic ns, surface id); it is only a counter + a buffered
+ * fprintf, far too cheap to perturb the pipeline. */
+static FILE *present_log;
+static int present_log_state;
+
+static void
+present_note(char tag, unsigned int surface_id)
+{
+	if (present_log_state == 0) {
+		const char *path = getenv("IRIS_PRESENT_LOG");
+
+		if (path && *path) {
+			present_log = fopen(path, "a");
+			present_log_state = present_log ? 1 : -1;
+		} else {
+			present_log_state = -1;
+		}
+	}
+	if (present_log_state == 1 && present_log) {
+		struct timespec ts;
+
+		clock_gettime(CLOCK_MONOTONIC, &ts);
+		fprintf(present_log, "%d %llu %c %u\n", (int)getpid(),
+			(unsigned long long)ts.tv_sec * 1000000000ULL + ts.tv_nsec,
+			tag, surface_id);
+		fflush(present_log);
+	}
+}
+
 static VAStatus
 iris_vaExportSurfaceHandle(VADriverContextP ctx, VASurfaceID surface_id,
 			   uint32_t mem_type, uint32_t flags, void *descriptor)
@@ -1438,6 +1477,7 @@ iris_vaExportSurfaceHandle(VADriverContextP ctx, VASurfaceID surface_id,
 	    layer_flags != VA_EXPORT_SURFACE_COMPOSED_LAYERS)
 		return VA_STATUS_ERROR_INVALID_PARAMETER;
 
+	present_note('E', surface_id);
 	DBG("[export] surf=%u type=%u flags=0x%x\n", surface_id,
 	    mem_type, flags);
 	if (iris_surfs_export(dd->surfs, surface_id, &fd, &pitch, &size,

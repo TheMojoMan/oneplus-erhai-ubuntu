@@ -480,6 +480,131 @@ struct iris_decode_ctx {
 	int force_h264_sync_end;
 };
 
+/* Frame dump for "what did iris actually deliver" (IRIS_DUMP_DIR=<dir>).
+ *
+ * Every decoded frame is written half resolution, NV12, to <dir>/frames.yuv in
+ * delivery order, with <dir>/index.tsv carrying one line per frame (index,
+ * monotonic nanoseconds).  Half resolution keeps the write below 80 MB/s at
+ * 4K25 so the dump does not perturb the pipeline it is meant to observe. */
+static FILE *dump_yuv;
+static FILE *dump_idx;
+static int dump_state;			/* 0 = undecided, 1 = on, -1 = off */
+static unsigned char *dump_buf;
+static size_t dump_buf_size;
+static unsigned long dump_count;
+static unsigned int dump_w, dump_h;
+static unsigned long long dump_frame_idx;	/* capture buffer index */
+static unsigned long long dump_frame_ts;	/* sequence timestamp the picture was queued with */
+static unsigned int dump_frame_surf;		/* render target the frame was paired with */
+
+static void
+dump_note_frame(unsigned long long idx, unsigned long long ts, unsigned int surf)
+{
+	dump_frame_idx = idx;
+	dump_frame_ts = ts;
+	dump_frame_surf = surf;
+}
+
+static void
+dump_frame(const struct iris_surface *s, const void *src, size_t size)
+{
+	const unsigned char *y = src, *uv;
+	unsigned int w2, h2, x, yy;
+	unsigned char *out;
+	size_t need;
+
+	if (dump_state == 0) {
+		const char *dir = getenv("IRIS_DUMP_DIR");
+
+		if (!dir || !*dir) {
+			dump_state = -1;
+		} else {
+			char path[512];
+			int n = snprintf(path, sizeof(path), "%s/frames.yuv", dir);
+
+			dump_yuv = n > 0 && (size_t)n < sizeof(path) ? fopen(path, "wb") : NULL;
+			n = snprintf(path, sizeof(path), "%s/index.tsv", dir);
+			dump_idx = n > 0 && (size_t)n < sizeof(path) ? fopen(path, "w") : NULL;
+			if (dump_yuv && dump_idx)
+				dump_state = 1;
+			else
+				dump_state = -1;
+		}
+	}
+	if (dump_state != 1)
+		return;
+	/* NV12 only: P010 frames (10-bit) are 16 bits per sample and would need a
+	 * real conversion, which is not the point of this dump. */
+	if (s->fourcc != 0x3231564e /* NV12 */ || !s->sw || !s->sh)
+		return;
+	need = (size_t)s->sw * s->sh * 3 / 2;
+	if (size < need)
+		return;
+
+	w2 = s->sw / 2;
+	h2 = s->sh / 2;
+	/* Keep every frame the same size across sessions: the coded size carries
+	 * padding (e.g. 3840x2176), so clamp to 4K and drop the extra rows. */
+	if (w2 > 1920)
+		w2 = 1920;
+	if (h2 > 1080)
+		h2 = 1080;
+	if (!w2 || !h2)
+		return;
+	if (dump_buf_size < (size_t)w2 * h2 * 3 / 2) {
+		free(dump_buf);
+		dump_buf_size = (size_t)w2 * h2 * 3 / 2;
+		dump_buf = malloc(dump_buf_size);
+		if (!dump_buf) {
+			dump_state = -1;
+			return;
+		}
+	}
+	dump_w = w2;
+	dump_h = h2;
+	out = dump_buf;
+
+	/* luma: 2x2 box average */
+	for (yy = 0; yy < h2; yy++) {
+		const unsigned char *r0 = y + (size_t)(yy * 2) * s->sw;
+		const unsigned char *r1 = r0 + s->sw;
+
+		for (x = 0; x < w2; x++) {
+			unsigned int sx = x * 2;
+
+			out[x] = (unsigned char)(((unsigned int)r0[sx] + r0[sx + 1] +
+						 r1[sx] + r1[sx + 1]) / 4);
+		}
+		out += w2;
+	}
+
+	/* chroma: one averaged UV pair per 2x2 block */
+	uv = y + (size_t)s->sw * s->sh;
+	for (yy = 0; yy < h2 / 2; yy++) {
+		const unsigned char *r0 = uv + (size_t)(yy * 2) * s->sw;
+		const unsigned char *r1 = r0 + s->sw;
+
+		for (x = 0; x < w2 / 2; x++) {
+			unsigned int sx = x * 4;
+
+			out[x * 2] = (unsigned char)(((unsigned int)r0[sx] + r0[sx + 2] +
+						     r1[sx] + r1[sx + 2]) / 4);
+			out[x * 2 + 1] = (unsigned char)(((unsigned int)r0[sx + 1] + r0[sx + 3] +
+							 r1[sx + 1] + r1[sx + 3]) / 4);
+		}
+		out += w2;
+	}
+
+	if (fwrite(dump_buf, 1, dump_buf_size, dump_yuv) != dump_buf_size)
+		dump_state = -1;
+	else if (dump_idx) {
+		fprintf(dump_idx, "%lu %llu %llu %llu %u %u %u\n", dump_count++,
+			(unsigned long long)monotonic_ns(), dump_frame_idx, dump_frame_ts,
+			dump_frame_surf, w2, h2);
+		fflush(dump_idx);
+	}
+}
+
 static struct iris_surface *
 find_surface(struct iris_decode_ctx *ctx, VASurfaceID id);
 
@@ -512,6 +637,7 @@ surface_copy(struct iris_decode_ctx *ctx, struct iris_surface *s,
 
 	start = ctx->stats_enabled ? monotonic_ns() : 0;
 	memcpy(s->bmap, src, size);
+	dump_frame(s, src, size);
 	if (ctx->stats_enabled) {
 		ctx->stats_copy_ns += monotonic_ns() - start;
 		ctx->stats_copy_bytes += size;
@@ -1630,7 +1756,10 @@ assign_frame(struct iris_decode_ctx *ctx, const struct v4l2_dec_frame *frame)
 		v4l2_dec_qcap_idx(&ctx->dec, frame->index);
 		return -1;
 	} else if (frame->bytesused) {
-		int copy_ret = surface_vk_submit(ctx, s, frame);
+		int copy_ret;
+
+		dump_note_frame(frame->index, frame->timestamp, id);
+		copy_ret = surface_vk_submit(ctx, s, frame);
 
 		if (copy_ret == 0)
 			return id;
