@@ -23,6 +23,16 @@ Description: ErhaiCam — standalone camera app for the OnePlus Pad 3 (erhai)
  1..6396 rear / 1..3120 front) — the faders stretch with the window and stop
  50 px above its bottom edge.
  .
+ THE FRONT CAMERA IS NO LONGER REVERSED.  The stock SC820CS driver programs the
+ sensor's readout register 0x3221 to 0x60, which reads the front sensor out
+ MIRRORED: the preview flip then showed a non-mirrored preview, and photos and
+ videos were saved mirrored (text reversed).  At every front stream start the
+ app now sets the sensor's mirror bits (0x3221 = 0x66, as Android does), so the
+ raw frame is the true view again: a mirrored preview that moves with the user,
+ and photos and video saved un-flipped with readable text.  Colours do not
+ change, the rear is untouched, and with a driver that already sets 0x66 this
+ is a no-op.  The journal says "front readout un-mirrored".
+ .
  A RECORDING GETS A STEADY PICTURE: AE IS FROZEN.  While a take runs the
  exposure loop no longer writes the sensor — neither the exposure register nor
  the low-light frame length.  Every correction used to land as a brightness step
