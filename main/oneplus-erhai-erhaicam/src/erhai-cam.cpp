@@ -135,6 +135,14 @@ constexpr SensorSpec kFrontSensor = { "sc820cs", 0x10, 3128, 12512, 0, 3124 };
 /* VTS registers (both sensors, 16-bit big-endian pair) */
 constexpr int kVtsRegHi = 0x320e;
 constexpr int kVtsRegLo = 0x320f;
+/* Readout direction (both sensors): 0x3221 bits [6:5] = vertical flip, [2:1] =
+ * horizontal mirror.  The front SC820CS reads out MIRRORED unless both mirror
+ * bits are set (0x66, the value Android uses; the stock driver's mode table
+ * writes 0x60).  Measured 2026-11-22 on 7.3.4: at 0x60 a poster's text is
+ * mirrored in the raw frame, at 0x66 it reads correctly, and the colours (the
+ * Bayer order) do not change.  The rear's mode table already has 0x66. */
+constexpr int kReadoutReg = 0x3221;
+constexpr int kReadoutMirror = 0x06;
 constexpr int kExposureShift = 5;
 constexpr int kExposureMin = 1;
 constexpr int kExposureMax = 6396;       /* rear VTS(6404) - 8: fader fallback */
@@ -623,6 +631,25 @@ public:
 
 	int exposure_lines() const { return exposure_; }
 
+	/* Make the readout un-mirrored (see kReadoutReg): set both mirror bits,
+	 * keep the flip bits.  The mode table is reloaded at every stream start,
+	 * so the caller re-asserts this with the frame length.  A no-op when the
+	 * driver already sets them.  *changed reports whether it wrote. */
+	bool set_readout_unmirrored(bool *changed)
+	{
+		int value = 0;
+
+		*changed = false;
+		if (!read_reg(kReadoutReg, &value))
+			return false;
+		if ((value & kReadoutMirror) == kReadoutMirror)
+			return true;
+		if (!write_reg(kReadoutReg, value | kReadoutMirror))
+			return false;
+		*changed = true;
+		return true;
+	}
+
 	/* Read the register back (2-byte address, read flag = bit 15 of the
 	 * first address byte) so the manual slider starts where the sensor
 	 * really is.  Best effort — a silent sensor keeps the cached value. */
@@ -658,6 +685,31 @@ public:
 	}
 
 private:
+	/* One 8-bit register read (2-byte address, then 1 byte), I2C_RDWR. */
+	bool read_reg(int reg, int *value)
+	{
+		unsigned char addr[2] = {
+			(unsigned char)((reg >> 8) & 0xff),
+			(unsigned char)(reg & 0xff),
+		};
+		unsigned char data = 0;
+		struct i2c_msg msgs[2] = {};
+		struct i2c_rdwr_ioctl_data xfer = { msgs, 2 };
+
+		msgs[0].addr = spec_.addr;
+		msgs[0].flags = 0;
+		msgs[0].len = sizeof(addr);
+		msgs[0].buf = addr;
+		msgs[1].addr = spec_.addr;
+		msgs[1].flags = I2C_M_RD;
+		msgs[1].len = 1;
+		msgs[1].buf = &data;
+		if (ioctl(fd_, I2C_RDWR, &xfer) < 0)
+			return false;
+		*value = data;
+		return true;
+	}
+
 	/* One 8-bit register (2-byte address + value), I2C_RDWR — the same
 	 * transaction the exposure burst uses, so it works while the kernel
 	 * driver holds the CCI bus. */
@@ -2262,6 +2314,20 @@ static GstFlowReturn on_new_sample(GstAppSink *sink, gpointer ud)
 			app->sensor->set_exposure_lines(app->ae.exposure);
 		} else if (!app->ae.enabled) {
 			apply_exposure(app, app->ae.exposure);
+		}
+		/* The front's mode table reads out mirrored (kReadoutReg).  The
+		 * preview-only flip and the un-flipped photos/video (OWNER
+		 * DECISION 2026-09-07) assume a true-view raw frame, so
+		 * un-mirror the sensor. */
+		if (!app->rear && app->sensor_ok && app->sensor) {
+			bool changed = false;
+
+			if (!app->sensor->set_readout_unmirrored(&changed))
+				std::cerr << "erhai-cam: front readout mirror: "
+					  << "cannot read/write 0x3221\n";
+			else if (changed)
+				std::cerr << "erhai-cam: front readout "
+					  << "un-mirrored (0x3221 mirror bits set)\n";
 		}
 		if (!app->rear && !app->headless)
 			set_status(app, "Front camera");
