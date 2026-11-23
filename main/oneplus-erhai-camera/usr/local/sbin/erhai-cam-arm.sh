@@ -37,7 +37,20 @@ echo "$DEV" > "$DRV/unbind" 2>/dev/null
 sleep 1
 echo "$DEV" > "$DRV/bind"
 sleep 2
-[ -e "$POW" ] && echo on > "$POW" 2>/dev/null
+# Do NOT pin the CCI controller. `power/control=on` keeps the camera's power
+# domain (cam_cc_titan_top_gdsc, a child of mmcx -> cx) powered for as long as
+# the tablet is "armed", so it costs idle power forever and blocks CX collapse.
+# The CCI driver's runtime PM resumes the controller for the i2c transfers the
+# sensors need, so park it: set `auto` explicitly (a stale `on` from an older
+# version of this script must be cleared too). ERHAI_CCI_PIN=1 brings the old
+# pinned behaviour back for A/B if a camera regression ever points here.
+if [ -e "$POW" ]; then
+	if [ "${ERHAI_CCI_PIN:-0}" = 1 ]; then
+		echo on > "$POW" 2>/dev/null
+	else
+		echo auto > "$POW" 2>/dev/null
+	fi
+fi
 
 # Front sensor: bind whichever i2c device the sc820cs driver owns, by name, so
 # this does not hard-code a bus number that can move.
