@@ -2595,13 +2595,13 @@ iris_decode_slice(struct iris_decode_ctx *ctx, const void *data, size_t len)
  * tile.  The firmware parses a real OBU stream, so the headers are
  * synthesized (av1_params.c) and the tile payload is passed through.
  *
- * refresh_frame_flags is carried in VADecPictureParameterBufferAV1 for clients
- * that fill it in: hidden alt-refs have show_frame = 0 and refresh exactly one
- * slot, while many shown frames refresh nothing at all, and both look alike in
- * ref_frame_map[].  Older clients zero-fill the tail of the structure, so
- * refresh_frame_flags_valid is 0 for them and the refresh set is guessed from
- * our own DPB as before.  Note that a *valid* refresh_frame_flags of zero is
- * meaningful ("refresh no slot") and must not be treated as unknown.
+ * The refresh set comes from the encoder's own frame header: clients that
+ * submit framed OBUs (Chromium, Brave) let the driver parse it out of the
+ * blob, exactly like the lift path does.  Clients that submit headerless tile
+ * payloads (libavcodec's hwaccel, which is what mpv/VLC use) cannot be
+ * parsed, so the set is guessed from our own DPB; hidden alt-refs have
+ * show_frame = 0 and refresh exactly one slot, while many shown frames
+ * refresh nothing at all, and both look alike in ref_frame_map[].
  */
 
 /* Map every reference of @pic onto the slot of our own DPB that holds the same
@@ -3149,11 +3149,10 @@ av1_lift_original_au(const uint8_t *data, size_t data_len,
 }
 
 /* Parse the encoder's own refresh_frame_flags out of the original frame
- * header in the client's data blob.  Chromium links a stock libva whose
- * VADecPictureParameterBufferAV1 carries no refresh_frame_flags_valid, and
- * the guessed refresh set diverges from the bitstream after the first
- * overlay frame - one wrong slot clobbers a live reference and every
- * picture that uses it fails to decode.  This mirrors
+ * header in the client's data blob.  Clients that submit framed OBUs
+ * (Chromium, Brave) hand us one, and the guessed refresh set diverges from
+ * the bitstream after the first overlay frame - one wrong slot clobbers a
+ * live reference and every picture that uses it fails to decode.  This mirrors
  * write_uncompressed_header's emission order exactly: show_existing(1),
  * frame_type(2), show_frame(1), [showable_frame(1) if hidden],
  * [error_resilient(1) unless a shown key], disable_cdf_update(1),
@@ -3377,11 +3376,9 @@ av1_submit(struct iris_decode_ctx *ctx,
 		struct av1_seq_cfg rcfg;
 		int parsed = -1;
 
-		if (lift_mode || !pic->refresh_frame_flags_valid) {
-			av1_seq_from_pic(pic, ctx->width, ctx->height, &rcfg);
-			parsed = av1_original_refresh(data, data_len, tiles,
-						      count, &rcfg);
-		}
+		av1_seq_from_pic(pic, ctx->width, ctx->height, &rcfg);
+		parsed = av1_original_refresh(data, data_len, tiles,
+					      count, &rcfg);
 		DBG("[av1-rp] au=%u parsed=%d lift_mode=%d\n",
 		    ctx->av1.au_index, parsed, lift_mode);
 
@@ -3392,12 +3389,8 @@ av1_submit(struct iris_decode_ctx *ctx,
 				ref_idx[i] = pic->ref_frame_idx[i] & 7;
 		} else {
 			mapped = av1_remap_refs(ctx, pic, ref_idx);
-			if (pic->refresh_frame_flags_valid)
-				refresh_flags = pic->refresh_frame_flags;
-			else
-				refresh_flags = parsed >= 0 ?
-					(unsigned)parsed :
-					av1_pick_refresh(ctx, pic);
+			refresh_flags = parsed >= 0 ?
+				(unsigned)parsed : av1_pick_refresh(ctx, pic);
 			if (lift_mode && !mapped)
 				DBG("[av1] firmware-native picture without a "
 				    "parseable header; falling back to the "

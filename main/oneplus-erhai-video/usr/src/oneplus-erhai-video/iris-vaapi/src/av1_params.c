@@ -22,25 +22,15 @@
 #include "av1_bits.h"
 #include "av1_params.h"
 
-/* VA-API documents no value order for the loop-restoration types, and the
- * two client classes that reach this driver disagree:
- * - libavcodec built against the av1fix libva passes the raw AV1
- *   syntax order (0 none, 1 switchable, 2 wiener, 3 sgrproj);
- * - stock-libva clients (Chromium, Brave) pass the DXVA/Vulkan enum
- *   order (0 none, 1 wiener, 2 sgrproj, 3 switchable).
- * The av1fix tail field (refresh_frame_flags_valid, which the refresh
- * parse already uses to tell the classes apart) selects the mapping:
- * writing the wrong one desyncs the tile data's LR coefficient section
- * and the frame fails to decode at all. */
-static const uint8_t va_lr_syntax_to_av1[4] = { 0, 1, 2, 3 };
+/* VA-API documents no value order for the loop-restoration types.  Every
+ * client that reaches this driver (Chromium, Brave, and the distribution
+ * libavcodec stack used by mpv/VLC) passes the DXVA/Vulkan enum order
+ * (0 none, 1 wiener, 2 sgrproj, 3 switchable).  The raw AV1 syntax order
+ * (0 none, 1 switchable, 2 wiener, 3 sgrproj) only ever came from the
+ * /usr/local av1fix ffmpeg build, which is retired: writing the wrong
+ * order desyncs the tile data's LR coefficient section and the frame fails
+ * to decode at all. */
 static const uint8_t va_lr_dxva_to_av1[4] = { 0, 2, 3, 1 };
-
-static const uint8_t *
-va_lr_map_for(const VADecPictureParameterBufferAV1 *pic)
-{
-	return pic->refresh_frame_flags_valid ?
-		va_lr_syntax_to_av1 : va_lr_dxva_to_av1;
-}
 
 /* Specification constants. */
 #define AV1_MAX_TILE_WIDTH	4096
@@ -1400,7 +1390,7 @@ write_uncompressed_header(struct av1_bw *bw, struct av1_writer *w,
 				type = pic->loop_restoration_fields.bits.cbframe_restoration_type;
 			else
 				type = pic->loop_restoration_fields.bits.crframe_restoration_type;
-			type = va_lr_map_for(pic)[type & 3];
+			type = va_lr_dxva_to_av1[type & 3];
 			av1_bw_bits(bw, type, 2);
 			if (type) {
 				uses_lr = 1;
