@@ -1,0 +1,29 @@
+#!/bin/sh
+# oneplus-erhai-av1fix postrm: give /usr/bin/vlc back to the vlc package.
+# On upgrade the new postinst has already reinstalled the wrapper, so nothing
+# happens for $1 = upgrade.
+set -e
+
+BIN=/usr/bin/vlc
+BAK=/usr/bin/vlc.erhai-orig
+PKG=oneplus-erhai-av1fix
+
+if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
+	if [ -f "$BAK" ]; then
+		tmp="$BIN.erhai-restore.$$"
+		cp -a "$BAK" "$tmp"
+		mv -f "$tmp" "$BIN"
+	fi
+	if dpkg-divert --list "$BIN" 2>/dev/null | grep -qF "$BIN"; then
+		dpkg-divert --package "$PKG" --remove --no-rename "$BIN" \
+			>/dev/null 2>&1 || \
+			dpkg-divert --remove --no-rename "$BIN" >/dev/null 2>&1 || true
+	fi
+	rm -f "$BAK"
+fi
+
+# The private stack lives only in /opt; drop the directory when it is empty.
+rmdir /opt/oneplus-erhai-av1fix/lib /opt/oneplus-erhai-av1fix/include \
+	/opt/oneplus-erhai-av1fix 2>/dev/null || true
+
+exit 0

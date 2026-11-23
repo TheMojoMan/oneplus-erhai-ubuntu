@@ -1,0 +1,6 @@
+#!/bin/sh
+# Run ffplay with the private AV1 client stack (see /usr/local/bin/mpv).
+AV1FIX=/opt/oneplus-erhai-av1fix/lib
+LD_LIBRARY_PATH="$AV1FIX${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export LD_LIBRARY_PATH
+exec /usr/bin/ffplay "$@"

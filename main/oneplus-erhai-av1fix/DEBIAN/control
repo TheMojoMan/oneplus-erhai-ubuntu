@@ -1,0 +1,33 @@
+Package: oneplus-erhai-av1fix
+Version: 1.0-test-01
+Section: video
+Priority: optional
+Architecture: arm64
+Maintainer: TheMojoMan <themojoman@gmx.net>
+Depends: libc6, libdrm2, libdav1d7, libgnutls30, libva2, libva-drm2
+Conflicts: libva-av1fix, ffmpeg-av1fix
+Replaces: libva-av1fix, ffmpeg-av1fix
+Description: private AV1 VA-API client stack for the erhai players
+ The erhai VA-API driver handles AV1 in two client classes.  Browsers submit
+ whole framed OBUs and the driver parses the encoder's refresh set out of
+ them, so they need nothing extra.  libavcodec (mpv, VLC, ffplay) submits
+ headerless tile payloads, so the refresh set can only reach the driver as
+ data - and VA-API's VADecPictureParameterBufferAV1 has no field for it.
+ .
+ This package carries the two libraries that fill that gap and installs them
+ under /opt/oneplus-erhai-av1fix:
+ . - libva 2.23.0 with the refresh_frame_flags pass-through
+ . - FFmpeg 8.0.1 with the VA-API AV1 refresh set and loop-restoration fixes
+   (built with libdav1d, gnutls/https and the full native codec set)
+ .
+ Nothing is installed into the system library path: Ubuntu keeps owning
+ /usr/lib, so Firefox, Brave, the ffmpeg tools and every other client use the
+ distribution libva/libav*.  The players reach the private stack through
+ small wrappers (/usr/local/bin/mpv, /usr/local/bin/ffplay, and a diverted
+ /usr/bin/vlc), which only prepend /opt/oneplus-erhai-av1fix/lib to
+ LD_LIBRARY_PATH.
+ .
+ The package also ships the patched va/ headers; build oneplus-erhai-video
+ with PKG_CONFIG_PATH=/opt/oneplus-erhai-av1fix/lib/pkgconfig so the driver
+ sees the refresh-frame fields.  It replaces the old libva-av1fix and
+ ffmpeg-av1fix drop-ins (which shadowed the distribution libraries globally).

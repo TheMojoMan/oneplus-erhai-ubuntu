@@ -1,0 +1,30 @@
+#!/bin/sh
+# oneplus-erhai-av1fix postinst: put the VLC wrapper in place.
+#
+# VLC's desktop file and its scripts call /usr/bin/vlc directly, so PATH
+# shadowing (what the mpv/ffplay wrappers use) cannot reach them.  Divert the
+# real binary to /usr/bin/vlc.erhai-orig and install the wrapper at the
+# original path -- the same pattern as oneplus-erhai-ptyxis.  A running VLC
+# keeps its inode; the next launch uses the wrapper.
+set -e
+
+PAYLOAD=/usr/share/oneplus-erhai-av1fix/vlc
+BIN=/usr/bin/vlc
+BAK=/usr/bin/vlc.erhai-orig
+PKG=oneplus-erhai-av1fix
+
+if [ -f "$PAYLOAD" ] && [ -x "$BIN" ]; then
+	# already diverted by an older version: keep the backup as it is
+	if [ ! -f "$BAK" ]; then
+		cp -a "$BIN" "$BAK"
+	fi
+	if ! dpkg-divert --list "$BIN" 2>/dev/null | grep -qF "$BIN"; then
+		dpkg-divert --package "$PKG" --add --no-rename \
+			--divert "$BAK" "$BIN" >/dev/null
+	fi
+	tmp="$BIN.erhai-new.$$"
+	install -m 0755 "$PAYLOAD" "$tmp"
+	mv -f "$tmp" "$BIN"
+fi
+
+exit 0

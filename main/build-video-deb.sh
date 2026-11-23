@@ -12,6 +12,19 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 . "$HERE/../ppa-common.sh"
+
+# AV1 refresh set: the driver reads the libva tail field, so it has to be built
+# against the patched headers shipped by oneplus-erhai-av1fix (the same headers
+# the player stack uses).  They are not installed into /usr/include.
+AV1FIX_PREFIX=${AV1FIX_PREFIX:-/opt/oneplus-erhai-av1fix}
+[ -f "$AV1FIX_PREFIX/include/va/va_dec_av1.h" ] || {
+	echo "missing $AV1FIX_PREFIX/include/va/va_dec_av1.h" >&2
+	echo "  build/install oneplus-erhai-av1fix first" \
+	     "(main/build-av1fix-deb.sh)" >&2
+	exit 1
+}
+export PKG_CONFIG_PATH="$AV1FIX_PREFIX/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+
 SRC="$HERE/oneplus-erhai-video"
 PKG=$(awk '/^Package:/ {print $2}' "$SRC/DEBIAN/control")
 VER=$(awk '/^Version:/ {print $2}' "$SRC/DEBIAN/control")

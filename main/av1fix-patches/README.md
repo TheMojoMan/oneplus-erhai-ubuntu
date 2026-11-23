@@ -1,10 +1,10 @@
-# AV1 hardware-decode patches for the /usr/local drop-in builds
+# AV1 hardware-decode patches for the private /opt client stack
 
 The erhai VA-API stack lets the *client* tell the driver how a picture refreshes
-the reference frame map.  Without that, iris-vaapi has to guess the DPB from the
-reference map it receives, which is correct for simple streams and wrong for
-real ones (the AV1 samples here lost references, re-emitted the sequence header
-mid-stream and stalled).
+the reference frame map.  Browsers never need this: they submit framed OBUs and
+the driver parses the encoder's refresh set out of the blob.  libavcodec (mpv,
+VLC, ffplay) submits headerless tile payloads, so the set can only arrive as
+data - and VA-API's `VADecPictureParameterBufferAV1` has no field for it.
 
 Two libraries carry the information; the third patch is a separate ffmpeg fix:
 
@@ -14,13 +14,14 @@ Two libraries carry the information; the third patch is a separate ffmpeg fix:
 | `0002-ffmpeg-vaapi-av1-carry-refresh-frame-flags.patch` | ffmpeg 8.0.1 | fills those fields from the AV1 frame header in `vaapi_decode.c` |
 | `0006-ffmpeg-vaapi-av1-fix-loop-restoration-type.patch` | ffmpeg 8.0.1 | maps the loop-restoration frame type the way VA-API expects it |
 
-`build-libva-av1fix-deb.sh` and `build-ffmpeg-av1fix-deb.sh` apply them to the
-upstream release tarballs and package the result as `/usr/local` drop-ins
-(`libva-av1fix`, `ffmpeg-av1fix`), so Ubuntu's own packages stay untouched.
-The chromium equivalent (`0003-...chromium`) is NOT shipped: chromium comes
-from the xtradeb PPA and decodes AV1 through its V4L2 path on this device, so
-patching a third-party package buys nothing.
+`../build-av1fix-deb.sh` applies them to the upstream release tarballs, builds
+both projects with the prefix `/opt/oneplus-erhai-av1fix` and packages the
+result as `oneplus-erhai-av1fix`.  Nothing lands in the system library path:
+Ubuntu keeps owning `/usr/lib`, and only the player wrappers
+(`/usr/local/bin/mpv`, `/usr/local/bin/ffplay`, the diverted `/usr/bin/vlc`)
+prepend `/opt/oneplus-erhai-av1fix/lib` to `LD_LIBRARY_PATH`.  The driver
+(`oneplus-erhai-video`) is built against the patched `va/` headers this package
+ships, which `build-video-deb.sh` finds through
+`PKG_CONFIG_PATH=/opt/oneplus-erhai-av1fix/lib/pkgconfig`.
 
-Patent/ABI note: libva's structure only grows at its end (padding), so the
-drop-in stays ABI-compatible with the distro `libva.so.2`; ffmpeg is built
-against the patched headers, hence the ffmpeg package depends on libva-av1fix.
+The chromium equivalent (`0003-...chromium`) is NOT shipped: chromium comes
