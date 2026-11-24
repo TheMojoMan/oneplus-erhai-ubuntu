@@ -32,6 +32,8 @@ for f in usr/local/sbin/erhai-user-groups.sh \
 	 usr/local/sbin/erhai-suspend-gnome.sh \
 	 usr/local/sbin/erhai-suspend-s2idle.sh \
 	 usr/local/sbin/erhai-suspend-wlan-guard.sh \
+	 usr/lib/systemd/system-sleep/90-erhai-sleep-policy \
+	 etc/erhai/sleep-policy.conf \
 	 etc/systemd/system/systemd-suspend.service.d/erhai-s2idle.conf \
 	 usr/local/sbin/erhai-folio-fold.py \
 	 usr/local/sbin/erhai-folio-gate.sh \
@@ -255,10 +257,14 @@ chmod 755 "$SRC"/DEBIAN/postinst
 if [ -f "$SRC"/DEBIAN/postrm ]; then chmod 755 "$SRC"/DEBIAN/postrm; fi
 # everything in sbin/ is executable — .sh AND .py (pogo-osk regression 2026-09-09)
 find "$SRC/usr/local/sbin" -type f -exec chmod 755 {} \;
+# systemd-sleep hooks must be executable too
+# (chmodded after the generic 0644 pass below)
 # the rest of the payload is plain data (units, udev rules, dconf, schemas,
 # sounds, the gjs-osk tree): root:root 0644, never group-writable.
 find "$SRC" -type f ! -path "$SRC/DEBIAN/*" ! -path "$SRC/usr/local/sbin/*" \
+	! -path "$SRC/usr/lib/systemd/system-sleep/*" \
 	-exec chmod 644 {} +
+find "$SRC/usr/lib/systemd/system-sleep" -type f -exec chmod 755 {} + 2>/dev/null || true
 
 # md5sums for every payload file (DEBIAN/ excluded), sorted so the manifest is
 # deterministic and `dpkg -V` has something to verify against.  The 2.1 build

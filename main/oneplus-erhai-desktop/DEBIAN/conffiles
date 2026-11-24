@@ -1,2 +1,3 @@
 /etc/default/erhai-charge
 /etc/erhai/gpu-pin.conf
+/etc/erhai/sleep-policy.conf

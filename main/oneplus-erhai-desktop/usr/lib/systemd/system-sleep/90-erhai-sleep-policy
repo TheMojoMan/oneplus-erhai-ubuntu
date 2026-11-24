@@ -1,0 +1,115 @@
+#!/bin/bash
+#
+# 90-erhai-sleep-policy - systemd-sleep hook for the OnePlus Pad 3.
+#
+# Runs around EVERY system sleep (pre before suspend, post after resume).
+# Two things are always on:
+#
+#   * a wake ledger: the kernel only keeps the LAST wake in
+#     /sys/power/pm_wakeup_irq, so an overnight drain report cannot say what
+#     ended each sleep.  Every resume appends one line with the wake IRQ, its
+#     /proc/interrupts name, the sleep mode, and the qcom_stats deep-sleep
+#     counters (aosd/cxsd/ddr/adsp_island).  The counters are the verdict for
+#     the armada-style deep-sleep work: they must move for a real CX/DDR
+#     collapse, and a resume that logs them is the cheapest possible A/B.
+#
+# Optional, from /etc/erhai/sleep-policy.conf:
+#
+#   BT_OFF=1       rfkill-block Bluetooth for the sleep window and restore
+#                  exactly the soft-block state that was there before.
+#                  Default off: measured on erhai, powering the whole WCN/BT
+#                  block off changed the overnight draw by only ~0.02 W
+#                  (2026-11-24 A/B), unlike the SM8550 handheld where BT was
+#                  the largest single sleep consumer.
+#
+#   RESUSPEND=0    reserved; automatic re-suspend is not implemented on
+#                  purpose.  The 7 h run of 2026-11-23 had one suspend and no
+#                  spurious wake, and a re-suspend loop is worse than a
+#                  slightly shorter sleep when a user really pressed the key.
+#
+set -u
+
+STATE=/run/erhai-sleep-bt.state
+LEDGER=/var/log/erhai-wake-ledger.log
+CONF=/etc/erhai/sleep-policy.conf
+
+BT_OFF=0
+RESUSPEND=0
+[ -r "$CONF" ] && . "$CONF" 2>/dev/null || true
+
+mode=${2:-unknown}
+
+bt_save_and_block() {
+	local r idx soft
+
+	: > "$STATE"
+	for r in /sys/class/rfkill/rfkill*; do
+		[ -r "$r/type" ] || continue
+		[ "$(cat "$r/type" 2>/dev/null)" = bluetooth ] || continue
+		idx=${r##*/rfkill}
+		soft=$(cat "$r/soft" 2>/dev/null) || continue
+		printf '%s %s\n' "$idx" "$soft" >> "$STATE"
+		# Block only what was unblocked; remember the original either way.
+		[ "$soft" = 0 ] && printf '1\n' > "$r/soft" 2>/dev/null
+	done
+}
+
+bt_restore() {
+	local idx soft
+
+	[ -r "$STATE" ] || return 0
+	while read -r idx soft; do
+		[ -n "${idx:-}" ] || continue
+		# Restore the soft state that was there before the sleep.
+		printf '%s\n' "$soft" > "/sys/class/rfkill/rfkill$idx/soft" 2>/dev/null || true
+	done < "$STATE"
+	rm -f "$STATE"
+}
+
+qcom_counter() {
+	local f=/sys/kernel/debug/qcom_stats/$1
+	local n
+
+	[ -r "$f" ] || { printf '%s=?' "$1"; return; }
+	n=$(awk '/^Count:/ {print $2; exit}' "$f" 2>/dev/null)
+	printf '%s=%s' "$1" "${n:-?}"
+}
+
+wake_ledger() {
+	local irq name line
+
+	mkdir -p "$(dirname "$LEDGER")" 2>/dev/null || true
+	irq=$(cat /sys/power/pm_wakeup_irq 2>/dev/null || true)
+	name=unknown
+	if [ -n "${irq:-}" ] && [ "$irq" != 0 ]; then
+		name=$(awk -v i="$irq:" '$1 == i {print $NF; exit}' /proc/interrupts 2>/dev/null)
+		[ -n "${name:-}" ] || name=unknown
+	fi
+
+	line=$(printf '%s wake_irq=%s (%s) mode=%s %s %s %s %s' \
+		"$(date --iso-8601=seconds 2>/dev/null || echo unknown)" \
+		"${irq:-none}" "$name" "$mode" \
+		"$(qcom_counter aosd)" "$(qcom_counter cxsd)" \
+		"$(qcom_counter ddr)" "$(qcom_counter adsp_island)")
+	printf '%s\n' "$line" >> "$LEDGER"
+
+	# Cap the ledger so it can never grow without bound.
+	if [ "$(wc -l < "$LEDGER" 2>/dev/null || echo 0)" -gt 500 ]; then
+		tail -n 250 "$LEDGER" > "$LEDGER.tmp" && mv "$LEDGER.tmp" "$LEDGER"
+	fi
+}
+
+case "${1:-}" in
+pre)
+	[ "$BT_OFF" = 1 ] && bt_save_and_block
+	;;
+post)
+	[ "$BT_OFF" = 1 ] && bt_restore
+	wake_ledger
+	;;
+*)
+	exit 0
+	;;
+esac
+
+exit 0
