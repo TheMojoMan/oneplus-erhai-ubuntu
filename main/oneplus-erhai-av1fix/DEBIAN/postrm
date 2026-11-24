@@ -1,25 +1,44 @@
 #!/bin/sh
-# oneplus-erhai-av1fix postrm: give /usr/bin/vlc back to the vlc package.
-# On upgrade the new postinst has already reinstalled the wrapper, so nothing
-# happens for $1 = upgrade.
+# oneplus-erhai-av1fix postrm: give the diverted players back.
+#
+# On upgrade the new postinst has already reinstalled the shims, so nothing
+# happens for $1 = upgrade.  A player that is not installed any more (the
+# shim's target is gone) is only cleaned up here, never resurrected.
 set -e
 
-BIN=/usr/bin/vlc
-BAK=/usr/bin/vlc.erhai-orig
 PKG=oneplus-erhai-av1fix
+PATHS="/usr/bin/vlc /usr/bin/mpv /usr/bin/ffplay \
+       /usr/local/bin/vlc /usr/local/bin/mpv /usr/local/bin/ffplay"
+
+is_shim() {
+	grep -q 'oneplus-erhai-av1fix shim' "$1" 2>/dev/null
+}
+
+has_divert() {
+	dpkg-divert --list "$1" 2>/dev/null | grep -qF "$1"
+}
 
 if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
-	if [ -f "$BAK" ]; then
-		tmp="$BIN.erhai-restore.$$"
-		cp -a "$BAK" "$tmp"
-		mv -f "$tmp" "$BIN"
-	fi
-	if dpkg-divert --list "$BIN" 2>/dev/null | grep -qF "$BIN"; then
-		dpkg-divert --package "$PKG" --remove --no-rename "$BIN" \
-			>/dev/null 2>&1 || \
-			dpkg-divert --remove --no-rename "$BIN" >/dev/null 2>&1 || true
-	fi
-	rm -f "$BAK"
+	for bin in $PATHS; do
+		bak="$bin.erhai-orig"
+		# restore the real binary over our shim (leave a foreign file alone)
+		if [ -f "$bak" ] && { [ ! -e "$bin" ] || is_shim "$bin"; }; then
+			tmp="$bin.erhai-restore.$$"
+			cp -a "$bak" "$tmp"
+			mv -f "$tmp" "$bin"
+			rm -f "$bak"
+		fi
+		if [ -e "$bin" ] && is_shim "$bin"; then
+			rm -f "$bin"
+		fi
+		if has_divert "$bin"; then
+			dpkg-divert --package "$PKG" --remove --no-rename "$bin" \
+				>/dev/null 2>&1 ||
+			dpkg-divert --remove --no-rename "$bin" >/dev/null 2>&1 || true
+		fi
+		rm -f "$bak"
+	done
+	rm -f /var/lib/oneplus-erhai-av1fix/soname-mismatch
 fi
 
 # The private stack lives only in /opt; drop the directory when it is empty.

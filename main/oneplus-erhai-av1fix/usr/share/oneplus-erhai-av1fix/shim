@@ -1,0 +1,24 @@
+#!/bin/sh
+# oneplus-erhai-av1fix shim.
+#
+# The package's postinst installs this file at the absolute path of every
+# player it fronts (/usr/bin/vlc, /usr/bin/mpv, /usr/bin/ffplay and the
+# /usr/local/bin counterparts of a source build).  The real binary lives at the
+# same path plus ".erhai-orig": dpkg writes upgrades there through a diversion,
+# so this shim survives every player upgrade (DEBIAN/triggers re-installs it).
+#
+# It only prepends the private AV1 client stack to LD_LIBRARY_PATH: libavcodec
+# submits AV1 as headerless tile payloads and the erhai VA-API driver learns the
+# per-picture refresh set through the libva extension this package carries.
+# Every other library stays the distribution's, and this process is the only
+# one affected.
+target="$0.erhai-orig"
+if [ ! -x "$target" ]; then
+	echo "oneplus-erhai-av1fix: $0 is a shim but $target is missing" >&2
+	echo "oneplus-erhai-av1fix: run 'dpkg-reconfigure oneplus-erhai-av1fix'" >&2
+	exit 127
+fi
+AV1FIX=/opt/oneplus-erhai-av1fix/lib
+LD_LIBRARY_PATH="$AV1FIX${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export LD_LIBRARY_PATH
+exec "$target" "$@"

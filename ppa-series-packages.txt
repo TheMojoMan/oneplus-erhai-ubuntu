@@ -28,3 +28,4 @@ libegl-mesa0
 mesa-vulkan-drivers
 oneplus-erhai-ptyxis
 oneplus-erhai-nautilus
+vlc

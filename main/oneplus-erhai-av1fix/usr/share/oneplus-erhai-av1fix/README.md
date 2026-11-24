@@ -31,17 +31,25 @@ This package carries the two libraries that fill that gap:
 Nothing goes into the system library path: Ubuntu keeps owning /usr/lib, so
 the ffmpeg tools keep their https and dav1d support and Firefox, Brave and
 every other client run on the distribution libva.  The players reach the
-private stack through small wrappers:
+private stack through one small shim, installed by the package's postinst at
+each player's own absolute path:
 
-  /usr/local/bin/mpv, /usr/local/bin/ffplay
-  /usr/bin/vlc            (the real binary is /usr/bin/vlc.erhai-orig,
-                           installed with dpkg-divert)
+  /usr/bin/vlc, /usr/bin/mpv, /usr/bin/ffplay
+      the real binary moves to <path>.erhai-orig behind a dpkg diversion, so
+      a client that calls the player by absolute path gets the private stack
+      as well as one started from PATH
 
-Each wrapper only prepends /opt/oneplus-erhai-av1fix/lib to LD_LIBRARY_PATH
-and then execs the distribution binary, so plugins and codecs stay the ones
-the distribution ships.  A player that is started through its own absolute
-path (not through the wrapper) decodes AV1 with the distribution stack: it
-still uses the VPU, just without the client refresh set.
+Each shim only prepends /opt/oneplus-erhai-av1fix/lib to LD_LIBRARY_PATH and
+then execs the real binary, so plugins and codecs stay the ones the
+distribution ships.  A dpkg file trigger (DEBIAN/triggers) installs the shim
+again after any vlc/mpv/ffmpeg install, upgrade or removal, which is what keeps
+the fix when a newer upstream VLC is installed.  The postinst also warns when a
+player links a libavcodec.so the private stack does not carry (a player built
+against a newer FFmpeg): decoding still works, but without the client refresh
+set.
+
+A source-built player under /usr/local/bin is wrapped the same way if it is
+present when the package is configured.
 
 Verify
 
@@ -54,3 +62,7 @@ Verify
 
 Removing this package restores /usr/bin/vlc and leaves the distribution stack
 in place; oneplus-erhai-video only Recommends it.
+
+If a player is removed while this package stays installed, its shim reports the
+missing binary and exits 127; the next `dpkg-reconfigure oneplus-erhai-av1fix`
+(also run by any player install or upgrade) removes the shim and the diversion.

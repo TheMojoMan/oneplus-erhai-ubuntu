@@ -7,9 +7,9 @@
 # Payload: /opt/oneplus-erhai-av1fix/{lib,include} -- libva 2.23.0 with the
 # refresh_frame_flags pass-through plus FFmpeg 8.0.1 with the VA-API AV1
 # refresh-set and loop-restoration fixes.  Nothing goes into the system
-# library path; Ubuntu keeps owning /usr/lib.  The package's wrappers
-# (/usr/local/bin/mpv, /usr/local/bin/ffplay, the diverted /usr/bin/vlc)
-# prepend /opt/oneplus-erhai-av1fix/lib to LD_LIBRARY_PATH.
+# library path; Ubuntu keeps owning /usr/lib.  The package's shim, installed by
+# its postinst at the absolute path of vlc/mpv/ffplay (the real binary behind a
+# dpkg diversion), prepends /opt/oneplus-erhai-av1fix/lib to LD_LIBRARY_PATH.
 #
 # FFmpeg is configured like a distribution build for the parts a player needs:
 # vdpau (VLC's configure probes av_vdpau_bind_context and fails to link that
@@ -122,20 +122,24 @@ fi
 # --------------------------------------------------------------- package -----
 install -d -m755 "$STAGE/DEBIAN"
 cp -a "$SRC/DEBIAN/." "$STAGE/DEBIAN/"
-install -d -m755 "$STAGE/usr/local/bin" "$STAGE/usr/share/oneplus-erhai-av1fix"
-install -m755 "$SRC/usr/local/bin/mpv" "$SRC/usr/local/bin/ffplay" \
-	"$STAGE/usr/local/bin/"
-install -m755 "$SRC/usr/share/oneplus-erhai-av1fix/vlc" \
-	"$STAGE/usr/share/oneplus-erhai-av1fix/vlc"
+# 1.1 shipped PATH wrappers in /usr/local/bin; a reused stage still carries
+# them and they must not reach the payload any more (the shim replaces them).
+rm -rf "$STAGE/usr/local"
+install -d -m755 "$STAGE/usr/share/oneplus-erhai-av1fix"
+rm -f "$STAGE/usr/share/oneplus-erhai-av1fix/vlc" \
+	"$STAGE/usr/share/oneplus-erhai-av1fix/mpv" \
+	"$STAGE/usr/share/oneplus-erhai-av1fix/ffplay"
+install -m755 "$SRC/usr/share/oneplus-erhai-av1fix/shim" \
+	"$STAGE/usr/share/oneplus-erhai-av1fix/shim"
 # Ubuntu's path-exclude drops /usr/share/doc/*, so the package README ships here.
 install -m644 "$SRC/usr/share/oneplus-erhai-av1fix/README.md" \
 	"$STAGE/usr/share/oneplus-erhai-av1fix/README.md"
 chmod 755 "$STAGE/DEBIAN/postinst" "$STAGE/DEBIAN/postrm"
-# /usr/local and friends are shared with every other package: keep the modes
-# dpkg would see from a normal Ubuntu package (the stage dirs came from a build
-# tree, not from a fresh install).
-chmod 755 "$STAGE/usr/local" "$STAGE/usr/local/bin" \
-	"$STAGE/usr/share/oneplus-erhai-av1fix" "$STAGE/opt" \
+chmod 644 "$STAGE/DEBIAN/triggers"
+# /usr/share is shared with every other package: keep the modes dpkg would see
+# from a normal Ubuntu package (the stage dirs came from a build tree, not from
+# a fresh install).
+chmod 755 "$STAGE/usr/share/oneplus-erhai-av1fix" "$STAGE/opt" \
 	"$STAGE$PREFIX" "$STAGE$PREFIX/lib" "$STAGE$PREFIX/include"
 
 # Payload sanity: the patched header, libva, libavcodec with the symbols VLC's

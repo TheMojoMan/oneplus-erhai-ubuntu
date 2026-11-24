@@ -1,8 +1,0 @@
-#!/bin/sh
-# /usr/bin/vlc wrapper (installed by oneplus-erhai-av1fix's postinst; the real
-# binary is diverted to /usr/bin/vlc.erhai-orig).  VLC's desktop file and most
-# scripts call the absolute path, so a PATH wrapper is not enough.
-AV1FIX=/opt/oneplus-erhai-av1fix/lib
-LD_LIBRARY_PATH="$AV1FIX${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-export LD_LIBRARY_PATH
-exec /usr/bin/vlc.erhai-orig "$@"

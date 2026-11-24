@@ -1,30 +1,104 @@
 #!/bin/sh
-# oneplus-erhai-av1fix postinst: put the VLC wrapper in place.
+# oneplus-erhai-av1fix postinst: point the players at the private AV1 stack.
 #
-# VLC's desktop file and its scripts call /usr/bin/vlc directly, so PATH
-# shadowing (what the mpv/ffplay wrappers use) cannot reach them.  Divert the
-# real binary to /usr/bin/vlc.erhai-orig and install the wrapper at the
-# original path -- the same pattern as oneplus-erhai-ptyxis.  A running VLC
-# keeps its inode; the next launch uses the wrapper.
+# libavcodec (VLC, mpv, ffplay) submits AV1 as headerless tile payloads, so the
+# per-picture refresh set can only reach the driver through the libva extension
+# this package carries.  A PATH wrapper is not enough: a client that calls the
+# player by absolute path (desktop files, frontends, scripts) would bypass it.
+# So the real binary is moved behind a dpkg diversion to <path>.erhai-orig and
+# a shim is installed in its place; the shim only prepends
+# /opt/oneplus-erhai-av1fix/lib to LD_LIBRARY_PATH.
+#
+# This script also runs as a dpkg file trigger (see DEBIAN/triggers) after any
+# vlc/mpv/ffmpeg install, upgrade or removal, which is what keeps the fix in
+# place when a newer upstream VLC is installed over everything.
 set -e
 
-PAYLOAD=/usr/share/oneplus-erhai-av1fix/vlc
-BIN=/usr/bin/vlc
-BAK=/usr/bin/vlc.erhai-orig
 PKG=oneplus-erhai-av1fix
+PAYLOAD=/usr/share/oneplus-erhai-av1fix/shim
+PREFIX=/opt/oneplus-erhai-av1fix
+STATE=/var/lib/oneplus-erhai-av1fix
+PATHS="/usr/bin/vlc /usr/bin/mpv /usr/bin/ffplay \
+       /usr/local/bin/vlc /usr/local/bin/mpv /usr/local/bin/ffplay"
 
-if [ -f "$PAYLOAD" ] && [ -x "$BIN" ]; then
-	# already diverted by an older version: keep the backup as it is
-	if [ ! -f "$BAK" ]; then
-		cp -a "$BIN" "$BAK"
+is_shim() {
+	grep -q 'oneplus-erhai-av1fix shim' "$1" 2>/dev/null
+}
+
+has_divert() {
+	dpkg-divert --list "$1" 2>/dev/null | grep -qF "$1"
+}
+
+# A player built against a newer FFmpeg links libavcodec.so.N that the private
+# stack does not carry; the shim then silently falls back to the distribution
+# library and the AV1 refresh set is lost.  Say so at dpkg time instead.
+soname_guard() {	# soname_guard <real binary>
+	local so private
+	so=$(readelf -d "$1" 2>/dev/null |
+	     awk '/NEEDED/ && $NF ~ /libavcodec\.so\./ {gsub(/[][]/, "", $NF); print $NF; exit}')
+	[ -n "$so" ] || return 0
+	if [ -e "$PREFIX/lib/$so" ]; then
+		rm -f "$STATE/soname-mismatch"
+		return 0
 	fi
-	if ! dpkg-divert --list "$BIN" 2>/dev/null | grep -qF "$BIN"; then
-		dpkg-divert --package "$PKG" --add --no-rename \
-			--divert "$BAK" "$BIN" >/dev/null
-	fi
-	tmp="$BIN.erhai-new.$$"
+	private=$(cd "$PREFIX/lib" && ls libavcodec.so.* 2>/dev/null | tail -1)
+	echo "oneplus-erhai-av1fix: warning: $1 links $so but the private stack" >&2
+	echo "oneplus-erhai-av1fix: ships ${private:-no libavcodec}.  AV1 decodes" >&2
+	echo "oneplus-erhai-av1fix: without the client refresh set until this" >&2
+	echo "oneplus-erhai-av1fix: package is rebuilt against that FFmpeg." >&2
+	mkdir -p "$STATE"
+	echo "$1 $so" >> "$STATE/soname-mismatch"
+}
+
+# install_shim <path>: replace whatever is there with the payload, atomically
+install_shim() {
+	local tmp="$1.erhai-new.$$"
 	install -m 0755 "$PAYLOAD" "$tmp"
-	mv -f "$tmp" "$BIN"
-fi
+	mv -f "$tmp" "$1"
+}
+
+for bin in $PATHS; do
+	bak="$bin.erhai-orig"
+	case $bin in /usr/bin/*) dpkg_owned=1 ;; *) dpkg_owned=0 ;; esac
+
+	# 1. A real binary at the path (fresh install, an upgrade that a lost
+	#    diversion delivered straight here, or a source build that ran
+	#    "make install" over the shim) is always the authority: park it and
+	#    put the shim in front.
+	if [ -e "$bin" ] && ! is_shim "$bin"; then
+		cp -a "$bin" "$bak"
+		if [ "$dpkg_owned" = 1 ] && ! has_divert "$bin"; then
+			dpkg-divert --package "$PKG" --add --no-rename \
+				--divert "$bak" "$bin" >/dev/null
+		fi
+		soname_guard "$bak"
+		install_shim "$bin"
+		continue
+	fi
+
+	# 2. Real binary parked behind the diversion: keep the shim (create it
+	#    again if it was dropped or is outdated).
+	if [ -f "$bak" ]; then
+		soname_guard "$bak"
+		cmp -s "$PAYLOAD" "$bin" || install_shim "$bin"
+		if [ "$dpkg_owned" = 1 ] && ! has_divert "$bin"; then
+			dpkg-divert --package "$PKG" --add --no-rename \
+				--divert "$bak" "$bin" >/dev/null
+		fi
+		continue
+	fi
+
+	# 3. Nothing to front: the player is not installed.  Drop a stray shim and
+	#    a leftover diversion, so the command reports "not found" instead of
+	#    failing on a missing .erhai-orig.
+	if [ -e "$bin" ] && is_shim "$bin"; then
+		rm -f "$bin"
+	fi
+	if [ "$dpkg_owned" = 1 ] && has_divert "$bin"; then
+		dpkg-divert --package "$PKG" --remove --no-rename "$bin" \
+			>/dev/null 2>&1 ||
+		dpkg-divert --remove --no-rename "$bin" >/dev/null 2>&1 || true
+	fi
+done
 
 exit 0

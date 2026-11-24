@@ -1,5 +1,5 @@
 Package: oneplus-erhai-av1fix
-Version: 1.1
+Version: 1.1-test-01
 Section: video
 Priority: optional
 Architecture: arm64
@@ -22,10 +22,12 @@ Description: private AV1 VA-API client stack for the erhai players
  .
  Nothing is installed into the system library path: Ubuntu keeps owning
  /usr/lib, so Firefox, Brave, the ffmpeg tools and every other client use the
- distribution libva/libav*.  The players reach the private stack through
- small wrappers (/usr/local/bin/mpv, /usr/local/bin/ffplay, and a diverted
- /usr/bin/vlc), which only prepend /opt/oneplus-erhai-av1fix/lib to
- LD_LIBRARY_PATH.
+ distribution libva/libav*.  The players reach the private stack through a
+ small shim installed at their own absolute path (/usr/bin/vlc, /usr/bin/mpv,
+ /usr/bin/ffplay; the real binary moves to <path>.erhai-orig behind a dpkg
+ diversion), which only prepends /opt/oneplus-erhai-av1fix/lib to
+ LD_LIBRARY_PATH.  A dpkg file trigger installs the shim again after any
+ player install, upgrade or removal, so a newer upstream VLC keeps the fix.
  .
  The package also ships the patched va/ headers; build oneplus-erhai-video
  with PKG_CONFIG_PATH=/opt/oneplus-erhai-av1fix/lib/pkgconfig so the driver
@@ -39,3 +41,11 @@ Description: private AV1 VA-API client stack for the erhai players
  Measured frame for frame against dav1d through the wrappers: t-720p60 600/600
  (376/600 when the client carries no refresh set), aom-altref 60/60,
  aom-tiles 40/40, 4K 16/16.
+ .
+ 1.1-test-01 (2026-11-24): the PATH wrappers in /usr/local/bin are gone.  One
+ shim now sits at each player's absolute path, with the real binary moved to
+ <path>.erhai-orig behind a dpkg diversion, so clients that call /usr/bin/mpv
+ or /usr/bin/vlc directly get the private stack too.  A dpkg file trigger
+ reinstalls the shim after any VLC/mpv/ffmpeg install, upgrade or removal, and
+ the postinst reports a player that links a libavcodec.so the private stack
+ does not carry.

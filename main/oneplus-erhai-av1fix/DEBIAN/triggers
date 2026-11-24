@@ -1,0 +1,12 @@
+interest-noawait /usr/bin/vlc
+activate-noawait /usr/bin/vlc
+interest-noawait /usr/bin/mpv
+activate-noawait /usr/bin/mpv
+interest-noawait /usr/bin/ffplay
+activate-noawait /usr/bin/ffplay
+interest-noawait /usr/local/bin/vlc
+activate-noawait /usr/local/bin/vlc
+interest-noawait /usr/local/bin/mpv
+activate-noawait /usr/local/bin/mpv
+interest-noawait /usr/local/bin/ffplay
+activate-noawait /usr/local/bin/ffplay
