@@ -1,0 +1,38 @@
+Package: vlc
+Version: 4.0.0~git20261124.39866+5589a060d4-0erhai1-test-01
+Section: video
+Priority: optional
+Architecture: arm64
+Maintainer: TheMojoMan <themojoman@gmx.net>
+Installed-Size: 0
+Recommends: oneplus-erhai-av1fix
+Breaks: libvlc5, libvlccore9, libvlc-bin, vlc-bin, vlc-data, vlc-l10n,
+ vlc-plugin-access-extra, vlc-plugin-base, vlc-plugin-jack, vlc-plugin-notify,
+ vlc-plugin-qt, vlc-plugin-samba, vlc-plugin-skins2,
+ vlc-plugin-video-output, vlc-plugin-video-splitter, vlc-plugin-visualization
+Replaces: libvlc5, libvlccore9, libvlc-bin, vlc-bin, vlc-data, vlc-l10n,
+ vlc-plugin-access-extra, vlc-plugin-base, vlc-plugin-jack, vlc-plugin-notify,
+ vlc-plugin-qt, vlc-plugin-samba, vlc-plugin-skins2,
+ vlc-plugin-video-output, vlc-plugin-video-splitter, vlc-plugin-visualization
+Conflicts: libvlc5, libvlccore9, libvlc-bin, vlc-bin, vlc-data, vlc-l10n,
+ vlc-plugin-access-extra, vlc-plugin-base, vlc-plugin-jack, vlc-plugin-notify,
+ vlc-plugin-qt, vlc-plugin-samba, vlc-plugin-skins2,
+ vlc-plugin-video-output, vlc-plugin-video-splitter, vlc-plugin-visualization
+Description: VLC media player 4 for the OnePlus Pad 3 (erhai, SM8750)
+ VLC 4 built from the upstream git tree with the erhai VA-API stack: VA-API
+ decoding through the Iris driver (H.264, HEVC, VP9, AV1), Wayland/X11 output
+ and the Qt interface.  The tree is built with
+ --prefix=/usr --libdir=/usr/lib/aarch64-linux-gnu --enable-vaapi
+ --enable-avcodec --disable-kde, so plugins live in
+ /usr/lib/aarch64-linux-gnu/vlc/plugins.
+ .
+ The package is versioned as 4.0.0~git<date>.<commits>+<sha>-0erhai<N> on
+ purpose: a later 4.0.0/4.0.x from VideoLAN or Ubuntu sorts higher and upgrades
+ over it, while it still outranks Ubuntu's 3.0.23.  It carries no wrapper of
+ its own -- oneplus-erhai-av1fix owns that: a dpkg-diverted shim at
+ /usr/bin/vlc puts the private libva/libavcodec in front of the player, and its
+ file trigger reinstalls the shim after any VLC upgrade.
+ .
+ This is a monolithic packaging of the VLC tree: no separate vlc-data,
+ vlc-bin or plugin packages, and therefore Breaks/Replaces on Ubuntu's vlc 3
+ set.  A VLC 4 from the VideoLAN archive supersedes it normally.

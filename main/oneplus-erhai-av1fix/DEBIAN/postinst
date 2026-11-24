@@ -18,8 +18,8 @@ PKG=oneplus-erhai-av1fix
 PAYLOAD=/usr/share/oneplus-erhai-av1fix/shim
 PREFIX=/opt/oneplus-erhai-av1fix
 STATE=/var/lib/oneplus-erhai-av1fix
-PATHS="/usr/bin/vlc /usr/bin/mpv /usr/bin/ffplay \
-       /usr/local/bin/vlc /usr/local/bin/mpv /usr/local/bin/ffplay"
+PATHS=${AV1FIX_PATHS:-"/usr/bin/vlc /usr/bin/mpv /usr/bin/ffplay
+       /usr/local/bin/vlc /usr/local/bin/mpv /usr/local/bin/ffplay"}
 
 is_shim() {
 	grep -q 'oneplus-erhai-av1fix shim' "$1" 2>/dev/null
