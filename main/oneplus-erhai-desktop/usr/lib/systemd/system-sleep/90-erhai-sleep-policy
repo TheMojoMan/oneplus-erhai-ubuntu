@@ -75,9 +75,13 @@ qcom_counter() {
 	printf '%s=%s' "$1" "${n:-?}"
 }
 
+# Sum the per-CPU counts of every line whose name matches $1.  The IRQ
+# NUMBERS are not stable (pmic_pwrkey was 24 on one boot, the rtc alarm 217
+# on one and 235 on the next), so look the lines up by NAME.
 irq_count() {
-	awk -v i="$1:" '$1 == i { s = 0; for (n = 2; n <= NF - 3; n++) s += $n; print s; exit }' \
-		/proc/interrupts 2>/dev/null
+	awk -v pat="$1" 'index($0, pat) { s = 0;
+		for (n = 2; n <= NF - 3; n++) if ($n ~ /^[0-9]+$/) s += $n;
+		total += s } END { print total + 0 }' /proc/interrupts 2>/dev/null
 }
 
 wake_ledger() {
@@ -90,8 +94,8 @@ wake_ledger() {
 		name=$(awk -v i="$irq:" '$1 == i {print $NF; exit}' /proc/interrupts 2>/dev/null)
 		[ -n "${name:-}" ] || name=unknown
 	fi
-	pwr=$(irq_count 24)
-	rtc=$(irq_count 217)
+	pwr=$(irq_count pmic_pwrkey)
+	rtc=$(irq_count rtc_alarm)
 	ok=$(cat /sys/power/suspend_stats/success 2>/dev/null)
 
 	line=$(printf '%s wake_irq=%s (%s) mode=%s ok=%s pwrkey=%s rtc=%s %s %s %s %s' \
