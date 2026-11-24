@@ -1,0 +1,20 @@
+# Opt-in USB runtime autosuspend for erhai.
+#
+# The DWC3 controller is a CX voter: an active controller holds a USB->DDR
+# interconnect vote in every RPMh bucket, including the sleep set.  The
+# controller cannot runtime-suspend while the two USB roothubs are pinned at
+# autosuspend_delay_ms = -1000 by the load-bearing usbcore.autosuspend=-1
+# kernel token (that token exists for the OTG HID EPROTO storm, so it stays).
+#
+# This rule is gated on /etc/erhai/usb-autosuspend existing:
+#
+#     touch /etc/erhai/usb-autosuspend     # enable (next boot or udev trigger)
+#     rm /etc/erhai/usb-autosuspend        # back to the pinned default
+#
+# Attached USB *devices* stay at delay -1000 and never autosuspend; only the
+# roothubs, the xHCI host and the DWC3 glue are allowed to.  The QMP combo PHY
+# follows the controller once the xHCI skip-phy-init quirk (kernel 1f58861c)
+# keeps the HCD from holding an extra phy_init reference.
+ACTION=="add|bind", SUBSYSTEM=="platform", KERNEL=="*.usb", DRIVERS=="dwc3-qcom", TEST=="/etc/erhai/usb-autosuspend", ATTR{power/control}="auto"
+ACTION=="add|bind", SUBSYSTEM=="platform", KERNEL=="xhci-hcd.*", TEST=="/etc/erhai/usb-autosuspend", ATTR{power/control}="auto"
+ACTION=="add", SUBSYSTEM=="usb", KERNEL=="usb[12]", TEST=="/etc/erhai/usb-autosuspend", ATTR{power/autosuspend_delay_ms}="2000", ATTR{power/control}="auto"

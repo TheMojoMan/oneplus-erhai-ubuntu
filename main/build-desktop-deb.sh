@@ -34,6 +34,7 @@ for f in usr/local/sbin/erhai-user-groups.sh \
 	 usr/local/sbin/erhai-suspend-wlan-guard.sh \
 	 usr/lib/systemd/system-sleep/90-erhai-sleep-policy \
 	 etc/erhai/sleep-policy.conf \
+	 etc/udev/rules.d/60-erhai-usb-autosuspend.rules \
 	 etc/systemd/system/systemd-suspend.service.d/erhai-s2idle.conf \
 	 usr/local/sbin/erhai-folio-fold.py \
 	 usr/local/sbin/erhai-folio-gate.sh \

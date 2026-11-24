@@ -22,6 +22,7 @@ a3aeeb8b59b5fbde7861093dc7d9319e  etc/systemd/system/erhai-host-charge.service
 2621ff7dd6ef1cd5c0b5b08709576da2  etc/systemd/system/erhai-rtc-sync.timer
 b7d70ae00a046f13eb2095ab31e86671  etc/systemd/system/erhai-touchscreen.service
 449241d6e52f1df03d67acb34edde1a1  etc/systemd/system/systemd-suspend.service.d/erhai-s2idle.conf
+dd0f3d02dcdc23770e23610be53e3226  etc/udev/rules.d/60-erhai-usb-autosuspend.rules
 1549212aa03231d646aedf1ccd87ff08  etc/udev/rules.d/71-erhai-folio-udev.rules
 1c4e5826547b901d29c68073c9299a1c  etc/udev/rules.d/72-erhai-gpu-external.rules
 bef7da546eb5c50337fcb9695a2e1a47  etc/udev/rules.d/81-erhai-pogo-touchpad.rules
