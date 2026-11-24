@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 /*
- * iris-vaapi: VA-API driver for the Qualcomm Iris (SM8150) stateful V4L2
+ * iris-vaapi: VA-API driver for the Qualcomm Iris (SM8750) stateful V4L2
  * decoder.
  */
 
@@ -51,8 +51,8 @@ static void present_note(char tag, unsigned int surface_id);
 #include "decode.h" 
 #include "v4l2_dec.h"
 
-#define IRIS_VAAPI_VERSION	"0.1.0"
-#define IRIS_VAAPI_VENDOR	"iris-vaapi: Qualcomm Iris SM8150 (V4L2) "
+#define IRIS_VAAPI_VERSION	"0.1.1"
+#define IRIS_VAAPI_VENDOR	"iris-vaapi: Qualcomm Iris SM8750 (V4L2) "
 
 /* Per-surface tracing is chatty and the GPU process inherits this stderr;
  * opt in with IRIS_VAAPI_DEBUG=1. */

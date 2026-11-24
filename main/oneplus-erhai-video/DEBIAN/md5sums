@@ -31,7 +31,7 @@ d46c678fa81c79a13ffa8f63b0ae8603  usr/src/oneplus-erhai-video/iris-vaapi/src/dma
 0516b81e662046c159ab43f08919de00  usr/src/oneplus-erhai-video/iris-vaapi/src/hevc_slice_rewrite.h
 8c23c8bc55c19101937a22f349855177  usr/src/oneplus-erhai-video/iris-vaapi/src/decode.h
 952b6c2fc1b1fa802b6f2ec802a563c5  usr/src/oneplus-erhai-video/iris-vaapi/src/av1_params.h
-46725f7365db7982159098cef1d6c23b  usr/src/oneplus-erhai-video/iris-vaapi/src/iris_vaapi.c
+a865c0fce61503badb7ef2bf0b31b029  usr/src/oneplus-erhai-video/iris-vaapi/src/iris_vaapi.c
 2f194bcda25b4da7e0570a5c05d876a5  usr/src/oneplus-erhai-video/iris-vaapi/src/vk_copy.h
 b143ccadddf4ee5103047df0b34ee3c2  usr/src/oneplus-erhai-video/iris-vaapi/src/hevc_params.h
 b2fa55d4a453273fe11954fd846c3f01  usr/src/oneplus-erhai-video/iris-vaapi/src/hevc_slice_rewrite.c
@@ -90,5 +90,5 @@ b0612c18cd3581c193e77db6865f44bc  usr/src/oneplus-erhai-video/iris-vaapi/tools/9
 508e77c8276920cba9a4fc76b1638544  usr/src/oneplus-erhai-video/iris-vaapi/VENDORED.md
 a9fe9fc072a2b9ea3ccd646666c6423d  usr/src/oneplus-erhai-video/iris-vaapi/erhai-changes-vs-upstream.patch
 d026761a1be016470ad39729f0022518  usr/src/oneplus-erhai-video/iris-vaapi/.github/workflows/build.yml
-2eebae40d11dda9bb52aa320e7027099  usr/lib/aarch64-linux-gnu/dri/iris_drv_video.so
+404eb4ebc323bbd2ff920563d53bd803  usr/lib/aarch64-linux-gnu/dri/iris_drv_video.so
 9fbab484f3e190602085481805f79c39  usr/share/doc/oneplus-erhai-video/README
