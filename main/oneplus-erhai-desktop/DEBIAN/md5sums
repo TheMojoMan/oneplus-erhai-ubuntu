@@ -27,7 +27,7 @@ dd0f3d02dcdc23770e23610be53e3226  etc/udev/rules.d/60-erhai-usb-autosuspend.rule
 1c4e5826547b901d29c68073c9299a1c  etc/udev/rules.d/72-erhai-gpu-external.rules
 bef7da546eb5c50337fcb9695a2e1a47  etc/udev/rules.d/81-erhai-pogo-touchpad.rules
 3997d498709d8bea8f366fb236e72ccb  etc/udev/rules.d/99-nvt-touch-calibration.rules
-efc26880314017182245efcdc152977b  usr/lib/systemd/system-sleep/90-erhai-sleep-policy
+30e3b81fb68d45259a10eec02d780030  usr/lib/systemd/system-sleep/90-erhai-sleep-policy
 0268999da57277d23b962900a23a4ceb  usr/lib/systemd/user/filter-chain.service.d/50-erhai-session.conf
 0268999da57277d23b962900a23a4ceb  usr/lib/systemd/user/pipewire-pulse.service.d/50-erhai-session.conf
 0268999da57277d23b962900a23a4ceb  usr/lib/systemd/user/pipewire.service.d/50-erhai-wait-greeter.conf
@@ -56,7 +56,7 @@ de6e899429cb709ba3d5c3828db2f9a1  usr/local/sbin/erhai-pogo-osk.py
 9e2bbee2283abafa1ccfc1c0d3fdcf39  usr/local/sbin/erhai-power-watch.py
 b60c6831263f6164fa46fc842d14931a  usr/local/sbin/erhai-rtc-sync.py
 f6b99310879c186ee16539d1a6c94532  usr/local/sbin/erhai-suspend-gnome.sh
-699da96ed0eb625b9ffda22d6ffeafee  usr/local/sbin/erhai-suspend-s2idle.sh
+dab0d55bd5ee002770fe62341c4e2e4f  usr/local/sbin/erhai-suspend-s2idle.sh
 1fc610bdc3ff38aeb4dcfa95602dd647  usr/local/sbin/erhai-suspend-wlan-guard.sh
 1ef131fc3c83db0673184a272f020246  usr/local/sbin/erhai-touch-rebind.sh
 1525ffc93a2fb55b818a8eccf0c2cfcd  usr/local/sbin/erhai-user-groups.sh

@@ -75,8 +75,13 @@ qcom_counter() {
 	printf '%s=%s' "$1" "${n:-?}"
 }
 
+irq_count() {
+	awk -v i="$1:" '$1 == i { s = 0; for (n = 2; n <= NF - 3; n++) s += $n; print s; exit }' \
+		/proc/interrupts 2>/dev/null
+}
+
 wake_ledger() {
-	local irq name line
+	local irq name line pwr rtc ok
 
 	mkdir -p "$(dirname "$LEDGER")" 2>/dev/null || true
 	irq=$(cat /sys/power/pm_wakeup_irq 2>/dev/null || true)
@@ -85,10 +90,13 @@ wake_ledger() {
 		name=$(awk -v i="$irq:" '$1 == i {print $NF; exit}' /proc/interrupts 2>/dev/null)
 		[ -n "${name:-}" ] || name=unknown
 	fi
+	pwr=$(irq_count 24)
+	rtc=$(irq_count 217)
+	ok=$(cat /sys/power/suspend_stats/success 2>/dev/null)
 
-	line=$(printf '%s wake_irq=%s (%s) mode=%s %s %s %s %s' \
+	line=$(printf '%s wake_irq=%s (%s) mode=%s ok=%s pwrkey=%s rtc=%s %s %s %s %s' \
 		"$(date --iso-8601=seconds 2>/dev/null || echo unknown)" \
-		"${irq:-none}" "$name" "$mode" \
+		"${irq:-none}" "$name" "$mode" "${ok:-?}" "${pwr:-?}" "${rtc:-?}" \
 		"$(qcom_counter aosd)" "$(qcom_counter cxsd)" \
 		"$(qcom_counter ddr)" "$(qcom_counter adsp_island)")
 	printf '%s\n' "$line" >> "$LEDGER"

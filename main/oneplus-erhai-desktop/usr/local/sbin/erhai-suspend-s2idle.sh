@@ -150,6 +150,15 @@ rm -f "$DONEF"
 say() { echo "[$(date +%T) up=$(cut -d' ' -f1 /proc/uptime)] $*"; \
         [ -x "$SURVLOG" ] && "$SURVLOG" "suspend-s2idle: $*" 2>/dev/null; return 0; }
 kmsg() { echo "erhai-suspend: $*" > /dev/kmsg 2>/dev/null; }
+# systemd-suspend.service is overridden to run THIS harness directly, so the
+# stock /usr/lib/systemd/system-sleep hooks never run.  Call the sleep-policy
+# hook (wake ledger + optional BT gating) around the actual suspend here.
+sleep_policy() {
+    local p=${ERHAI_SLEEP_POLICY:-/usr/lib/systemd/system-sleep/90-erhai-sleep-policy}
+    [ -x "$p" ] || return 0
+    "$p" "$1" suspend >/dev/null 2>&1 || say "sleep-policy $1 failed rc=$?"
+    return 0
+}
 # live pm_test selection (the BRACKETED entry of /sys/power/pm_test).  Read out at
 # STEP4b (kmsg, survives a reset) and at STEP5, so the log PROVES which phase test
 # was in effect.  WHY: the tracer sets pm_test, but its own restore_tweaks used to
@@ -630,8 +639,10 @@ else
     soc_pre_v=$(cat "$BATT/voltage_now" 2>/dev/null)
     say "STEP5 pre-suspend SOC: capacity=${soc_pre_cap}% charge_now=${soc_pre_chg}uAh voltage=$(awk -v v="$soc_pre_v" 'BEGIN{printf "%.3f", v/1e6}')V"
     say "STEP5 ENTER /sys/power/state <- mem   (t0=$t0) PM_TEST=[$(sel_pm_test)]  *** pad may sleep now ***"
+    sleep_policy pre
     echo mem > /sys/power/state
     rc=$?
+    sleep_policy post
     t1=$(cut -d' ' -f1 /proc/uptime)
     gap=$(awk -v a="$t0" -v b="$t1" 'BEGIN{printf "%.2f", b-a}')
     say "STEP5 RETURNED rc=$rc t1=$t1 gap=${gap}s  (real sleep expects >= $WAKE_SECS)"
