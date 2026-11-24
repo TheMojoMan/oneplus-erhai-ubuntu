@@ -1,5 +1,5 @@
 Package: oneplus-erhai-av1fix
-Version: 1.0-test-01
+Version: 1.1
 Section: video
 Priority: optional
 Architecture: arm64
@@ -31,3 +31,11 @@ Description: private AV1 VA-API client stack for the erhai players
  with PKG_CONFIG_PATH=/opt/oneplus-erhai-av1fix/lib/pkgconfig so the driver
  sees the refresh-frame fields.  It replaces the old libva-av1fix and
  ffmpeg-av1fix drop-ins (which shadowed the distribution libraries globally).
+ .
+ 1.1 (2026-11-24): first published release, on top of oneplus-erhai-video 1.15.
+ The libva 2.23.0 + FFmpeg 8.0.1 pair is unchanged from the test builds: FFmpeg
+ is a distribution-style build (VA-API, VDPAU, libdav1d, gnutls), so a player
+ built against it links cleanly, and nothing is installed into /usr/lib.
+ Measured frame for frame against dav1d through the wrappers: t-720p60 600/600
+ (376/600 when the client carries no refresh set), aom-altref 60/60,
+ aom-tiles 40/40, 4K 16/16.

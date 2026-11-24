@@ -1,5 +1,5 @@
 Package: oneplus-erhai-video
-Version: 1.14-test-02
+Version: 1.15
 Section: video
 Priority: optional
 Architecture: arm64
@@ -28,11 +28,16 @@ Description: Hardware video decoding for the OnePlus Pad 3 (erhai, SM8750)
  Main (and Main10/VP9 P2 where the firmware exposes P010) via VA-API.
  Needs an erhai kernel with the iris decode-order output property (the 7.2
  line from +b10 on, or any 7.3-rc* line) for Firefox/Brave; the full erhai
- image ships it. The AV1 refresh set is parsed out of the stream the browser
- submits, so no patched libva/ffmpeg is needed any more: the driver runs against
- the distribution's libva2 and the distribution's ffmpeg (mpv/VLC included).
- The kernel and the browsers are the image's job, so nothing else is dragged
- in. After installing on a running desktop, log out and back in once.
+ image ships it. Browsers need no help at all: they submit framed OBUs and the
+ driver parses the AV1 refresh set out of them. libavcodec (mpv, VLC, ffplay)
+ submits headerless tile payloads instead, so the refresh set can only reach the
+ driver as data, and VA-API has no field for it -- Recommends
+ oneplus-erhai-av1fix carries the two patched libraries that fill it under
+ /opt/oneplus-erhai-av1fix, with wrappers for those three players. Ubuntu still
+ owns /usr/lib, so the ffmpeg tools keep their https/dav1d support and Firefox,
+ Brave and every other client use the distribution libva. The kernel and the
+ browsers are the image's job, so nothing else is dragged in. After installing
+ on a running desktop, log out and back in once.
  .
  The iris-vaapi source tree ships in /usr/src/oneplus-erhai-video/iris-vaapi.
  .
@@ -112,12 +117,18 @@ Description: Hardware video decoding for the OnePlus Pad 3 (erhai, SM8750)
  (tested as IRIS_AV1_LIFT=1) is not reliable - the firmware answered
  "internal decoding error" at stream start on a 4K AV1 stream, Chrome fell back
  to other decoders and YouTube dropped the rendition to 480p.
- 1.14-test-02 (2026-11-23): the AV1 client stack moves to a private prefix.
- The driver is unchanged (it still reads the libva refresh set when a client
- provides one) but is now BUILT against the headers shipped by
- oneplus-erhai-av1fix in /opt/oneplus-erhai-av1fix.  Ubuntu's libva/libav* own
- /usr/lib again, so the ffmpeg tools keep their https/dav1d support and the
- players (mpv, VLC, ffplay) reach the patched stack through small wrappers
- that prepend /opt/oneplus-erhai-av1fix/lib to LD_LIBRARY_PATH.  Browsers were
- never affected: they submit framed OBUs and the driver parses the refresh set
- out of them.  Test build, not published.
+ 1.15 (2026-11-24): the AV1 client stack moves to a private prefix, and the
+ driver gains the DPB/sequence-header fixes that were still test-only. The
+ libva/ffmpeg drop-ins used to shadow Ubuntu's libraries for every process:
+ /usr/bin/ffmpeg lost https and libdav1d, VLC 4 failed to link its vdpau
+ plugin. The patched stack now lives in /opt/oneplus-erhai-av1fix (package
+ oneplus-erhai-av1fix) and only the player wrappers (/usr/local/bin/mpv,
+ /usr/local/bin/ffplay, the diverted /usr/bin/vlc) prepend it to
+ LD_LIBRARY_PATH. The driver keeps reading the refresh set and is built against
+ the patched va/ headers that package ships, while its runtime needs only the
+ distribution libva2. Since 1.14 the driver also owns a single AV1 DPB model
+ and parses the sequence header correctly, which is what makes 4K AV1
+ playback -- the case that used to stall or flicker -- come out right in the
+ browsers. Measured through the shipped path, frame for frame against dav1d:
+ t-720p60 600/600 (376/600 without the client refresh set, i.e. in a player
+ without oneplus-erhai-av1fix), LR-heavy 250/250, 4K 16/16, VP9 150/150.

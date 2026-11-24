@@ -91,4 +91,4 @@ b0612c18cd3581c193e77db6865f44bc  usr/src/oneplus-erhai-video/iris-vaapi/tools/9
 a9fe9fc072a2b9ea3ccd646666c6423d  usr/src/oneplus-erhai-video/iris-vaapi/erhai-changes-vs-upstream.patch
 d026761a1be016470ad39729f0022518  usr/src/oneplus-erhai-video/iris-vaapi/.github/workflows/build.yml
 2eebae40d11dda9bb52aa320e7027099  usr/lib/aarch64-linux-gnu/dri/iris_drv_video.so
-8cd23e20e99930640b88b80488fae626  usr/share/doc/oneplus-erhai-video/README
+9fbab484f3e190602085481805f79c39  usr/share/doc/oneplus-erhai-video/README

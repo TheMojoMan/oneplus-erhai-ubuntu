@@ -127,7 +127,16 @@ install -m755 "$SRC/usr/local/bin/mpv" "$SRC/usr/local/bin/ffplay" \
 	"$STAGE/usr/local/bin/"
 install -m755 "$SRC/usr/share/oneplus-erhai-av1fix/vlc" \
 	"$STAGE/usr/share/oneplus-erhai-av1fix/vlc"
+# Ubuntu's path-exclude drops /usr/share/doc/*, so the package README ships here.
+install -m644 "$SRC/usr/share/oneplus-erhai-av1fix/README.md" \
+	"$STAGE/usr/share/oneplus-erhai-av1fix/README.md"
 chmod 755 "$STAGE/DEBIAN/postinst" "$STAGE/DEBIAN/postrm"
+# /usr/local and friends are shared with every other package: keep the modes
+# dpkg would see from a normal Ubuntu package (the stage dirs came from a build
+# tree, not from a fresh install).
+chmod 755 "$STAGE/usr/local" "$STAGE/usr/local/bin" \
+	"$STAGE/usr/share/oneplus-erhai-av1fix" "$STAGE/opt" \
+	"$STAGE$PREFIX" "$STAGE$PREFIX/lib" "$STAGE$PREFIX/include"
 
 # Payload sanity: the patched header, libva, libavcodec with the symbols VLC's
 # configure probes for.

@@ -13,7 +13,20 @@ What ships in this package:
       VA-API driver (iris-vaapi) for the Iris decoder. Discovers the
       decoder node at runtime (the /dev/videoN index is NOT stable across
       boots); override with IRIS_VAAPI_DEVICE=/dev/videoN if ever needed.
-      Supported: H.264, HEVC Main/Main10, VP9 Profile 0/2. No AV1.
+      Supported: H.264, HEVC Main/Main10, VP9 Profile 0/2, AV1 Main (8-bit
+      and 10-bit).
+
+  AV1 and the players:
+      The driver builds the AV1 frame headers itself and keeps its own DPB.
+      Browsers submit whole framed OBUs, so the driver parses the encoder's
+      refresh set out of them and needs nothing extra.  libavcodec (mpv, VLC,
+      ffplay) submits headerless tile payloads, where the refresh set can only
+      reach the driver as data -- VA-API has no field for it, so those players
+      go through oneplus-erhai-av1fix (Recommends): a private libva/FFmpeg
+      under /opt/oneplus-erhai-av1fix plus wrappers that prepend it to
+      LD_LIBRARY_PATH.  Without that package the players still use the VPU,
+      but the refresh set is guessed and altref-heavy streams desync
+      (t-720p60: 376 of 600 frames against 600 of 600 with the field).
 
   /etc/udev/rules.d/99-iris-dmaheap.rules
       0666 on /dev/dma_heap/system (also applied by postinst on upgrade).
