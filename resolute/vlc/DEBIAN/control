@@ -1,5 +1,5 @@
 Package: vlc
-Version: 4.0.0~git20261124.39866+5589a060d4-0erhai1-test-01
+Version: 4.0.0~git20261125.39866+5589a060d4-0erhai1
 Section: video
 Priority: optional
 Architecture: arm64
@@ -36,3 +36,8 @@ Description: VLC media player 4 for the OnePlus Pad 3 (erhai, SM8750)
  This is a monolithic packaging of the VLC tree: no separate vlc-data,
  vlc-bin or plugin packages, and therefore Breaks/Replaces on Ubuntu's vlc 3
  set.  A VLC 4 from the VideoLAN archive supersedes it normally.
+ .
+ 4.0.0~git20261125.39866+5589a060d4-0erhai1 (2026-11-25): first release.  The
+ AV1 refresh-set fix reaches VLC through oneplus-erhai-av1fix 1.2, whose dpkg
+ file trigger re-installs the /usr/bin/vlc shim after every VLC upgrade, so a
+ newer upstream VLC keeps the fix without this package doing anything.

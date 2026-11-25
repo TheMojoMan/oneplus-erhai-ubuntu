@@ -1,5 +1,5 @@
 Package: oneplus-erhai-av1fix
-Version: 1.1-test-01
+Version: 1.2
 Section: video
 Priority: optional
 Architecture: arm64
@@ -49,3 +49,12 @@ Description: private AV1 VA-API client stack for the erhai players
  reinstalls the shim after any VLC/mpv/ffmpeg install, upgrade or removal, and
  the postinst reports a player that links a libavcodec.so the private stack
  does not carry.
+ .
+ 1.2 (2026-11-25): the /usr/local/bin PATH wrappers are replaced by one shim
+ installed at each player's own absolute path (/usr/bin/vlc, /usr/bin/mpv,
+ /usr/bin/ffplay; the real binary behind a dpkg diversion), so a client that
+ calls a player by absolute path gets the private stack too.  A dpkg file
+ trigger installs the shim again after any vlc/mpv/ffmpeg install, upgrade or
+ removal -- that is what keeps the fix when a newer upstream VLC lands -- and
+ the postinst warns when a player links a libavcodec.so the private stack does
+ not carry.

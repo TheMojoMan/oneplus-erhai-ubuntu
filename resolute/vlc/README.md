@@ -20,7 +20,9 @@ the package in PATH *and* has its own compiled plugin path -- never mix them.
 Version scheme: `4.0.0~git<date>.<commits>+<sha>-0erhai<N>`.  The `~` makes any
 real 4.0.0/4.0.x release sort higher, so `apt upgrade` replaces this package
 with VideoLAN's/Ubuntu's own as soon as one exists; meanwhile it outranks
-Ubuntu's 3.0.23.  Test builds keep the version and add `-test-NN`.
+Ubuntu's 3.0.23.  Test builds keep the version and add `-test-NN`; that sorts
+*above* its own release, so a release must bump the snapshot date (or the sha)
+for apt to see it as newer than the last test build.
 
 AV1: this package contains no wrapper.  `oneplus-erhai-av1fix` owns the
 dpkg-diverted shim at `/usr/bin/vlc` (real binary at `/usr/bin/vlc.erhai-orig`),

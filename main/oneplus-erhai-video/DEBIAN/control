@@ -1,5 +1,5 @@
 Package: oneplus-erhai-video
-Version: 1.15-test-01
+Version: 1.16
 Section: video
 Priority: optional
 Architecture: arm64
@@ -132,3 +132,8 @@ Description: Hardware video decoding for the OnePlus Pad 3 (erhai, SM8750)
  browsers. Measured through the shipped path, frame for frame against dav1d:
  t-720p60 600/600 (376/600 without the client refresh set, i.e. in a player
  without oneplus-erhai-av1fix), LR-heavy 250/250, 4K 16/16, VP9 150/150.
+ 1.16 (2026-11-25): the driver reports the SoC it runs on.  The vendored
+ iris-vaapi still carried the upstream iris1 vendor string, so every VA-API
+ client logged "Qualcomm Iris SM8150 (V4L2)" on the erhai; it is now
+ "Qualcomm Iris SM8750 (V4L2) 0.1.1" (vaQueryVendorString only -- nothing in
+ the driver was SM8150-specific).  No decode change.
