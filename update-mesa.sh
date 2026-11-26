@@ -179,6 +179,11 @@ if [ "$PREFIX" = /usr ]; then
 	echo "==> /usr mode: dropping -dev-only artifacts (include/, pkgconfig/, unversioned symlinks)"
 	rm -rf "$PAYLOAD/include"
 	rm -rf "$PAYLOAD/lib/aarch64-linux-gnu/pkgconfig"
+	# mesa 27 vendors wayland-protocols and installs its own copy of the XML +
+	# pkgconfig file. Ubuntu's `wayland-protocols` package owns exactly those
+	# paths, so shipping them would make dpkg fight over the files.
+	rm -rf "$PAYLOAD/share/wayland-protocols"
+	rm -f "$PAYLOAD/share/pkgconfig/wayland-protocols.pc"
 	rm -f "$PAYLOAD/lib/aarch64-linux-gnu/libEGL_mesa.so" \
 	      "$PAYLOAD/lib/aarch64-linux-gnu/libGLX_mesa.so" \
 	      "$PAYLOAD/lib/aarch64-linux-gnu/libgbm.so" \
