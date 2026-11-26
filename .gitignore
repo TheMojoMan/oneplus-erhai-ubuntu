@@ -4,6 +4,10 @@
 # project directory (mesa payloads, gtk4/mutter rollback debs, ...).
 */debs/*.deb
 debs/*.deb
+# every <suite>/debs/ is build output, including the unpacked package trees the
+# deb builders leave behind (git keeps only main/debs/holdout/)
+*/debs/*
+!*/debs/holdout/
 *.deb
 build-root.log
 __pycache__/
@@ -40,6 +44,11 @@ oneplus-erhai-linux/
 #   oneplus-erhai-gtk4/build/    gtk4 build scratch (dbgsym .debug, 27 MiB)
 oneplus-erhai-firmware-1.0/
 **/oneplus-erhai-mesa/opt/
+#   oneplus-erhai-mesa/usr/      the /usr replacement payload (97 MB of stripped
+#                                ELFs + drirc/ICD json), rebuilt by update-mesa.sh;
+#                                it was still tracked from before this rule and
+#                                tripped update-gits.sh's MAX_COMMIT_MB guard
+**/oneplus-erhai-mesa/usr/
 **/oneplus-erhai-gtk4/build/
 
 # postinst/postrm: build-kernel.sh takes them from the KERNEL TREE
