@@ -582,11 +582,13 @@ else
 fi
 
 # ---- STEP 6: restore
-# USB first: STEP2f unbound the xHCI host, so re-probe it now (idempotent; the trap
-# also calls this on any abort/exit after the unbind).
-usb_restore
 say "STEP6 restore: SetActive false -> $(ss false)"
 say "STEP6 display on -> $("$TOGGLE" on 2>&1; echo rc=$?)"
+# USB after the panel: STEP2f unbound the xHCI host and its tree needs ~1.4 s
+# to re-enumerate (a 5 TB HDD, measured 2026-11-27 21:24). Waiting for it before
+# the display held the screen back by that long; the rebind is independent, so
+# the panel comes first and the devices re-enumerate during the sleep below.
+usb_restore
 sleep 2
 if [ "$PARK_GPU" = 1 ]; then
     echo on > "$GPU/control" 2>/dev/null
