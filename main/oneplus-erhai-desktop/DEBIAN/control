@@ -1,10 +1,10 @@
 Package: oneplus-erhai-desktop
-Version: 2.39-test-09
+Version: 2.39-test-10
 Section: utils
 Priority: optional
 Architecture: all
 Maintainer: TheMojoMan <themojoman@gmx.net>
-Depends: python3
+Depends: python3, iw
 Recommends: gnome-shell, dconf-cli, oneplus-erhai-sensors
 Description: Desktop glue for the OnePlus Pad 3 (erhai)
  Everything the GNOME desktop needs on top of the base image: bringing up the

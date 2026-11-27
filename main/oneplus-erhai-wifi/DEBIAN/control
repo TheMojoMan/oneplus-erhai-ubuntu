@@ -1,31 +1,27 @@
 Package: oneplus-erhai-wifi
-Version: 1.6-test-01
+Version: 1.6-test-02
 Section: net
 Priority: optional
 Architecture: all
 Maintainer: TheMojoMan <themojoman@gmx.net>
-Depends: network-manager, iw, iproute2, oneplus-erhai-firmware (>= 1.4)
-Recommends: kmod
+Depends: oneplus-erhai-firmware (>= 1.4)
+Recommends: network-manager, kmod
 Description: WCN7860 WiFi policy for the OnePlus Pad 3 (erhai)
  Selects the mainline ath12k driver for the internal WCN7860 radio: the
- modprobe policy no longer blacklists ath12k and instead blacklists the
- cnss2/qcacld vendor stack (cnss2, wlan), so udev binds ath12k_pci to the
- PCIe endpoint at boot, the firmware from oneplus-erhai-firmware 1.4
+ modprobe policy blacklists the vendor cnss2/qcacld stack (cnss2, wlan),
+ which carries the same PCI modalias as ath12k, so udev binds ath12k_pci to
+ the PCIe endpoint at boot, the firmware from oneplus-erhai-firmware 1.4
  (ath12k/WCN7860/hw2.0) is downloaded, and NetworkManager takes over the
- wlp1s0 station as usual. The WCN7880 power calibration that ath12k does
- itself is untouched by any modprobe option.
+ wlp1s0 station as usual.
  .
  Needs the 7.3.4 kernel line at +b6 or newer (the first release with the
  WCN7860 hw2.0 definition, the pwrctrl pwrseq 110e match and the three
  PCIe/GCC wake patches); older kernels have no driver for this radio and
  the ath12k firmware cannot be used by them.
  .
- The cnss2/qcacld backend is still shipped but no longer enabled:
- erhai-wcn-wifi.service, erhai-wcn-holdfloor.service,
- erhai-wcn-devcd.service, erhai-wifi-discover.service and their scripts
- (erhai-wcn-wifi.sh, erhai-wcn-recover.sh, save-wcn-devcd.sh,
- erhai-wifi-discover.sh, wl_drvcmd) plus the qcacld INI
- (WCNSS_qcom_cfg.ini, scan_mode_6ghz=0) remain on disk for a manual
- fallback: blacklist ath12k, unblacklist wlan/cnss2 and
- `systemctl enable --now erhai-wcn-wifi.service`. version 1.5 of this
- package is the last one that defaults to that backend.
+ ath12k is the only backend: this package ships no services and no vendor
+ bring-up scripts any more. The cnss2/qcacld fallback of 1.5 and earlier
+ (erhai-wcn-wifi.service, erhai-wcn-holdfloor.service,
+ erhai-wcn-devcd.service, erhai-wifi-discover.service and their scripts,
+ wl_drvcmd, the qcacld INI and the 80-erhai-wifi.link naming rule) was
+ removed.

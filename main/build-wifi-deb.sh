@@ -5,10 +5,10 @@
 #   ./build-wifi-deb.sh     -> debs/oneplus-erhai-wifi_<version>_all.deb
 #
 # The tree is a plain binary-package layout (DEBIAN/control + files as they
-# land on the target), same as build-audio-deb.sh. It carries everything the
-# internal WCN7880 WiFi needs at boot: modprobe.d policy, the three
-# erhai-wcn-*.service units (+ their scripts and wl_drvcmd) and the qcacld
-# config INI (scan_mode_6ghz=0). The deb is staged into
+# land on the target), same as build-audio-deb.sh. It carries only the ath12k
+# policy: the modprobe.d backend selection (blacklist cnss2/wlan) and the
+# README. No service, no script -- the vendor cnss2/qcacld bring-up that 1.5
+# shipped was removed in 1.7. The deb is staged into
 # root-setup-files/packages/ so build-root.sh installs it into the image.
 set -euo pipefail
 
@@ -18,12 +18,11 @@ SRC="$HERE/oneplus-erhai-wifi"
 PKG=$(awk '/^Package:/ {print $2}' "$SRC/DEBIAN/control")
 VER=$(awk '/^Version:/ {print $2}' "$SRC/DEBIAN/control")
 
-[ -x "$SRC/usr/local/sbin/erhai-wcn-wifi.sh" ] ||
-	{ echo "no bring-up script in $SRC" >&2; exit 1; }
+[ -f "$SRC/etc/modprobe.d/erhai-wifi-backend.conf" ] ||
+	{ echo "no modprobe backend policy in $SRC" >&2; exit 1; }
 
 find "$SRC" -type d -exec chmod 755 {} \;
-chmod 755 "$SRC"/DEBIAN/postinst "$SRC"/DEBIAN/prerm \
-          "$SRC"/usr/local/sbin/*
+chmod 755 "$SRC"/DEBIAN/postinst "$SRC"/DEBIAN/prerm
 dpkg-deb --build --root-owner-group "$SRC" "$DEB_DIR/${PKG}_${VER}_all.deb"
 
 # NO_PPA=1 keeps the deb local (debs/) instead of copying it into the PPA suite --

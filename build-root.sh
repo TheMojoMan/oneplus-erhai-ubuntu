@@ -39,15 +39,12 @@
 # every existing dependency still resolves -- see the 'erhai packages LAST'
 # block for the install-order consequences.
 #
-# WiFi (WCN7880) is assembled from a few places:
-#   - the kernel deb ships the cnss platform modules + the PCIe/pwrseq/MHI core
-#   - the firmware deb ships the WCN7880 "peach" blobs (lib/firmware)
-#   - the oneplus-erhai-wifi deb carries the bring-up scripts (erhai-wcn-wifi.sh,
-#     save-wcn-devcd.sh, wl_drvcmd), the erhai-wcn-*.service units, the modprobe.d
-#     policy (blacklist-ath12k, cnss2-noauto, ...) and the qcacld INI (with
-#     scan_mode_6ghz=0); its postinst enables the services
-#   - wlan.ko (qcacld-3.0 mission driver) is built out-of-tree and staged into
-#     the image from ./oneplus-erhai-wcn/ (see the "wifi (wlan)" stage below).
+# WiFi (WCN7860) is assembled from a few places:
+#   - the kernel deb ships the ath12k driver + the PCIe/pwrseq/MHI core
+#   - the firmware deb ships the WCN7860 ath12k blobs + board set (lib/firmware)
+#   - the oneplus-erhai-wifi deb carries only the policy: modprobe.d
+#     blacklists cnss2/wlan so udev binds ath12k to the endpoint; there is no
+#     bring-up unit and no qcacld INI (removed in 1.7).
 #
 # Usage:  sudo ./build-root.sh                 image with NO user (default):
 #                                             gdm stays at the greeter and runs
@@ -1062,13 +1059,10 @@ systemctl enable erhai-data-setup.service
 # "systemctl enable" on it fails, which would abort this stage under set -e.
 systemctl enable erhai-audio-bringup.service
 
-# WiFi (oneplus-erhai-wifi): PCIe floor, cold-boot calibration, wlan.ko, and
-# the UNII-1 gap sweeper that compensates for the firmware's missing active
-# probe.  The deb's postinst enables these on a booted system.
-systemctl enable erhai-wcn-holdfloor.service
-systemctl enable erhai-wcn-devcd.service
-systemctl enable erhai-wcn-wifi.service
-systemctl enable erhai-wifi-discover.service
+# WiFi (oneplus-erhai-wifi): ath12k binds the endpoint through udev and
+# NetworkManager manages the station. The package ships no units any more
+# (the cnss2/qcacld bring-up was removed in 1.7), so there is nothing to
+# enable here.
 
 # Camera (oneplus-erhai-camera): erhai-cam-arm.service is already enabled above;
 # what is new here is the ACL refresh that lets the desktop user open the

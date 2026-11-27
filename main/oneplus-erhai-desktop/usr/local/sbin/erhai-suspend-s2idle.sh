@@ -14,8 +14,8 @@
 #    and the only in-tree `pm_system_wakeup()` callers are cnss2/qcacld
 #    (cnss2/main.c:1973 Dev-SOL IRQ, cnss2/pci.c:8364 WLAN wake IRQ,
 #    qcacld hif_exec.c:1129 / hif_main.c:3037,3112 / qdf_lock.c:429).
-#    Stopping traffic + the discover sweeper removes the RX/wake IRQs that
-#    fire inside the suspend window.
+#    Stopping traffic removes the RX/wake IRQs that fire inside the suspend
+#    window.
 #  * RTC ALARM: /sys/class/rtc/rtc1/wakealarm with the **+N** form. rtc1
 #    (rtc-pm8xxx) counts in its OWN namespace (since_epoch ~5.6e5, wall clock
 #    1.79e9) and rtc0 (rtc-efi) cannot be read at all, so an absolute wall
@@ -38,7 +38,7 @@
 #                          wake). Also skips the +WAKE_SECS+45 unwedge timer
 #                          (that net would unblank the panel mid-sleep while
 #                          waiting for a power press — wrong for manual wake).
-#   QUIESCE=1           stop discover sweeper + `nmcli radio wifi off` first
+#   QUIESCE=1           `nmcli radio wifi off` first
 #   DISPLAY_OFF_FIRST=1 run erhai-display-toggle.sh off before suspending
 #   DRY=0               DRY=1 = do everything except `echo mem`
 #   RESTORE_WIFI=1      bring wifi back at the end
@@ -327,14 +327,9 @@ fi
 # (`hdd_open: VDEV SYNC TRANS fails -22`, 19:39/19:41/20:16 — recoverable only
 # by reboot). DRY only validates the plumbing, never the WLAN teardown.
 if [ "$DRY" = 0 ] && [ "$QUIESCE" = 1 ]; then
-    if systemctl is-active --quiet erhai-wifi-discover.service; then
-        systemctl stop erhai-wifi-discover.service && say "STEP2 discover sweeper stopped"
-    else
-        say "STEP2 discover sweeper not active"
-    fi
     say "STEP2 nmcli radio wifi off -> $(nmcli radio wifi off 2>&1; echo rc=$?)"
 elif [ "$DRY" = 1 ] && [ "$QUIESCE" = 1 ]; then
-    say "STEP2 SKIPPED radio off in DRY run (would wedge the WCN) — sweeper not stopped either"
+    say "STEP2 SKIPPED radio off in DRY run (would wedge the WCN)"
 fi
 
 # ---- STEP 2c: WAIT until the WLAN is FULLY settled before `echo mem`.
@@ -704,13 +699,6 @@ fi
 say "STEP6 post-restore: $(snap)"
 if [ "$RESTORE_WIFI" = 1 ] && [ "$QUIESCE" = 1 ]; then
     say "STEP6 nmcli radio wifi on -> $(nmcli radio wifi on 2>&1; echo rc=$?)"
-    # --no-block: this unit Wants=erhai-wcn-wifi.service, whose NM handoff wait
-    # can only finish after NetworkManager leaves sleep -- and NM leaves sleep
-    # only after systemd-suspend.service (this script) exits. A blocking start
-    # here therefore deadlocked the resume for the full 40 s loop timeout
-    # (measured 2026-11-27: 53 s from PM suspend exit to association). Never
-    # gate the resume on the sweeper unit.
-    systemctl start --no-block erhai-wifi-discover.service 2>/dev/null && say "STEP6 discover sweeper restarted"
 fi
 if [ -n "${ORIG_MEM_SLEEP:-}" ]; then
     echo "$ORIG_MEM_SLEEP" > /sys/power/mem_sleep 2>/dev/null
@@ -762,7 +750,6 @@ if [ "$QUIESCE" = 1 ]; then
     fi
     if [ "$RESTORE_WIFI" = 1 ]; then
         say "STEP7 explicit re-enable: nmcli radio wifi on -> $(nmcli radio wifi on 2>&1; echo rc=$?)"
-        systemctl start --no-block erhai-wifi-discover.service 2>/dev/null && say "STEP7 discover sweeper restarted"
         say "STEP7 WATCH_B start (${WIFI_WATCH_B}s): $(nmst)"
         i=0
         while [ "$i" -lt "$WIFI_WATCH_B" ]; do
@@ -771,8 +758,6 @@ if [ "$QUIESCE" = 1 ]; then
         done
         say "STEP7 WATCH_B end: $(nmst)"
     fi
-elif [ "$RESTORE_WIFI" = 1 ]; then
-    systemctl start --no-block erhai-wifi-discover.service 2>/dev/null && say "STEP7 discover sweeper restarted"
 fi
 systemctl stop erhai-suspend-unwedge.timer erhai-suspend-unwedge.service 2>/dev/null
 touch "$DONEF"

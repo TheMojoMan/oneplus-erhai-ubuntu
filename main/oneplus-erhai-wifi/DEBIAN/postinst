@@ -1,25 +1,24 @@
 #!/bin/sh
-# 1.6 and later: ath12k is the backend, so the cnss2/qcacld units are NOT
-# enabled; with the old 1.5 package they were. Disable them and drop the wants
-# symlinks that 1.5 created in /etc (dpkg does not own those), otherwise systemd
-# logs "unit not found" at every boot.
+# ath12k is the only backend. This package no longer ships the vendor
+# cnss2/qcacld units, so clean up after the versions that did: stop the loaded
+# units, drop the enable symlinks `systemctl enable` created under /etc (dpkg
+# does not own those), then reload. Otherwise systemd logs "unit not found" at
+# every boot and the old discovery sweeper keeps scanning.
 set -e
 
-drop_unit() {
-	unit="$1"
-	target="$2"
-	wants="/etc/systemd/system/$target.wants"
-	if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
-		systemctl disable "$unit" >/dev/null 2>&1 || true
-		systemctl stop "$unit" >/dev/null 2>&1 || true
-	fi
-	rm -f "$wants/$unit"
-}
+if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+	# The unit files are already gone from disk at this point, but systemd
+	# still has the old definitions loaded until the daemon-reload below.
+	systemctl stop erhai-wifi-discover.service 2>/dev/null || true
+	systemctl stop erhai-wcn-wifi.service 2>/dev/null || true
+	systemctl stop erhai-wcn-devcd.service 2>/dev/null || true
+	systemctl stop erhai-wcn-holdfloor.service 2>/dev/null || true
+fi
 
-drop_unit erhai-wcn-wifi.service multi-user
-drop_unit erhai-wcn-devcd.service multi-user
-drop_unit erhai-wcn-holdfloor.service sysinit
-drop_unit erhai-wifi-discover.service multi-user
+rm -f /etc/systemd/system/multi-user.target.wants/erhai-wcn-wifi.service \
+      /etc/systemd/system/multi-user.target.wants/erhai-wcn-devcd.service \
+      /etc/systemd/system/multi-user.target.wants/erhai-wifi-discover.service \
+      /etc/systemd/system/sysinit.target.wants/erhai-wcn-holdfloor.service
 
 if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
 	systemctl daemon-reload || true
@@ -33,8 +32,5 @@ if [ ! -f /usr/lib/firmware/ath12k/WCN7860/hw2.0/board-2.bin ]; then
 	echo "warning: /usr/lib/firmware/ath12k/WCN7860/hw2.0/board-2.bin is missing;" >&2
 	echo "         install oneplus-erhai-firmware 1.4 or newer, ath12k needs it." >&2
 fi
-
-# The vendor path is kept for a manual fallback: see
-# /usr/share/oneplus-erhai-wifi/README.md
 
 exit 0
