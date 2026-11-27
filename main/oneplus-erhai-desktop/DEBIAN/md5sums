@@ -56,11 +56,11 @@ c01ca798c86aa860863e0b5d0742af57  usr/local/sbin/erhai-panel-power.sh
 de6e899429cb709ba3d5c3828db2f9a1  usr/local/sbin/erhai-pogo-osk.py
 9e2bbee2283abafa1ccfc1c0d3fdcf39  usr/local/sbin/erhai-power-watch.py
 b60c6831263f6164fa46fc842d14931a  usr/local/sbin/erhai-rtc-sync.py
-f6b99310879c186ee16539d1a6c94532  usr/local/sbin/erhai-suspend-gnome.sh
+a7174783bd79ce1e30fc65e1ea11f858  usr/local/sbin/erhai-suspend-gnome.sh
 57cea238e2effe31e9debb3823de3a9b  usr/local/sbin/erhai-suspend-s2idle.sh
 1ef131fc3c83db0673184a272f020246  usr/local/sbin/erhai-touch-rebind.sh
 1525ffc93a2fb55b818a8eccf0c2cfcd  usr/local/sbin/erhai-user-groups.sh
-95ff57164a81b3a916189eeb1802320d  usr/local/sbin/erhai-wifi-rescan.sh
+063f1798d89c1aed52e7ba8db0504f11  usr/local/sbin/erhai-wifi-rescan.sh
 7cc0c817e42043635b67a853eb0d5748  usr/local/share/gdm/greeter/wayland-sessions/gnome-greeter.desktop
 467dc749e7366cde97f6b036b7b9e304  usr/share/gdm/dconf/95-erhai-greeter
 b27b33c1472cb7f3cea8be939b80c477  usr/share/glib-2.0/schemas/99-erhai-no-gsd-ambient.gschema.override

@@ -22,23 +22,15 @@
 # MEM_STATE=deep is overridable (`systemctl set-environment MEM_STATE=s2idle`)
 # for an A/B run; s2idle is still the fallback if deep ever wedges.
 #
-# WHY QUIESCE=0 here (DELIBERATE — see MEMORY-2026-09-08 §20:10):
-#   * NM reacts to logind's PrepareForSleep with its OWN FW-sanctioned radio
-#     off BEFORE systemd-suspend.service even starts. If we ALSO call
-#     `nmcli radio off` (harness STEP2), the two teardowns race the WCN:
-#     - 19:27:10 crash: kworker died mid-mutex in
-#       hif_exec_napi_kill/cnss_pci_dev_shutdown with preempt_count 1, then
-#       suspend entry POR'd 6 s later
-#     - 19:41/20:16 chip wedges: `hdd_open: VDEV SYNC TRANS fails -22` when
-#       radio off->on is compressed into seconds (DRY run bug)
-#   So on the GNOME suspend path, STEP2 only stops the discovery sweeper;
-#   the radio-off is NM's job. QUIESCE=1 (manual harness runs) still does
-#   the full radio off — the proven standalone path where NM is not
-#   concurrently touching the chip.
+# WHY QUIESCE=0 here: NetworkManager already turns the radio off on logind's
+# PrepareForSleep, before systemd-suspend.service starts, so calling
+# `nmcli radio off` again (harness STEP2) would only duplicate the teardown.
+# The vendor (cnss2/qcacld) races that motivated the old caution are gone:
+# ath12k has been the only backend since wifi 1.6/1.7. QUIESCE=1 (manual
+# harness runs) still turns the radio off before the sleep.
 #
 # The harness also STOPs erhai-power-toggle.service across the sleep window
-# (STEP2b/STEP6), so the wake press is never misread as a panel-toggle, and
-# freezes the WCN psoc-idle timer (STEP2d/STEP6) so idle-shutdown can't race.
+# (STEP2b/STEP6), so the wake press is never misread as a panel-toggle.
 HARNESS=${ERHAI_SUSPEND_HARNESS:-/usr/local/sbin/erhai-suspend-s2idle.sh}
 
 export WAKE_SECS="${WAKE_SECS:-0}"

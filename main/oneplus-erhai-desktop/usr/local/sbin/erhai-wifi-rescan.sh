@@ -1,7 +1,7 @@
 #!/bin/bash
 # erhai-wifi-rescan.sh - keep the radio scanning across NetworkManager's
 # post-resume wake so NM's first full-band scan fails (-EBUSY) and NM falls
-# back to the BSS cache the suspend harness warms first (STEP5b).
+# back to the BSS cache the harness warms first (STEP5b).
 #
 # WHY: on ath12k a full-band scan costs ~8.3 s (measured 2026-11-27) and NM
 # waits for its own scan before autoconnecting after a resume -- that scan is
@@ -13,13 +13,15 @@
 # because systemd-suspend.service exiting is what makes logind wake NM: a scan
 # owned by that unit would be killed at exactly the wrong moment.
 #
-# Bounded: stops at the first connected station, or after RESCAN_SECS (8).
-# Channels: the common 2.4 GHz trio plus the non-DFS 5 GHz starters -- enough
-# for the cache, fast enough (~0.7 s) to keep the radio almost continuously
-# busy through the wake.
+# SEQUENCE: one short directed scan warms the cache (~0.7 s), then an ASYNC
+# full-band scan is triggered and re-triggered until a station is connected.
+# A full scan runs ~8.3 s, so it is still in flight when NM wakes (2-3 s after
+# the resume) and its scan request is guaranteed to collide. The earlier
+# synchronous directed loop left ~40 % idle gaps and NM won the race 2 of 4
+# times (2026-11-27 19:28 / 19:33 resumes took the full 8.5 s).
 set -u
 
-RESCAN_SECS=${ERHAI_WIFI_RESCAN_SECS:-6}
+RESCAN_SECS=${ERHAI_WIFI_RESCAN_SECS:-12}
 CHANNELS="2412 2437 2462 5180 5200 5240 5745"
 
 station() {
@@ -38,11 +40,23 @@ connected() {
 end=$((SECONDS + RESCAN_SECS))
 scans=0
 connected && { echo "erhai-wifi-rescan: already connected, nothing to do"; exit 0; }
+
+# Warm the BSS cache: short, directed, synchronous. Its results are what NM
+# activates from once its own scan is rejected.
+for n in $(station); do
+	ip link set "$n" up 2>/dev/null || true
+	iw dev "$n" scan freq $CHANNELS >/dev/null 2>&1
+	scans=$((scans + 1))
+done
+connected && { echo "erhai-wifi-rescan: connected after warm scan"; exit 0; }
+
+# Hold the radio busy: trigger a full-band scan asynchronously and keep
+# re-triggering (a trigger while one is running returns -EBUSY). The first one
+# spans NM's wake; do not wait for its results.
 while [ "$SECONDS" -lt "$end" ]; do
 	found=0
 	for n in $(station); do
-		ip link set "$n" up 2>/dev/null || true
-		iw dev "$n" scan freq $CHANNELS >/dev/null 2>&1
+		iw dev "$n" scan trigger >/dev/null 2>&1
 		scans=$((scans + 1))
 		found=1
 	done
@@ -50,4 +64,4 @@ while [ "$SECONDS" -lt "$end" ]; do
 	connected && break
 	sleep 0.2
 done
-echo "erhai-wifi-rescan: done after ${scans} scan(s), $((SECONDS))s, connected=$(connected && echo yes || echo no)"
+echo "erhai-wifi-rescan: done after ${scans} scan(s)/trigger(s), $((SECONDS))s, connected=$(connected && echo yes || echo no)"
