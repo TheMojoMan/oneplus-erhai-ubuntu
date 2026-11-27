@@ -691,7 +691,13 @@ fi
 say "STEP6 post-restore: $(snap)"
 if [ "$RESTORE_WIFI" = 1 ] && [ "$QUIESCE" = 1 ]; then
     say "STEP6 nmcli radio wifi on -> $(nmcli radio wifi on 2>&1; echo rc=$?)"
-    systemctl start erhai-wifi-discover.service 2>/dev/null && say "STEP6 discover sweeper restarted"
+    # --no-block: this unit Wants=erhai-wcn-wifi.service, whose NM handoff wait
+    # can only finish after NetworkManager leaves sleep -- and NM leaves sleep
+    # only after systemd-suspend.service (this script) exits. A blocking start
+    # here therefore deadlocked the resume for the full 40 s loop timeout
+    # (measured 2026-11-27: 53 s from PM suspend exit to association). Never
+    # gate the resume on the sweeper unit.
+    systemctl start --no-block erhai-wifi-discover.service 2>/dev/null && say "STEP6 discover sweeper restarted"
 fi
 if [ -n "${ORIG_MEM_SLEEP:-}" ]; then
     echo "$ORIG_MEM_SLEEP" > /sys/power/mem_sleep 2>/dev/null
@@ -743,7 +749,7 @@ if [ "$QUIESCE" = 1 ]; then
     fi
     if [ "$RESTORE_WIFI" = 1 ]; then
         say "STEP7 explicit re-enable: nmcli radio wifi on -> $(nmcli radio wifi on 2>&1; echo rc=$?)"
-        systemctl start erhai-wifi-discover.service 2>/dev/null && say "STEP7 discover sweeper restarted"
+        systemctl start --no-block erhai-wifi-discover.service 2>/dev/null && say "STEP7 discover sweeper restarted"
         say "STEP7 WATCH_B start (${WIFI_WATCH_B}s): $(nmst)"
         i=0
         while [ "$i" -lt "$WIFI_WATCH_B" ]; do
@@ -753,7 +759,7 @@ if [ "$QUIESCE" = 1 ]; then
         say "STEP7 WATCH_B end: $(nmst)"
     fi
 elif [ "$RESTORE_WIFI" = 1 ]; then
-    systemctl start erhai-wifi-discover.service 2>/dev/null && say "STEP7 discover sweeper restarted"
+    systemctl start --no-block erhai-wifi-discover.service 2>/dev/null && say "STEP7 discover sweeper restarted"
 fi
 systemctl stop erhai-suspend-unwedge.timer erhai-suspend-unwedge.service 2>/dev/null
 touch "$DONEF"

@@ -95,6 +95,23 @@ else
 fi
 say "internal station = $STA"
 
+# === ath12k backend: nothing for the vendor path to do ===
+# oneplus-erhai-wifi 1.6 makes mainline ath12k the default backend and
+# blacklists cnss2/wlan, so a station that already exists here belongs to
+# ath12k. The country ioctl, the forced scan and the NM handoff below are all
+# qcacld-specific; worse, the NM wait blocks for its full 40 s timeout while
+# NetworkManager is still asleep (logind emits PrepareForSleep=false only after
+# systemd-suspend.service exits, and on resume that service may be waiting for
+# this unit) -- measured 2026-11-27 as a 53 s wifi delay after a deep resume.
+# Exit before touching the ath12k-owned device or waiting on NM.
+drv=$(basename "$(readlink -f "/sys/class/net/$STA/device/driver" 2>/dev/null)" 2>/dev/null || true)
+case "$drv" in
+  ath12k*)
+    say "station $STA is driven by $drv -- ath12k backend, skipping vendor bring-up"
+    exit 0
+    ;;
+esac
+
 ip link set "$STA" up || true
 
 # === 5GHz-at-cold-boot ===
