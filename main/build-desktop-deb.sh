@@ -31,7 +31,6 @@ for f in usr/local/sbin/erhai-user-groups.sh \
 	 usr/local/sbin/erhai-power-watch.py \
 	 usr/local/sbin/erhai-suspend-gnome.sh \
 	 usr/local/sbin/erhai-suspend-s2idle.sh \
-	 usr/local/sbin/erhai-suspend-wlan-guard.sh \
 	 usr/local/sbin/erhai-wifi-rescan.sh \
 	 etc/systemd/system/erhai-wifi-rescan.service \
 	 usr/lib/systemd/system-sleep/90-erhai-sleep-policy \

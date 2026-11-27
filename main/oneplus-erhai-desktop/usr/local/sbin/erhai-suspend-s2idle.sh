@@ -11,11 +11,10 @@
 #    `erhai-display-toggle.sh off` path first means the compositor's pipeline
 #    is already blanked, so an abort resumes into a state it understands.
 #  * QUIESCE WLAN: the abort was `pm_wakeup_pending()` -> `pm_abort_suspend`,
-#    and the only in-tree `pm_system_wakeup()` callers are cnss2/qcacld
-#    (cnss2/main.c:1973 Dev-SOL IRQ, cnss2/pci.c:8364 WLAN wake IRQ,
-#    qcacld hif_exec.c:1129 / hif_main.c:3037,3112 / qdf_lock.c:429).
-#    Stopping traffic removes the RX/wake IRQs that fire inside the suspend
-#    window.
+#    raised by the cnss2/qcacld vendor stack. That backend is no longer used
+#    (ath12k is the only one since wifi >= 1.6), so the QUIESCE=1 manual test
+#    path just turns the radio off before the sleep; the GNOME path leaves the
+#    radio to NetworkManager.
 #  * RTC ALARM: /sys/class/rtc/rtc1/wakealarm with the **+N** form. rtc1
 #    (rtc-pm8xxx) counts in its OWN namespace (since_epoch ~5.6e5, wall clock
 #    1.79e9) and rtc0 (rtc-efi) cannot be read at all, so an absolute wall
@@ -391,106 +390,6 @@ else
     say "STEP2b power-watch service not active (nothing to stop)"
 fi
 
-# ---- STEP 2d: freeze the WCN psoc idle-shutdown timer for the sleep window.
-# The 19:27:10 GNOME-suspend POR showed the WLAN idle-shutdown racing suspend:
-# NM's PrepareForSleep radio-off triggers `hdd_psoc_idle_timeout_callback`
-# (psoc idle timeouts after 250 ms in this kernel's config default) ->
-# `cnss: Doing idle shutdown` -> NULL-pointer-deref in the wlan driver
-# (htc_stop/hif teardown race) -> kernel tainted, then suspend entry 6 s later
-# silently reset the SoC. The QDF timer multiplier
-# (/sys/module/wlan/parameters/timer_multiplier, range 1..0xFFFFFFFF) scales
-# EVERY qdf_delayed_work — including psoc_idle_timeout_work. Setting a huge
-# value here makes the idle-shutdown effectively unreachable for the whole
-# sleep, so it can never collide with `echo mem`. Restored in STEP6.
-WLAN_TM=/sys/module/wlan/parameters/timer_multiplier
-WLAN_TM_ORIG=""
-if [ "$DRY" = 0 ] && [ -w "$WLAN_TM" ]; then
-    WLAN_TM_ORIG=$(cat "$WLAN_TM" 2>/dev/null)
-    if [ "$WLAN_TM_ORIG" != 1000000 ]; then
-        echo 1000000 > "$WLAN_TM" 2>/dev/null && say "STEP2d WCN psoc-idle timer frozen (timer_multiplier 1 -> 1000000, was $WLAN_TM_ORIG)"
-    else
-        say "STEP2d WCN timer_multiplier already 1000000"
-    fi
-else
-    if [ "$DRY" = 1 ]; then
-        say "STEP2d SKIPPED in DRY run (timer churn unnecessary; real run freezes it)"
-    else
-        say "STEP2d $WLAN_TM not writable — psoc idle-shutdown could race suspend"
-    fi
-fi
-
-# ---- STEP 2e: WLAN TEARDOWN GUARD (2026-10-21) — NEVER enter s2idle on a
-# crashed / half-dead WLAN.  Owner's 4-test session on 2026-10-21: tests 1-3
-# could not be woken with the power key and needed a HARD RESET, test 4 slept
-# 20.2 s and woke normally.  The journal difference is the WLAN teardown NM does
-# on logind's PrepareForSleep: the 250 ms psoc idle timer (`gInterfaceChangeWait`)
-# fires `cnss: Doing idle shutdown` -> hdd_psoc_idle_shutdown -> ... ->
-# hif_exec_napi_kill, which in the crashing runs Oopsed
-# ("Unable to handle kernel paging request" + "kworker/u33:N exited with
-# preempt_count 1") 0.1-0.2 s after "htc_stop: stopping hif layer" and left the
-# cnss IDLE_SHUTDOWN event NEVER completed ("Completed event: IDLE_SHUTDOWN"
-# count 0); `echo mem` 2.7-3.0 s later then never returned.  The surviving run
-# had that SAME shutdown COMPLETE cleanly ("... ret: 0/0") before the suspend.
-# STEP2d freezes the timer, but it runs AFTER NM's radio-off (logind's
-# PrepareForSleep reaches NM before systemd-suspend.service starts), i.e. too
-# late to matter — so instead of trying to win the race we refuse to sleep when
-# it was lost.  Full analysis: MEMORY-2026-10-21.md §suspend.
-WLAN_GUARD=${WLAN_GUARD:-1}
-GUARD=/usr/local/sbin/erhai-suspend-wlan-guard.sh
-[ -x "$GUARD" ] || GUARD=$D/erhai-suspend-wlan-guard.sh
-if [ "$DRY" = 1 ]; then
-    say "STEP2e WLAN guard SKIPPED in DRY run (no radio teardown happens)"
-elif [ "$WLAN_GUARD" != 1 ]; then
-    say "STEP2e WLAN guard DISABLED (WLAN_GUARD=$WLAN_GUARD) — no hard-reset protection"
-elif [ -x "$GUARD" ]; then
-    g_out=$("$GUARD" 2>&1); g_rc=$?
-    printf '%s\n' "$g_out" | while IFS= read -r l; do say "STEP2e   $l"; done
-    if [ "$g_rc" = 0 ]; then
-        say "STEP2e WLAN guard PASSED — safe to suspend"
-    else
-        say "STEP2e !!! WLAN guard FAILED (rc=$g_rc) — ABORTING the suspend (this is the case that used to need a hard reset)"
-        echo "wlan-guard-failed rc=$g_rc up=$(cut -d' ' -f1 /proc/uptime)" > /run/erhai-suspend-wlan-guard
-        say "STEP2e restore: SetActive false -> $(ss false)"
-        say "STEP2e restore: display on -> $("$TOGGLE" on 2>&1; echo rc=$?)"
-        if [ "$PARK_GPU" = 1 ]; then
-            echo on > "$GPU/control" 2>/dev/null
-            say "STEP2e restore: gpu re-pinned: $(snap)"
-        fi
-        if [ -n "${ORIG_MEM_SLEEP:-}" ]; then
-            echo "$ORIG_MEM_SLEEP" > /sys/power/mem_sleep 2>/dev/null
-        fi
-        if [ -n "$WLAN_TM_ORIG" ] && [ "$WLAN_TM_ORIG" != 1000000 ]; then
-            echo "$WLAN_TM_ORIG" > "$WLAN_TM" 2>/dev/null
-        fi
-        if [ "$POWERWATCH_ACTIVE" = 1 ]; then
-            systemctl start erhai-power-toggle.service 2>/dev/null
-        fi
-        # The crash that made the guard abort also leaves the qcacld driver broken
-        # (`hdd_open: VDEV SYNC TRANS start fails -16`, NM shows no networks).
-        # NEVER try to REPAIR that from here: in this state `rmmod wlan` HANGS in
-        # D-state (2026-10-21: "Hard Unloading driver" then nothing, module left
-        # GOING/refs -1, and the stuck unit then made the owner's plain reboot
-        # hang too -> hard reset).  So: REPORT ONLY (read-only + bounded), and
-        # tell the user to reboot with --force.  WLAN_GUARD_STATUS=0 skips it.
-        if [ "${WLAN_GUARD_STATUS:-1}" = 1 ]; then
-            WREC=/usr/local/sbin/erhai-wcn-recover.sh
-            [ -x "$WREC" ] || WREC=$D/erhai-wcn-recover.sh
-            if [ -x "$WREC" ]; then
-                r_out=$(timeout 40 "$WREC" status 2>&1); r_rc=$?
-                printf '%s\n' "$r_out" | while IFS= read -r l; do say "STEP2e wlan-state  $l"; done
-                say "STEP2e wlan-state rc=$r_rc (read-only; a wedged driver needs 'systemctl reboot --force')"
-            else
-                say "STEP2e wlan-state: $WREC not found"
-            fi
-        fi
-        say "STEP2e post-abort: $(snap)"
-        say "===== SUSPEND s2idle RUN END (ABORTED at STEP2e — WLAN guard) ====="
-        exit 3
-    fi
-else
-    say "STEP2e $GUARD not found — guard skipped (no hard-reset protection)"
-fi
-
 # ---- STEP 2f: USB quiesce (unmount USB media, then unbind the xHCI host)
 # WHY: with USB devices attached the resume can kill the xHCI controller (`HC died`),
 # drop every device and burn ~17 s (MEMORY-2026-10-21.md §31).  Taking the host down
@@ -515,9 +414,6 @@ else
             fi
             if [ -n "${ORIG_MEM_SLEEP:-}" ]; then
                 echo "$ORIG_MEM_SLEEP" > /sys/power/mem_sleep 2>/dev/null
-            fi
-            if [ -n "${WLAN_TM_ORIG:-}" ]; then
-                echo "$WLAN_TM_ORIG" > "$WLAN_TM" 2>/dev/null
             fi
             if [ "$POWERWATCH_ACTIVE" = 1 ]; then
                 systemctl start erhai-power-toggle.service 2>/dev/null
@@ -707,11 +603,6 @@ fi
 # STEP4d: bring the ADSP sensor users back only after the panel is restored
 # (erhai-folio-fold's ExecStopPost unblanks, and a restart re-reads the fold).
 ssc_restore
-if [ -n "$WLAN_TM_ORIG" ]; then
-    if [ "$WLAN_TM_ORIG" != 1000000 ]; then
-        echo "$WLAN_TM_ORIG" > "$WLAN_TM" 2>/dev/null && say "STEP6 WCN timer_multiplier restored -> $WLAN_TM_ORIG"
-    fi
-fi
 # Restore the power-watch service. Its fd was closed during suspend, so the
 # wake-press evdev event was never delivered to it (see STEP2b); opening the
 # device freshly here only reads events from after this reopen.
@@ -741,12 +632,12 @@ if [ "$QUIESCE" = 1 ]; then
     # is normally 0 s and a "came back by itself?" verdict is then MEANINGLESS
     # (2026-10-21: it printed NO while wlp1s0 had in fact returned as a netdev and
     # NM reconnected seconds later).  The real verdict is the netdev STATE:
-    # `wlp1s0:disconnected` = wlan.ko re-attached (OK, NM will connect),
+    # `wlp1s0:disconnected` = station back (OK, NM will connect),
     # `wlp1s0:unavailable` = the post-resume WEDGE (see §25.3).
     if [ "${WIFI_WATCH_A:-0}" -gt 0 ]; then
         say "STEP7 WATCH_A end: $(nmst) — conclusion: came back by itself? $(nmcli -t -f DEVICE,STATE dev | grep -q wlp1s0:connected && echo YES || echo NO)"
     else
-        say "STEP7 WATCH_A end: $(nmst) — window 0s (tracer): auto-reconnect NOT measured; the netdev state above IS the verdict (disconnected = wlan.ko back, unavailable = wedged), wlan refs=$(lsmod 2>/dev/null | awk '$1=="wlan"{print $3}')"
+        say "STEP7 WATCH_A end: $(nmst) — window 0s (tracer): auto-reconnect NOT measured; the netdev state above IS the verdict (disconnected = station back, unavailable = wedged)"
     fi
     if [ "$RESTORE_WIFI" = 1 ]; then
         say "STEP7 explicit re-enable: nmcli radio wifi on -> $(nmcli radio wifi on 2>&1; echo rc=$?)"

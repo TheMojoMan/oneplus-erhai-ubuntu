@@ -22,7 +22,7 @@ a3aeeb8b59b5fbde7861093dc7d9319e  etc/systemd/system/erhai-host-charge.service
 2621ff7dd6ef1cd5c0b5b08709576da2  etc/systemd/system/erhai-rtc-sync.timer
 b7d70ae00a046f13eb2095ab31e86671  etc/systemd/system/erhai-touchscreen.service
 ccea70753c61cf4a1418869d90393e6e  etc/systemd/system/erhai-wifi-rescan.service
-449241d6e52f1df03d67acb34edde1a1  etc/systemd/system/systemd-suspend.service.d/erhai-s2idle.conf
+711f5cc229a296fd26e32844dfd65be1  etc/systemd/system/systemd-suspend.service.d/erhai-s2idle.conf
 dd0f3d02dcdc23770e23610be53e3226  etc/udev/rules.d/60-erhai-usb-autosuspend.rules
 1549212aa03231d646aedf1ccd87ff08  etc/udev/rules.d/71-erhai-folio-udev.rules
 1c4e5826547b901d29c68073c9299a1c  etc/udev/rules.d/72-erhai-gpu-external.rules
@@ -57,8 +57,7 @@ de6e899429cb709ba3d5c3828db2f9a1  usr/local/sbin/erhai-pogo-osk.py
 9e2bbee2283abafa1ccfc1c0d3fdcf39  usr/local/sbin/erhai-power-watch.py
 b60c6831263f6164fa46fc842d14931a  usr/local/sbin/erhai-rtc-sync.py
 f6b99310879c186ee16539d1a6c94532  usr/local/sbin/erhai-suspend-gnome.sh
-01161ab7c3b6b306fffb7937ca5a27a7  usr/local/sbin/erhai-suspend-s2idle.sh
-1fc610bdc3ff38aeb4dcfa95602dd647  usr/local/sbin/erhai-suspend-wlan-guard.sh
+57cea238e2effe31e9debb3823de3a9b  usr/local/sbin/erhai-suspend-s2idle.sh
 1ef131fc3c83db0673184a272f020246  usr/local/sbin/erhai-touch-rebind.sh
 1525ffc93a2fb55b818a8eccf0c2cfcd  usr/local/sbin/erhai-user-groups.sh
 95ff57164a81b3a916189eeb1802320d  usr/local/sbin/erhai-wifi-rescan.sh
