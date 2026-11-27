@@ -594,7 +594,10 @@ usb_restore
 # Sensors restart asynchronously while the panel settles (step 4d rationale:
 # only after the panel is restored, which it is now).
 ssc_restore
-sleep 2
+# Keep the settle short: this sleep is the last thing gating the unit exit, and
+# that exit is what wakes NetworkManager. The panel toggle above is synchronous;
+# 0.5 s is enough for the backlight/compositor to settle before the snapshot.
+sleep 0.5
 if [ "$PARK_GPU" = 1 ]; then
     echo on > "$GPU/control" 2>/dev/null
     say "STEP6 gpu re-pinned: $(snap)"
