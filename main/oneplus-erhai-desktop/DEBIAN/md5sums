@@ -56,7 +56,7 @@ de6e899429cb709ba3d5c3828db2f9a1  usr/local/sbin/erhai-pogo-osk.py
 9e2bbee2283abafa1ccfc1c0d3fdcf39  usr/local/sbin/erhai-power-watch.py
 b60c6831263f6164fa46fc842d14931a  usr/local/sbin/erhai-rtc-sync.py
 f6b99310879c186ee16539d1a6c94532  usr/local/sbin/erhai-suspend-gnome.sh
-b88d31f20e54bb55601ddb2d16263fee  usr/local/sbin/erhai-suspend-s2idle.sh
+b268952fdf5be19f11b0be3942cdc51b  usr/local/sbin/erhai-suspend-s2idle.sh
 1fc610bdc3ff38aeb4dcfa95602dd647  usr/local/sbin/erhai-suspend-wlan-guard.sh
 1ef131fc3c83db0673184a272f020246  usr/local/sbin/erhai-touch-rebind.sh
 1525ffc93a2fb55b818a8eccf0c2cfcd  usr/local/sbin/erhai-user-groups.sh

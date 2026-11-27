@@ -248,6 +248,30 @@ usb_restore() {        # re-probe the host iff STEP2f unbound it (idempotent, tr
     kmsg "USB rebind done devices=$(usb_nonroot_devs)"
     return 0
 }
+# ---- STEP5b: pre-warm the scan cache (background, adds no wall time)
+# WHY: NetworkManager's first act after wake is a FULL-band scan; on ath12k
+# that includes the passive 6 GHz channels and cost ~7.5 s before autoconnect
+# could start (measured 2026-11-27: wake 18:35:01, autoconnect 18:35:09).
+# While NM is still asleep the station is unmanaged, so a small directed scan
+# is free: the BSS entries sit in the cfg80211 cache when NM wakes and NM
+# activates straight from them (measured 0.5 s on the old path, 18:17:27).
+# Common 2.4 GHz trio plus the non-DFS 5 GHz starters; an AP on another channel
+# just falls back to NM's own scan. Started under STEP6's existing sleep 2 and
+# never waits, so it cannot gate the resume.
+wifi_prewarm() {
+    local n t found=0
+    [ "${QUIESCE:-0}" = 0 ] || return 1   # manual radio-off path: nothing to warm
+    for n in /sys/class/net/*; do
+        n=${n##*/}
+        t=$(iw dev "$n" info 2>/dev/null | awk '/type/{print $2}')
+        [ "$t" = managed ] || continue
+        ip link set "$n" up 2>/dev/null || true
+        timeout 5 iw dev "$n" scan freq 2412 2437 2462 5180 5200 5240 5745 \
+            >/dev/null 2>&1 &
+        found=1
+    done
+    [ "$found" = 1 ]
+}
 # ---- STEP4d: quiesce the ADSP sensor streams (deep-suspend blocker)
 # A live SSC/fastrpc sensor stream keeps the ADSP busy, and a busy ADSP makes
 # the firmware return from PSCI SYSTEM_SUSPEND almost immediately: measured
@@ -675,6 +699,13 @@ else
     say "STEP5 suspend_stats: success=$(cat /sys/power/suspend_stats/success 2>/dev/null) fail=$(cat /sys/power/suspend_stats/fail 2>/dev/null) failed_step=$(cat /sys/power/suspend_stats/last_failed_step 2>/dev/null) failed_errno=$(cat /sys/power/suspend_stats/last_failed_errno 2>/dev/null) failed_dev=[$(cat /sys/power/suspend_stats/last_failed_dev 2>/dev/null)]"
     say "STEP5 wakealarm after=[$(cat $RTC/wakealarm 2>/dev/null)]"
     dmesg 2>/dev/null | grep -aE 'suspend entry|suspend exit|Some devices failed|Wakeup pending|Triggering wakeup|hdd_suspend_wlan|hdd_resume_wlan|trigger sys resume|nvt_ts_panel_power|Restarting tasks' | tail -25 | while read -r l; do say "  dmesg| $l"; done
+fi
+
+# ---- STEP5b: warm the BSS cache before NetworkManager wakes
+# The scan runs in the background while STEP6 restores the panel; NM is still
+# in its sleep state, so it cannot collide with it.
+if wifi_prewarm; then
+    say "STEP5b directed scan started in the background (BSS cache warming)"
 fi
 
 # ---- STEP 6: restore
