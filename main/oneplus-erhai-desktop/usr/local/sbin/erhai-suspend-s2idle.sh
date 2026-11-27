@@ -229,7 +229,7 @@ usb_quiesce() {        # unmount USB media, then unbind the xHCI host; 3 = media
 }
 usb_restore() {        # re-probe the host iff STEP2f unbound it (idempotent, trap-safe)
     [ -e "$USB_UNBOUND" ] || return 0
-    local X i
+    local X
     X=$(usb_xhci)
     rm -f "$USB_UNBOUND"
     if [ -z "$X" ]; then
@@ -238,13 +238,12 @@ usb_restore() {        # re-probe the host iff STEP2f unbound it (idempotent, tr
     fi
     say "STEP6 usb: re-binding ${X##*/} (the tree re-enumerates, no replug needed)"
     echo "${X##*/}" > /sys/bus/platform/drivers/xhci-hcd/bind 2>/dev/null
-    i=0
-    while [ "$i" -lt 15 ]; do
-        [ "$(usb_nonroot_devs)" -gt 0 ] && break
-        sleep 1; i=$((i+1))
-    done
-    say "STEP6 usb: $(usb_nonroot_devs) device(s) enumerated after ${i}s"
-    kmsg "USB rebind done devices=$(usb_nonroot_devs)"
+    # Do NOT wait for enumeration: the unit exiting is what wakes NetworkManager,
+    # and the tree comes back in the kernel/udev on its own (the 5 TB HDD needed
+    # ~1.4 s, measured 2026-11-27 21:24). The old wait held the resume back for
+    # that long and bought only a log line.
+    say "STEP6 usb: re-bound, enumeration continues in the background"
+    kmsg "USB rebind triggered"
     return 0
 }
 # ---- STEP4d: quiesce the ADSP sensor streams (deep-suspend blocker)
@@ -276,9 +275,12 @@ ssc_stop() {
 }
 ssc_restore() {
     [ -n "${SSC_STOPPED:-}" ] || return 0
+    # --no-block: the exit of this unit is what wakes NetworkManager, so do not
+    # sit here waiting for the sensor services; they start while the rest of
+    # STEP6 runs (and their udev/dbus readiness is not needed for NM).
     # shellcheck disable=SC2086
-    systemctl start $SSC_STOPPED 2>/dev/null
-    say "STEP6 sensor services restarted:$SSC_STOPPED"
+    systemctl start --no-block $SSC_STOPPED 2>/dev/null
+    say "STEP6 sensor services restarted (async):$SSC_STOPPED"
     SSC_STOPPED=""
 }
 # Any exit after STEP2b must give the power button back: a STEP4c abort used to
@@ -587,8 +589,11 @@ say "STEP6 display on -> $("$TOGGLE" on 2>&1; echo rc=$?)"
 # USB after the panel: STEP2f unbound the xHCI host and its tree needs ~1.4 s
 # to re-enumerate (a 5 TB HDD, measured 2026-11-27 21:24). Waiting for it before
 # the display held the screen back by that long; the rebind is independent, so
-# the panel comes first and the devices re-enumerate during the sleep below.
+# the panel comes first and the devices re-enumerate on their own.
 usb_restore
+# Sensors restart asynchronously while the panel settles (step 4d rationale:
+# only after the panel is restored, which it is now).
+ssc_restore
 sleep 2
 if [ "$PARK_GPU" = 1 ]; then
     echo on > "$GPU/control" 2>/dev/null
@@ -602,9 +607,6 @@ if [ -n "${ORIG_MEM_SLEEP:-}" ]; then
     echo "$ORIG_MEM_SLEEP" > /sys/power/mem_sleep 2>/dev/null
     say "STEP6 mem_sleep restored=[$(cat /sys/power/mem_sleep)] (orig=$ORIG_MEM_SLEEP)"
 fi
-# STEP4d: bring the ADSP sensor users back only after the panel is restored
-# (erhai-folio-fold's ExecStopPost unblanks, and a restart re-reads the fold).
-ssc_restore
 # Restore the power-watch service. Its fd was closed during suspend, so the
 # wake-press evdev event was never delivered to it (see STEP2b); opening the
 # device freshly here only reads events from after this reopen.
