@@ -60,7 +60,7 @@ a7174783bd79ce1e30fc65e1ea11f858  usr/local/sbin/erhai-suspend-gnome.sh
 57cea238e2effe31e9debb3823de3a9b  usr/local/sbin/erhai-suspend-s2idle.sh
 1ef131fc3c83db0673184a272f020246  usr/local/sbin/erhai-touch-rebind.sh
 1525ffc93a2fb55b818a8eccf0c2cfcd  usr/local/sbin/erhai-user-groups.sh
-063f1798d89c1aed52e7ba8db0504f11  usr/local/sbin/erhai-wifi-rescan.sh
+a5e63e6d4da586d8723bd49d8285a547  usr/local/sbin/erhai-wifi-rescan.sh
 7cc0c817e42043635b67a853eb0d5748  usr/local/share/gdm/greeter/wayland-sessions/gnome-greeter.desktop
 467dc749e7366cde97f6b036b7b9e304  usr/share/gdm/dconf/95-erhai-greeter
 b27b33c1472cb7f3cea8be939b80c477  usr/share/glib-2.0/schemas/99-erhai-no-gsd-ambient.gschema.override
