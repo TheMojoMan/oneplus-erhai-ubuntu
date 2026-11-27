@@ -1,0 +1,12 @@
+[Unit]
+Description=erhai resume wifi rescan (keeps the radio busy so NM uses the warm BSS cache)
+Documentation=file:/usr/share/oneplus-erhai-desktop/README.md
+# Started explicitly by the suspend harness after every resume; never enabled.
+# It runs as its own unit on purpose: it must outlive systemd-suspend.service,
+# whose exit is what makes logind wake NetworkManager.
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/erhai-wifi-rescan.sh
+TimeoutStartSec=20
+Nice=10
