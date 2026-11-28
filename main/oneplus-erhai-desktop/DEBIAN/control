@@ -1,5 +1,5 @@
 Package: oneplus-erhai-desktop
-Version: 2.40
+Version: 2.41
 Section: utils
 Priority: optional
 Architecture: all
@@ -479,3 +479,13 @@ Description: Desktop glue for the OnePlus Pad 3 (erhai)
  software no matter what the kernel and the driver could do.  Values already
  present are never overwritten, the postinst only appends a missing key, and a
  removal deletes exactly those two lines again.
+ 2.41 ships the RESUME USB RE-ARM: after a deep sleep the Type-C port can come
+ back with the ADSP CC attach detection dead (dwc3 role switch stuck at device,
+ no xhci host, the next plug invisible - a powered disk never spins until a
+ reboot).  The udev rule only re-arms on a host-session DETACH edge, which does
+ not exist when the session dies across a sleep, so the new systemd-sleep hook
+ 91-erhai-usb-rearm runs on resume and calls
+ 'erhai-otg-rearm.sh restart' only when there is no xhci host, no DisplayPort
+ sink and no charger online.  Measured 2026-11-28: a WD Elements 5 TB did not
+ enumerate after a resume until that restart, and enumerated as USB 3 SuperSpeed
+ right after it.
