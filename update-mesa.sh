@@ -7,6 +7,12 @@
 #   MESA_PREFIX=/usr ./update-mesa.sh   # stage the payload for /usr (the
 #                                       # replacement mode -- see
 #                                       # build-mesa-usr-debs.sh)
+#   MESA_NO_PULL=1                      # build the tree at its current commit
+#   MESA_NO_FETCH=1                     # no network at all (chroot builds)
+#   MESA_BUILD_DIR=build-erhai-2610     # build in another dir (a 26.10 chroot
+#                                       # must not reconfigure the host tree)
+#   MESA_STAGE=<dir>                    # stage elsewhere (per-suite tree, e.g.
+#                                       # stonking/oneplus-erhai-mesa)
 #
 # What it does:
 #   1. fast-forwards the mesa git tree (MESA_SRC, default
@@ -41,9 +47,9 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 SRC="${MESA_SRC:-/media/data/develop/mesa}"
-BUILD="$SRC/build-erhai"
+BUILD="$SRC/${MESA_BUILD_DIR:-build-erhai}"
 BRANCH="${MESA_BRANCH:-main}"
-STAGE="$HERE/resolute/oneplus-erhai-mesa"
+STAGE="${MESA_STAGE:-$HERE/resolute/oneplus-erhai-mesa}"
 PREFIX="${MESA_PREFIX:-/opt/mesa}"
 PAYLOAD="$STAGE$PREFIX"
 DEST="$HERE/../tmp/mesa-destdir.$$"
@@ -56,10 +62,13 @@ echo "==> updating $SRC ($BRANCH)"
 	echo "FATAL: $SRC has uncommitted changes -- commit or clean first" >&2
 	exit 1
 }
-git -C "$SRC" fetch origin "$BRANCH"
+if [ "${MESA_NO_FETCH:-0}" != 1 ]; then
+	git -C "$SRC" fetch origin "$BRANCH"
+fi
 [ "$(git -C "$SRC" branch --show-current)" = "$BRANCH" ] \
 	|| git -C "$SRC" checkout "$BRANCH"
-git -C "$SRC" pull --ff-only origin "$BRANCH"
+[ "${MESA_NO_PULL:-0}" = 1 ] \
+	|| git -C "$SRC" pull --ff-only origin "$BRANCH"
 
 REV="$(git -C "$SRC" rev-parse --short HEAD)"
 # Monotonic element: dpkg compares the git-hash segment NUMERICALLY
@@ -107,11 +116,11 @@ if [ -f "$BUILD/meson-info/meson-info.json" ]; then
 	meson configure "$BUILD" "${OPTS[@]}" || {
 		echo "reconfigure failed (meson version churn?) -- fresh configure" >&2
 		find "$BUILD" -mindepth 1 -delete
-		meson setup "$BUILD" "${OPTS[@]}"
+		meson setup "$BUILD" "$SRC" "${OPTS[@]}"
 	}
 else
 	echo "==> configuring $BUILD"
-	meson setup "$BUILD" "${OPTS[@]}"
+	meson setup "$BUILD" "$SRC" "${OPTS[@]}"
 fi
 
 echo "==> building (incremental)"
@@ -219,6 +228,7 @@ sed -i "s/^Description: Mesa .*/Description: Mesa $BASE (turnip\/freedreno) for 
 echo "==> staged mesa $VER ($(du -sh "$PAYLOAD" | cut -f1))"
 if [ "$PREFIX" = /usr ]; then
 	echo "next: $HERE/build-mesa-usr-debs.sh   (split oneplus-erhai-mesa/usr into the 6 replacement debs)"
+	echo "then: $HERE/main/build-mesa-devel-deb.sh   (release-independent mesa-devel meta)"
 else
 	echo "next: $HERE/build-mesa-deb.sh && $ROOT/update-ppa.sh --mvtomain"
 fi

@@ -23,6 +23,8 @@
 #   build-firmware-deb.sh    oneplus-erhai-firmware
 #   build-mesa-deb.sh        oneplus-erhai-mesa (from oneplus-erhai-mesa/;
 #                            refresh the payload with ./update-mesa.sh first)
+#   build-mesa-devel-deb.sh  mesa-devel (release-independent meta package that
+#                            pulls in the six Mesa /usr replacement debs)
 #   build-linux-deb.sh       oneplus-erhai-linux (repacks the committed 7.3
 #                            payload snapshot -- NO kernel compile)
 #   build-npu-deb.sh         oneplus-erhai-npu (NPU/HTP workload layer)
@@ -53,6 +55,7 @@ declare -A BUILDERS=(
 	[otg]=main/build-otg-deb.sh
 	[firmware]=main/build-firmware-deb.sh
 	[mesa]=resolute/build-mesa-deb.sh
+	[mesadevel]=main/build-mesa-devel-deb.sh
 	[linux]=main/build-linux-deb.sh
 	[npu]=main/build-npu-deb.sh
 	[fastrpc]=main/build-fastrpc-deb.sh
@@ -64,7 +67,7 @@ declare -A BUILDERS=(
 
 # waydroid LAST: its builder needs the patcher project in ../tmp/waydroid-patcher
 # (source + the five stripped Mesa objects) and refuses to run without it.
-ORDER=(wifi audio bluetooth camera cam sensors desktop thermal torch otg firmware mesa linux npu fastrpc llamacpp pen video waydroid)
+ORDER=(wifi audio bluetooth camera cam sensors desktop thermal torch otg firmware mesa mesadevel linux npu fastrpc llamacpp pen video waydroid)
 
 if [ $# -gt 0 ]; then
 	for want in "$@"; do

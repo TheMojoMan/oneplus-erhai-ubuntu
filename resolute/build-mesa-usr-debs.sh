@@ -151,6 +151,22 @@ copy_many "$D" \
 
 [ "$MISSING" = 0 ] || { echo "FATAL: payload incomplete, nothing built" >&2; exit 1; }
 
+# ---- LLVM runtime dependency (release-specific!) ---------------------------
+# With -Dshared-llvm=enabled libgallium/mesa-vulkan-drivers link a versioned
+# libLLVM: 26.04 ships libLLVM-21, 26.10 ships libLLVM-22.  A hardcoded
+# libllvm21 made the 26.10 debs uninstallable, so derive the major from the
+# payload itself (empty = static LLVM, no runtime dep).
+LLVMN="$(find "$PAYLOAD" -type f -name '*.so*' -print0 |
+	xargs -0 -r readelf -d 2>/dev/null |
+	sed -n 's/.*libLLVM-\([0-9][0-9]*\)\.so.*/\1/p' | sort -un | head -1)"
+if [ -n "$LLVMN" ]; then
+	LLVMDEP="libllvm$LLVMN (>= 1:$LLVMN.1.0), "
+	echo "==> payload links libLLVM-$LLVMN"
+else
+	LLVMDEP=""
+	echo "==> payload does not link a shared libLLVM (static), no libllvm dep"
+fi
+
 # ---- exhaustive routing self-check ------------------------------------------
 # Every file the /usr payload ships (after update-mesa.sh's pruning) must be
 # claimed by exactly one deb.  The carrier's own doc/template trees under
@@ -196,7 +212,7 @@ Section: libs
 Priority: optional
 Architecture: arm64
 Maintainer: $MAINT
-Depends: libc6 (>= 2.43), libdrm-amdgpu1 (>= 2.4.125-1), libdrm2 (>= 2.4.125-1), libelf1t64 (>= 0.142), libexpat1 (>= 2.0.1), libgcc-s1 (>= 3.0), libllvm21 (>= 1:21.1.0), libsensors5 (>= 1:3.5.0), libstdc++6 (>= 11), libx11-xcb1, libxcb-dri3-0 (>= 1.13), libxcb-present0, libxcb-randr0, libxcb-sync1, libxcb-xfixes0, libxcb1 (>= 1.9.2), libxshmfence1, libzstd1 (>= 1.5.5), zlib1g (>= 1:1.2.3.4)
+Depends: libc6 (>= 2.43), libdrm-amdgpu1 (>= 2.4.125-1), libdrm2 (>= 2.4.125-1), libelf1t64 (>= 0.142), libexpat1 (>= 2.0.1), libgcc-s1 (>= 3.0), ${LLVMDEP}libsensors5 (>= 1:3.5.0), libstdc++6 (>= 11), libx11-xcb1, libxcb-dri3-0 (>= 1.13), libxcb-present0, libxcb-randr0, libxcb-sync1, libxcb-xfixes0, libxcb1 (>= 1.9.2), libxshmfence1, libzstd1 (>= 1.5.5), zlib1g (>= 1:1.2.3.4)
 Provides: libglapi-mesa, mesa-va-drivers, mesa-vdpau-drivers, va-driver
 Replaces: mesa-va-drivers (<< 25.2.8-3), mesa-vdpau-drivers (<< 25.2.8-3)
 Breaks: mesa-va-drivers (<< 25.2.8-3), mesa-vdpau-drivers (<< 25.2.8-3)
@@ -264,7 +280,7 @@ Section: graphics
 Priority: optional
 Architecture: arm64
 Maintainer: $MAINT
-Depends: libvulkan1, libc6 (>= 2.43), libdisplay-info3 (>= 0.3.0), libdrm-amdgpu1 (>= 2.4.125-1), libdrm2 (>= 2.4.125-1), libelf1t64 (>= 0.142), libexpat1 (>= 2.0.1), libgcc-s1 (>= 4.2), libllvm21 (>= 1:21.1.0), libpng16-16t64 (>= 1.6.46), libstdc++6 (>= 13.1), libwayland-client0 (>= 1.24.0), libx11-xcb1, libxcb-dri3-0 (>= 1.17.0), libxcb-present0 (>= 1.17.0), libxcb-randr0 (>= 1.13), libxcb-shm0, libxcb-sync1, libxcb-xfixes0, libxcb1 (>= 1.9.2), libxshmfence1, libzstd1 (>= 1.5.5), zlib1g (>= 1:1.2.3.4)
+Depends: libvulkan1, libc6 (>= 2.43), libdisplay-info3 (>= 0.3.0), libdrm-amdgpu1 (>= 2.4.125-1), libdrm2 (>= 2.4.125-1), libelf1t64 (>= 0.142), libexpat1 (>= 2.0.1), libgcc-s1 (>= 4.2), ${LLVMDEP}libpng16-16t64 (>= 1.6.46), libstdc++6 (>= 13.1), libwayland-client0 (>= 1.24.0), libx11-xcb1, libxcb-dri3-0 (>= 1.17.0), libxcb-present0 (>= 1.17.0), libxcb-randr0 (>= 1.13), libxcb-shm0, libxcb-sync1, libxcb-xfixes0, libxcb1 (>= 1.9.2), libxshmfence1, libzstd1 (>= 1.5.5), zlib1g (>= 1:1.2.3.4)
 Provides: vulkan-icd
 Installed-Size: 0
 Description: Mesa Vulkan graphics drivers (erhai, from git)

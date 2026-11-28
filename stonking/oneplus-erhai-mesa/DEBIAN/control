@@ -1,0 +1,18 @@
+Package: oneplus-erhai-mesa
+Version: 26.2.4-1
+Section: libs
+Priority: optional
+Architecture: all
+Maintainer: TheMojoMan <themojoman@gmx.net>
+Depends: libc6
+Installed-Size: 0
+Description: Mesa (turnip/freedreno) for the OnePlus Pad 3 (erhai)
+ This is the 26.10 (stonking) staging tree of the erhai Mesa build.  It is
+ BUILD INPUT ONLY: update-mesa.sh keeps DEBIAN/control's Version in sync with
+ the payload it stages under usr/, and build-mesa-usr-debs.sh splits that
+ payload into the six Ubuntu-named replacement packages (libgbm1,
+ mesa-libgallium, libgl1-mesa-dri, libglx-mesa0, libegl-mesa0,
+ mesa-vulkan-drivers) that are actually installed.  The release-independent
+ mesa-devel meta package in main pulls them in.
+ .
+ This package itself is never built or published.

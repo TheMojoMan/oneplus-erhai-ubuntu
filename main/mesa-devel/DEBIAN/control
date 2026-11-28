@@ -1,0 +1,22 @@
+Package: mesa-devel
+Version: 27.0.0~devel.git234733.g8df830aa844-1erhai1
+Section: metapackages
+Priority: optional
+Architecture: all
+Multi-Arch: foreign
+Maintainer: TheMojoMan <themojoman@gmx.net>
+Depends: libgbm1 (>= 27.0.0~devel.git234733.g8df830aa844-1erhai1), mesa-libgallium (>= 27.0.0~devel.git234733.g8df830aa844-1erhai1), libgl1-mesa-dri (>= 27.0.0~devel.git234733.g8df830aa844-1erhai1), libglx-mesa0 (>= 27.0.0~devel.git234733.g8df830aa844-1erhai1), libegl-mesa0 (>= 27.0.0~devel.git234733.g8df830aa844-1erhai1), mesa-vulkan-drivers (>= 27.0.0~devel.git234733.g8df830aa844-1erhai1)
+Installed-Size: 0
+Description: erhai Mesa development build (meta package)
+ One name that pulls in the erhai Mesa /usr replacement -- the six
+ Ubuntu-named packages libgbm1, mesa-libgallium, libgl1-mesa-dri,
+ libglx-mesa0, libegl-mesa0 and mesa-vulkan-drivers rebuilt from mesa git
+ for the Adreno 830 in the OnePlus Pad 3 (erhai).
+ .
+ The six packages keep Ubuntu's names on purpose: libglx0/libegl1 hard-depend
+ on them and their runtime siblings are pinned with exact "=" versions, so a
+ differently named package could never take over those dependencies.  This
+ meta package gives that set a single, release-independent name: it lives in
+ the main suite and its version floor refuses the install on a release where
+ the erhai Mesa build does not exist yet, instead of silently falling back to
+ stock Ubuntu Mesa (which cannot drive the Adreno 830).
