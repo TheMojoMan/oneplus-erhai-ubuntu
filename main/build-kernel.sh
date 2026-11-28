@@ -129,6 +129,7 @@ KVER="${INNER_NAME#*_}"; KVER="${KVER%+b*}"             # kernelrelease
 # Each erhai kernel LINE has its own frozen release string and its own stable
 # tag that must sit on HEAD before building, or scripts/setlocalversion appends
 # '+' and the case below rejects the build:
+#   7.3.6 line   (branch erhai/7.3.6)          -> 7.3.6-sm8750-themojoman
 #   7.3.4 line   (branch erhai/7.3.4, CURRENT) -> 7.3.4-sm8750-themojoman
 #   7.3-rc5 line (branch 7.3-rc5, ARCHIVE)     -> 7.3.0-rc5-sm8750-themojoman  tag v7.3-rc5
 #   7.3-rc4 line (branch 7.3-rc4, ARCHIVE)     -> 7.3.0-rc4-sm8750-themojoman  tag v7.3-rc4
@@ -137,9 +138,11 @@ KVER="${INNER_NAME#*_}"; KVER="${KVER%+b*}"             # kernelrelease
 #
 # CONFIG_LOCALVERSION_AUTO is unset in erhai_defconfig and the tree's own
 # build-kernel.sh exports LOCALVERSION= (which suppresses setlocalversion's
-# "+"), so the 7.3.4 line needs no tag on HEAD at all: the release string is
+# "+"), so the 7.3.6/7.3.4 lines need no tag on HEAD at all: the release string is
 # VERSION.PATCHLEVEL.SUBLEVEL + CONFIG_LOCALVERSION.
 case "$KVER" in
+7.3.6-sm8750-themojoman)
+	TAG="" ;;
 7.3.4-sm8750-themojoman)
 	TAG="" ;;
 7.3.0-rc5-sm8750-themojoman)
@@ -152,7 +155,8 @@ case "$KVER" in
 	TAG=v7.2 ;;
 *)
 	echo "ERROR: kernelrelease '$KVER' is not a frozen erhai release." >&2
-	echo "       Expected 7.3.4-sm8750-themojoman (7.3.4 line, CURRENT)," >&2
+	echo "       Expected 7.3.6-sm8750-themojoman (7.3.6 line)," >&2
+	echo "                7.3.4-sm8750-themojoman (7.3.4 line, CURRENT)," >&2
 	echo "                7.3.0-rc5-sm8750-themojoman (7.3-rc5 line)," >&2
 	echo "                7.3.0-rc4-sm8750-themojoman (7.3-rc4 line)," >&2
 	echo "                7.3.0-rc2-sm8750-themojoman (7.3-rc2 line)" >&2
