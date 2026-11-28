@@ -227,7 +227,7 @@ sed -i "s/^Description: Mesa .*/Description: Mesa $BASE (turnip\/freedreno) for 
 	"$STAGE/DEBIAN/control"
 echo "==> staged mesa $VER ($(du -sh "$PAYLOAD" | cut -f1))"
 if [ "$PREFIX" = /usr ]; then
-	echo "next: $HERE/build-mesa-usr-debs.sh   (split oneplus-erhai-mesa/usr into the 6 replacement debs)"
+	echo "next: $(dirname "$STAGE")/build-mesa-usr-debs.sh   (split the staged /usr payload into the 6 replacement debs)"
 	echo "then: $HERE/main/build-mesa-devel-deb.sh   (release-independent mesa-devel meta)"
 else
 	echo "next: $HERE/build-mesa-deb.sh && $ROOT/update-ppa.sh --mvtomain"

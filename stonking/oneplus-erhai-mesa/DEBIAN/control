@@ -1,12 +1,12 @@
 Package: oneplus-erhai-mesa
-Version: 26.2.4-1
+Version: 27.0.0~devel.git234733.g8df830aa844-1erhai1
 Section: libs
 Priority: optional
 Architecture: all
 Maintainer: TheMojoMan <themojoman@gmx.net>
 Depends: libc6
 Installed-Size: 0
-Description: Mesa (turnip/freedreno) for the OnePlus Pad 3 (erhai)
+Description: Mesa 27.0.0-devel (turnip/freedreno) for the OnePlus Pad 3 (erhai)
  This is the 26.10 (stonking) staging tree of the erhai Mesa build.  It is
  BUILD INPUT ONLY: update-mesa.sh keeps DEBIAN/control's Version in sync with
  the payload it stages under usr/, and build-mesa-usr-debs.sh splits that

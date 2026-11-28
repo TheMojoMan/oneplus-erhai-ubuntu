@@ -153,18 +153,51 @@ copy_many "$D" \
 
 # ---- LLVM runtime dependency (release-specific!) ---------------------------
 # With -Dshared-llvm=enabled libgallium/mesa-vulkan-drivers link a versioned
-# libLLVM: 26.04 ships libLLVM-21, 26.10 ships libLLVM-22.  A hardcoded
-# libllvm21 made the 26.10 debs uninstallable, so derive the major from the
-# payload itself (empty = static LLVM, no runtime dep).
-LLVMN="$(find "$PAYLOAD" -type f -name '*.so*' -print0 |
+# libLLVM: 26.04 ships libLLVM-21.so.1 (package libllvm21), 26.10 ships a
+# renamed libLLVM.so.22.1 (package libllvm22).  A hardcoded libllvm21 made the
+# 26.10 debs uninstallable, so derive the major from the payload's NEEDED
+# entries (empty = static LLVM, no runtime dep).
+LLVMN=""
+for s in $(find "$PAYLOAD" -type f -name '*.so*' -print0 |
 	xargs -0 -r readelf -d 2>/dev/null |
-	sed -n 's/.*libLLVM-\([0-9][0-9]*\)\.so.*/\1/p' | sort -un | head -1)"
+	grep -o 'libLLVM[^]]*\.so[^]]*' | sort -u); do
+	case "$s" in
+		libLLVM-*.so*) n="${s#libLLVM-}"; n="${n%%.*}" ;;
+		libLLVM.so.*)  n="${s#libLLVM.so.}"; n="${n%%.*}" ;;
+		*) continue ;;
+	esac
+	case "$n" in ''|*[!0-9]*) continue ;; esac
+	if [ -z "$LLVMN" ] || [ "$n" -lt "$LLVMN" ]; then
+		LLVMN="$n"
+	fi
+done
 if [ -n "$LLVMN" ]; then
 	LLVMDEP="libllvm$LLVMN (>= 1:$LLVMN.1.0), "
-	echo "==> payload links libLLVM-$LLVMN"
+	echo "==> payload links libLLVM $LLVMN"
 else
 	LLVMDEP=""
 	echo "==> payload does not link a shared libLLVM (static), no libllvm dep"
+fi
+
+# rusticl links libLLVMSPIRVLib.so.<N>.<M> (package libllvmspirvlib<N>.<M>).
+# Undeclared it still loads on the builder (the build deps are installed there)
+# but fails on a clean system, so declare it on the package that ships rusticl.
+SPIRVN=""
+for s in $(find "$PAYLOAD" -type f -name '*.so*' -print0 |
+	xargs -0 -r readelf -d 2>/dev/null |
+	grep -o 'libLLVMSPIRVLib[^]]*\.so[^]]*' | sort -u); do
+	n="${s#libLLVMSPIRVLib.so.}"
+	case "$n" in ''|*[!0-9.]*) continue ;; esac
+	case "$n" in *.*) ;; *) n="$n.0" ;; esac
+	if [ -z "$SPIRVN" ]; then
+		SPIRVN="$n"
+	fi
+done
+if [ -n "$SPIRVN" ]; then
+	SPIRVDEP="libllvmspirvlib$SPIRVN, "
+	echo "==> payload links libLLVMSPIRVLib $SPIRVN (rusticl)"
+else
+	SPIRVDEP=""
 fi
 
 # ---- exhaustive routing self-check ------------------------------------------
@@ -223,6 +256,9 @@ Description: shared infrastructure for Mesa drivers (erhai, from git)
 EOF
 
 mkdir -p "$OUT/libgl1-mesa-dri/DEBIAN"
+# 26.04 keeps share/drirc.d/00-lavapipe-defaults.conf in libgl1-mesa-dri, 26.10
+# keeps it in mesa-vulkan-drivers.  The whole drirc.d tree rides in this package
+# on both releases, so claim the file from the stock 26.10 owner explicitly.
 cat > "$OUT/libgl1-mesa-dri/DEBIAN/control" <<EOF
 Package: libgl1-mesa-dri
 Version: $VER
@@ -230,8 +266,8 @@ Section: libs
 Priority: optional
 Architecture: arm64
 Maintainer: $MAINT
-Depends: libgbm1 (= $VER), libvulkan1, libc6 (>= 2.34)
-Replaces: oneplus-erhai-mesa (<< $VER)
+Depends: libgbm1 (= $VER), libvulkan1, ${SPIRVDEP}libc6 (>= 2.34)
+Replaces: oneplus-erhai-mesa (<< $VER), mesa-vulkan-drivers (<< $VER)
 Installed-Size: 0
 Description: free implementation of the OpenGL API -- DRI modules (erhai, from git)
  In-place replacement for Ubuntu's libgl1-mesa-dri, rebuilt from mesa git for
@@ -317,7 +353,10 @@ echo "==> next (on the device, as root):"
 echo "    sudo dpkg -i $OUT/*.deb"
 echo "    (all six in ONE deb run -- a single deb alone leaves the Mesa stack half-replaced)"
 echo "==> publish (ONLY after the generation boot-tested; copy, never rebuild):"
-echo "    export PPA_DEB_DIR=$ROOT/themojoman.github.io/ppa/oneplus-erhai/ubuntu/resolute"
+# suite = the folder that owns OUT (<repo>/<suite>/debs)
+suite="$(basename "$(dirname "$OUT")")"
+case "$suite" in resolute|stonking) ;; *) suite=resolute ;; esac
+echo "    export PPA_DEB_DIR=$ROOT/themojoman.github.io/ppa/oneplus-erhai/ubuntu/$suite"
 echo "    . $HERE/ppa-common.sh; ppa_copy $OUT/*.deb && (cd $ROOT && ./update-ppa.sh)"
 echo "    (NOTE: 'PPA_DEB_DIR=... . ./ppa-common.sh' does NOT survive the source -- bash"
 echo "     reverts the prefix when the '.' command finishes, so a LATER ppa_copy/ppa_mv"
