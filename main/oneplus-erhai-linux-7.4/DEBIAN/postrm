@@ -1,0 +1,205 @@
+#!/bin/bash
+# oneplus-erhai-linux postrm: remove the UKI this kernel's postinst installed in
+# /boot.  Named to match postinst exactly -- <release>[-l1]-b<N>.efi when the deb
+# carries a "+b<N>" Debian revision (the "-l1" tag when it was installed from the
+# linux1 partition), or <release>-<root partlabel>.efi without one (base image
+# build) -- so an upgrade of a *different* kernel package never deletes the
+# running one's boot entry.  An install deletes no .efi at all; this script is the
+# only thing that removes one, and only its own.  The ESP is not touched any more
+# (2026-10-17; the retired ESP machinery is preserved in
+# a backup of the previous ESP machinery taken before that change).
+set -e
+
+# 1. Only on real removal, not on the remove step of an upgrade.
+if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
+
+    # 2. Are we in a build CHROOT / CONTAINER?  It decides ONE thing (2026-10-17,
+    #    when the ESP stopped being written): the root label used for the file
+    #    name -- such a namespace is built for PARTLABEL=linux and must not take
+    #    the HOST's cmdline (same rule as postinst, and the SAME THREE tests, so
+    #    the two scripts always agree on the name they are looking for).  Nothing
+    #    is skipped any more: the removal target is /boot of THIS root filesystem,
+    #    which inside a namespace IS the image's own /boot -- exactly the file this
+    #    package's postinst wrote there.
+    #
+    #    The PID-1 comparison alone is NOT enough (2026-10-20): `systemd-nspawn -D
+    #    rootfs` gives the guest its own PID namespace, so its PID 1 root equals
+    #    ours and only the container markers / the "the booted cmdline's root is
+    #    not this root" comparison reveal the truth.  See postinst step 2 for the
+    #    measurements.
+    IN_CHROOT=false
+    CHROOT_WHY=""
+    ROOT_IDS="$(stat -c '%d:%i' / 2>/dev/null || true)"
+    PID1_IDS="$(stat -L -c '%d:%i' /proc/1/root 2>/dev/null || true)"
+    if [ -z "$ROOT_IDS" ] || [ -z "$PID1_IDS" ]; then
+        IN_CHROOT=true
+        CHROOT_WHY="no readable /proc/1/root"
+    elif [ "$ROOT_IDS" != "$PID1_IDS" ]; then
+        IN_CHROOT=true
+        CHROOT_WHY="/ ($ROOT_IDS) is not this namespace's PID 1 root ($PID1_IDS)"
+    elif [ "${ERHAI_FORCE_CHROOT:-0}" = 1 ]; then
+        IN_CHROOT=true
+        CHROOT_WHY="ERHAI_FORCE_CHROOT=1"
+    fi
+
+    # (b) container markers and (c) "is the booted cmdline's root OUR root?"
+    #     -- only when (a) said "live".
+    if [ "$IN_CHROOT" = false ]; then
+        IN_CONTAINER=false
+        if [ -n "${container:-}" ] || [ -e /run/systemd/container ] \
+           || tr '\0' '\n' < /proc/1/environ 2>/dev/null | grep -q '^container='; then
+            IN_CONTAINER=true
+        fi
+
+        OUR_DEV=""
+        OUR_SRC="$(findmnt -no SOURCE / 2>/dev/null || true)"
+        if [ -n "$OUR_SRC" ]; then
+            OUR_DEV="$(readlink -f "$OUR_SRC" 2>/dev/null || true)"
+        fi
+
+        CMD_ROOT_SPEC="$(tr ' ' '\n' < /proc/cmdline 2>/dev/null \
+                         | sed -n 's/^root=//p' | head -n1 || true)"
+        case "$CMD_ROOT_SPEC" in
+            PARTLABEL=*) CMD_DEV_PATH="/dev/disk/by-partlabel/${CMD_ROOT_SPEC#PARTLABEL=}" ;;
+            UUID=*)      CMD_DEV_PATH="/dev/disk/by-uuid/${CMD_ROOT_SPEC#UUID=}" ;;
+            LABEL=*)     CMD_DEV_PATH="/dev/disk/by-label/${CMD_ROOT_SPEC#LABEL=}" ;;
+            "")          CMD_DEV_PATH="" ;;
+            *)           CMD_DEV_PATH="$CMD_ROOT_SPEC" ;;
+        esac
+        CMD_DEV=""
+        if [ -n "$CMD_DEV_PATH" ] && [ -e "$CMD_DEV_PATH" ]; then
+            CMD_DEV="$(readlink -f "$CMD_DEV_PATH" 2>/dev/null || true)"
+        fi
+
+        if [ -n "$CMD_DEV" ] && [ -n "$OUR_DEV" ]; then
+            if [ "$CMD_DEV" != "$OUR_DEV" ]; then
+                IN_CHROOT=true
+                CHROOT_WHY="the booted cmdline's root ($CMD_ROOT_SPEC -> $CMD_DEV) is not this root ($OUR_DEV)"
+            fi
+        elif [ "$IN_CONTAINER" = true ]; then
+            IN_CHROOT=true
+            CHROOT_WHY="container (${container:-container marker}): the booted cmdline's root is not resolvable here${CMD_ROOT_SPEC:+ (root=$CMD_ROOT_SPEC)}"
+        fi
+    fi
+
+    # 3. Kernel version of the package being removed. Strip the "+b<N>" Debian
+    #    revision that build-kernel.sh appends to the .deb Version (not part of
+    #    the kernelrelease; same derivation as postinst).
+    #
+    #    dpkg passes a version argument ONLY on the upgrade transitions
+    #    (`postrm upgrade <old-version>` etc.) -- `postrm remove` and
+    #    `postrm purge` get NO $2 at all (verified 2026-09-28:
+    #    `dpkg --remove <pkg>` runs the script with args "remove"). Falling back
+    #    to `uname -r` there was the bug: the RUNNING kernelrelease carries no
+    #    "+b<N>", so this script looked for "<release>-<root partlabel>.efi"
+    #    and left the real "<release>-b<N>.efi" on the ESP.
+    #
+    #    Sources, in order:
+    #      1. $2                -- the other version on upgrade/abort-upgrade
+    #                              (defensive: the block below is skipped for
+    #                              that transition anyway);
+    #      2. dpkg-query        -- still answers while the package is in
+    #                              config-files state, i.e. for remove/purge;
+    #                              this is the version whose UKI postinst wrote.
+    #    There is deliberately NO `uname -r` fallback: the RUNNING
+    #    kernelrelease is not the removed package's, and using it made this
+    #    script look for "<running release>-<root partlabel>.efi" AND rm -f the
+    #    depmod leftovers out of the RUNNING /lib/modules/<release>/ (the live
+    #    modules tree). Without a version, do nothing at all -- a stray .efi on
+    #    the ESP is harmless, a wrong delete is not.
+    FULLVER="${2:-}"
+    if [ -z "$FULLVER" ] && [ -n "${DPKG_MAINTSCRIPT_PACKAGE:-}" ]; then
+        FULLVER=$(dpkg-query --show --showformat='${Version}' \
+                      "$DPKG_MAINTSCRIPT_PACKAGE" 2>/dev/null || true)
+    fi
+    if [ -z "$FULLVER" ]; then
+        echo "Post-remove: cannot determine the version of" \
+             "${DPKG_MAINTSCRIPT_PACKAGE:-the removed package}" \
+             "(no \$2 and dpkg-query gave nothing); leaving /boot and /lib/modules alone."
+        exit 0
+    fi
+    KVER="${FULLVER%%+b*}"
+
+    # 4. Root partition label, same derivation as postinst (a chroot is always
+    #    `linux`; otherwise the partition backing /, then the booted cmdline).  It
+    #    decides the label suffix below, so it must come from the same sources
+    #    postinst used -- a mismatch only ever costs a no-op delete, never a wrong
+    #    file.
+    if [ "$IN_CHROOT" = true ]; then
+        ROOT_LABEL="${ERHAI_ROOT_LABEL:-linux}"
+    else
+        ROOT_LABEL="${ERHAI_ROOT_LABEL:-}"
+        if [ -z "$ROOT_LABEL" ]; then
+            _root_src="$(findmnt -no SOURCE / 2>/dev/null || true)"
+            ROOT_LABEL=$(lsblk -no PARTLABEL "${_root_src%%\[*}" 2>/dev/null | head -n1)
+        fi
+        if [ -z "$ROOT_LABEL" ]; then
+            ROOT_LABEL="$(tr ' ' '\n' < /proc/cmdline 2>/dev/null \
+                             | sed -n 's/^root=PARTLABEL=//p' | head -n1)"
+        fi
+        if [ -z "$ROOT_LABEL" ]; then
+            ROOT_LABEL="linux"
+        fi
+    fi
+    if [ "$IN_CHROOT" = true ]; then
+        echo "Post-remove: build chroot/container detected${CHROOT_WHY:+ ($CHROOT_WHY)}" \
+             "-- using root label $ROOT_LABEL."
+    fi
+
+    # 5. Rebuild the filename postinst used. The "+b<N>" Debian revision (when
+    #    present) is part of the EFI filename (<kver>-b<N>[-<label>].efi, the label
+    #    dropped for the `linux` partition); postinst falls back to
+    #    <kver>-<root partlabel>.efi only without it. Mirror that exactly so
+    #    removal finds the file postinst wrote.
+    CLEAN_KVER="${KVER//-sm8750-themojoman/}"
+    DEB_REV="${FULLVER##*+b}"
+    if [ "$DEB_REV" = "$FULLVER" ]; then
+        DEB_REV=""
+    fi
+
+    if [ -n "$ROOT_LABEL" ] && [ "$ROOT_LABEL" != "linux" ]; then
+        ROOT_TAG="-${ROOT_LABEL}"
+    else
+        ROOT_TAG=""
+    fi
+
+    if [ -n "$DEB_REV" ]; then
+        TARGET_EFI="${CLEAN_KVER}-b${DEB_REV}${ROOT_TAG}.efi"
+    else
+        TARGET_EFI="${CLEAN_KVER}-${ROOT_LABEL}.efi"
+    fi
+
+    # 6. Delete our .efi from /boot of THIS root filesystem (2026-10-17: the ESP
+    #    is not involved any more -- no mount, no partlabel, no read-only
+    #    handling).  Only this package's own file is touched; every other kernel's
+    #    UKI in /boot stays exactly where it is.
+    DEST_FILE="/boot/$TARGET_EFI"
+    if [ ! -f "$DEST_FILE" ]; then
+        echo "Post-remove: $DEST_FILE not found, nothing to do."
+    elif [ "${ERHAI_POSTRM_DRY_RUN:-0}" = "1" ]; then
+        echo "Post-remove: DRY RUN -- would delete $DEST_FILE"
+    else
+        echo "Post-remove: Deleting $DEST_FILE..."
+        rm -f "$DEST_FILE"
+        sync
+    fi
+
+    # 7. Leftovers from depmod, which postinst ran.
+    if [ "${ERHAI_POSTRM_DRY_RUN:-0}" = "1" ]; then
+        echo "Post-remove: DRY RUN -- leaving /lib/modules/$KVER depmod leftovers alone."
+    else
+        rm -f "/lib/modules/$KVER/modules.dep" \
+            "/lib/modules/$KVER/modules.dep.bin" \
+            "/lib/modules/$KVER/modules.alias" \
+            "/lib/modules/$KVER/modules.alias.bin" \
+            "/lib/modules/$KVER/modules.symbols" \
+            "/lib/modules/$KVER/modules.symbols.bin" \
+            "/lib/modules/$KVER/modules.devname" \
+            "/lib/modules/$KVER/modules.softdep" \
+            "/lib/modules/$KVER/modules.builtin.alias.bin" \
+            "/lib/modules/$KVER/modules.builtin.bin"
+        rmdir "/lib/modules/$KVER" 2>/dev/null || true
+    fi
+fi
+
+exit 0
