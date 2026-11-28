@@ -1,0 +1,59 @@
+#!/bin/bash
+#
+# 91-erhai-usb-rearm - re-arm the ADSP OTG session after a system sleep.
+#
+# Symptom this prevents: after a deep sleep the Type-C port can come back with its
+# ADSP CC attach detection dead - the dwc3 role switch stays at "device", no xhci
+# host controller appears and the next plug is invisible (no partner, no VBUS, no
+# role flip), so even a powered disk does not spin until the pad is rebooted.
+# The kernel keeps the OTG session armed through a detach, which switches off the
+# ADSP's own self-heal paths, and the udev rule (70-erhai-otg-rearm.rules) only
+# fires on a host-session DETACH edge - a session that dies across a sleep has no
+# such edge, so it has to be re-armed here (measured 2026-11-28, WD Elements 5 TB
+# did not enumerate after a resume; `erhai-otg-rearm.sh restart` revived it).
+#
+# `restart` = ADSP disarm+arm followed by the role host-kick.  It is the measured
+# recovery, it rate-limits itself and caps the restarts per boot.
+#
+# The hook does nothing when the port is legitimately busy:
+#   * a host session survived the sleep (xhci-hcd platform device present),
+#   * a DisplayPort sink is attached (forcing the data role would disturb the
+#     alt-mode mux - the same rule the panel scripts use),
+#   * a charger feeds the port (the ADSP psy is only "online" then; its power_role
+#     is stale in exactly the broken state, so the psy is the trustworthy bit).
+#
+set -u
+
+[ "${1:-}" = post ] || exit 0
+
+HELPER=/usr/local/sbin/erhai-otg-rearm.sh
+DP_STATUS=/sys/class/drm/card1-DP-1/status
+
+[ -x "$HELPER" ] || exit 0
+
+# Let the role/typec state settle after the resume.
+sleep 1
+
+# A host session that survived the sleep needs nothing.
+compgen -G '/sys/bus/platform/devices/xhci-hcd.*.auto' >/dev/null && exit 0
+
+# Never steal the port from a DisplayPort sink.
+if [ "$(cat "$DP_STATUS" 2>/dev/null)" = connected ]; then
+	logger -t erhai-usb-rearm "post-resume: DP sink attached, not re-arming"
+	exit 0
+fi
+
+# Never fight a charger: its ADSP psy is only online while a charger feeds us.
+for f in /sys/class/power_supply/ucsi-source-psy-*/online; do
+	[ -e "$f" ] || continue
+	if [ "$(cat "$f" 2>/dev/null || echo 0)" != 0 ]; then
+		logger -t erhai-usb-rearm "post-resume: charger online, not re-arming"
+		exit 0
+	fi
+done
+
+logger -t erhai-usb-rearm "post-resume: no host session, no DP sink, no charger -> re-arming the ADSP OTG session"
+"$HELPER" restart >/dev/null 2>&1 || \
+	logger -t erhai-usb-rearm "ERROR: re-arm failed (see: erhai-otg-rearm.sh status)"
+
+exit 0
