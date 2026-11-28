@@ -1,0 +1,10 @@
+%YAML 1.1
+# erhai-camera-ae: libcamera soft-ISP tuning for PipeWire apps.
+# Agc and Adjust are left out on purpose: the erhai-camera-ae engine owns
+# exposure (ErhaiCam AE), and gamma stays at the 2.2 default, saturation 1.0.
+---
+version: 1
+algorithms:
+  - BlackLevel:
+  - Awb:
+...
